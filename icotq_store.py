@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer
 
-from typing import TypedDict, cast, override
+from typing import TypedDict, cast
 import pymupdf  # pyright: ignore[reportMissingTypeStubs]
 
 
@@ -125,7 +125,7 @@ class IcoTqStore:
         self.embeddings_matrix: torch.Tensor | None = None
         if self.config['embeddings_model_name'] != "":
             _ = self.load_model(self.config['embeddings_model_name'], self.config['embeddings_device'], self.config['embeddings_model_trust_code'])
-        config_subdirs = ['Texts', 'Embeddings', 'PDFTextCache', 'EpubTextCache']
+        config_subdirs = ['Texts', 'Embeddings', 'PDFTextCache']
         for cdir in config_subdirs:
             full_path = os.path.join(self.root_path, cdir)
             if os.path.isdir(full_path) is False:
@@ -133,7 +133,7 @@ class IcoTqStore:
         self.embeddings_path: str = os.path.join(self.root_path, "Embeddings")
         for source in self.config['tq_sources']:
             valid:bool = True
-            known_types: list[str] = ['txt', 'epub', 'md', 'pdf']
+            known_types: list[str] = ['txt', 'md', 'pdf']
             for tp in source['file_types']:
                 if tp not in known_types:
                     self.log.error(f"Source {source} has invalid file type {tp}, allowed are {known_types}, ignoring this source!")
