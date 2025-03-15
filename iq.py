@@ -13,7 +13,7 @@ def iq_embed(its: IcoTqStore, logger:logging.Logger):
     its.generate_embeddings()
     logger.info("Embeddings generated.")
 
-def iq_search(its: IcoTqStore, search_spec: str, logger:logging.Logger):
+def iq_search(its: IcoTqStore, logger:logging.Logger, search_spec: str):
     max_results = 3
     context = 16
     context_steps = 4
@@ -49,7 +49,12 @@ def iq_search(its: IcoTqStore, search_spec: str, logger:logging.Logger):
                     y_min = 0
             if y_max == None:
                     y_max = 1
-            title_text = f"Document: {result['desc']}[{result['index']}], {result['cosine'] * 100.0:2.1f} %"
+            ind = result['desc'].rfind('/')
+            if ind!=-1:
+                short_desc = result['desc'][ind+1:]
+            else:
+                short_desc = result['desc']
+            title_text = f"Document: {short_desc}, {result['cosine'] * 100.0:2.1f} %"
             if len(title_text) < cols: 
                 title_text += " " * (cols - len(title_text))
             else:
@@ -103,8 +108,44 @@ def iq_export(its: IcoTqStore, logger:logging.Logger) -> None:
         return
     print(f"Export to {ebook_mirror_path}")
 
-def iq_import(its: IcoTqStore, _logger:logging.Logger):
-    its.import_texts()
+def iq_import(its: IcoTqStore, _logger:logging.Logger, max_imports_str:str|None=None):
+    if max_imports_str is not None:
+        try:
+            max_imports = int(max_imports_str)
+        except ValueError:
+            max_imports = None
+    else:
+        max_imports = None
+    its.import_texts(max_imports=max_imports)
+
+def iq_select(its: IcoTqStore, _logger:logging.Logger, model_id:str):
+    try:
+        ind = int(model_id)
+        if ind > 0 and ind <= len(its.model_list):
+            model_id = its.model_list[ind-1]['model_name']
+    except ValueError:
+        pass
+    _ = its.load_model(model_id, its.config["embeddings_device"], its.config["embeddings_model_trust_code"])
+    _ = its.load_tensor()
+
+def iq_list(its: IcoTqStore, _logger:logging.Logger, param:str):
+    if param == 'models':
+        for ind, model in enumerate(its.model_list):
+            if model['model_name'] == its.config["embeddings_model_name"]:
+                sel:str = "[*]"
+            else:
+                sel = "   "
+            print(f"{ind+1}: {sel} {model['model_name']}")
+    elif param == 'sources':
+        for ind, source in enumerate(its.config["tq_sources"]):
+            cnt = 0
+            for entry in its.lib:
+                if entry['source_name'] == source['name']:
+                    cnt += 1
+            print(f"{ind+1}: {source['name']} at {source['path']} ({source['tqtype']}), {cnt} docs")
+    elif param == 'docs':
+        for ind, entry in enumerate(its.lib):
+            print(f"{ind+1} {entry['desc_filename']}")
 
 def iq_help(parser:argparse.ArgumentParser, valid_actions:list[tuple[str, str]]):
     parser.print_help()
@@ -116,8 +157,10 @@ def iq_help(parser:argparse.ArgumentParser, valid_actions:list[tuple[str, str]])
 def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
     valid_actions = [('info', 'Overview of available data and sources'), 
                                             ('export', 'NOT IMPLEMENTED'), 
-                                            ('import', 'evaluate available sources and cache text information and metadata'), 
+                                            ('import', '[max_docs] evaluate available sources and cache text information and metadata, optional max_docs limits number of imported docs'), 
                                             ('embed', 'Generate embeddings for currently active model'),
+                                            ('list', 'models|sources|docs'),
+                                            ('select', 'model-index as shown by: list models'),
                                             ('search', 'Search for keywords given with -k <keywords> option'),
                                             ('help', 'Display usage information')]
     parser: ArgumentParser = argparse.ArgumentParser(description="IcoTq")
@@ -140,7 +183,8 @@ def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
         default="",
         help="Restrict search to list of space separated keywords, leading '!' used for exclusion (negation)," +\
         " '*' for wildcards at beginning, middle or end of keywords." +\
-        " Multiple space separated keywords are combined with AND, use '|' for OR combinations.",
+        " Multiple space separated keywords are combined with AND, use '|' for OR combinations." +\
+        "! Also to add parameters for 'import' (max_docs) and 'list' (models|sources|docs) commands",
     )
 
     args = parser.parse_args()
@@ -157,13 +201,17 @@ def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
         if 'export' in actions:
             iq_export(its, logger)
         if 'import' in actions:
-            iq_import(its, logger)
+            iq_import(its,  logger, max_imports_str=param)
         if 'help' in actions:
             iq_help(parser, valid_actions)
         if 'embed' in actions:
             iq_embed(its, logger)
         if 'search' in actions:
-            iq_search(its, param, logger)
+            iq_search(its, logger, param)
+        if 'list' in actions:
+            iq_list(its, logger, param)
+        if 'select' in actions:
+            iq_select(its, logger, param)
         if cast(bool, args.non_interactive) is True:
             break
         if first is True:

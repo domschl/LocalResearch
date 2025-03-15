@@ -90,7 +90,7 @@ class IcoTqStore:
                         'file_types': ['md']
                     })],
                 'ebook_mirror': '~/MetaLibrary',
-                'embeddings_model_name': 'nomic-embed-text-v2-moe',
+                'embeddings_model_name': 'granite-embedding-107m-multilingual',
                 'embeddings_device': 'auto',
                 'embeddings_model_trust_code': True
                 })
@@ -110,8 +110,24 @@ class IcoTqStore:
                 {
                     'model_hf_name': 'nomic-ai/nomic-embed-text-v2-moe',
                     'model_name': 'nomic-embed-text-v2-moe',
-                    'emb_dim': 0,
-                    'max_input_token': 0,
+                    'emb_dim': 768,  #  Matryoshka Embeddings
+                    'max_input_token': 512,
+                    'chunk_size': 2048,
+                    'chunk_overlap': 2048 // 3
+                },
+                {
+                    'model_hf_name': 'ibm-granite/granite-embedding-107m-multilingual',
+                    'model_name': 'granite-embedding-107m-multilingual',
+                    'emb_dim': 384,
+                    'max_input_token': 512,
+                    'chunk_size': 2048,
+                    'chunk_overlap': 2048 // 3
+                },
+                {
+                    'model_hf_name': 'ibm-granite/granite-embedding-278m-multilingual',
+                    'model_name': 'granite-embedding-278m-multilingual',
+                    'emb_dim': 768,
+                    'max_input_token': 512,
                     'chunk_size': 2048,
                     'chunk_overlap': 2048 // 3
                 }
@@ -558,5 +574,6 @@ class IcoTqStore:
                 'yellow_liner': yellow_liner_weights
             }
             search_results.append(sres)
+        search_results = sorted(search_results, key=lambda x: x['cosine'], reverse=True)
         return search_results
  
