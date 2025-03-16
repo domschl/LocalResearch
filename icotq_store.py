@@ -226,15 +226,37 @@ class IcoTqStore:
             self.log.info(f"Embeddings tensor saved to {embeddings_tensor_file}")
             return True
         else:
-            self.log.error("No embeddings available to save")
+            if os.path.exists(embeddings_tensor_file) is True:
+                os.remove(embeddings_tensor_file)
+                self.log.error(f"No embeddings available to save, removing obsolete tensor {embeddings_tensor_file}")
+            else:
+                self.log.error("No embeddings available to save")
             return False
 
-    def load_tensor(self) -> bool:
-        if self.current_model is None or self.device is None:
+    def resolve_device(self, device:str) -> str:
+        if device=='auto':
+            if torch.cuda.is_available():
+                return 'cuda'
+            elif torch.backends.mps.is_available():
+                return 'mps'
+            else:
+                return 'cpu'
+        else:
+            return device
+
+    def load_tensor(self, model_name:str|None=None, device:str|None=None) -> bool:
+        if device is None:
+            device = self.config['embeddings_device']
+        if model_name is None and self.current_model is None:
             self.log.error("Can't save embeddings tensor: no current model information available!")
             return False
-        embeddings_tensor_file = os.path.join(self.embeddings_path, f"embeddings_{self.current_model['model_name']}.pt")
-        map_location = torch.device(self.device)
+        if model_name is None and self.current_model is not None:
+            model_name = self.current_model['model_name']
+        if model_name is None:
+            self.log.error("Model not specified")
+            return False
+        embeddings_tensor_file = os.path.join(self.embeddings_path, f"embeddings_{model_name}.pt")
+        map_location = torch.device(self.resolve_device(device))
         if os.path.exists(embeddings_tensor_file):
             self.embeddings_matrix = torch.load(embeddings_tensor_file, map_location=map_location)  # pyright: ignore[reportUnknownMemberType]
         else:
@@ -247,10 +269,10 @@ class IcoTqStore:
                     sum += entry['emb_ptrs'][model_name][1]
             self.log.info(f"Matrix: {self.embeddings_matrix.shape}, chunks: {sum}, texts: {len(self.lib)}")
             if sum != self.embeddings_matrix.shape[0]:
-                self.log.warning(f"Embeddings-matrix incompatible with text library! Sum: {sum}, EmbMat: {self.embeddings_matrix.shape}")
+                self.log.warning(f"Embeddings-matrix index incompatible with text library! User 'index purge' to rebuild index! Info: Sum: {sum}, EmbMat: {self.embeddings_matrix.shape}")
             return True
         else:
-            self.log.warning("No embeddings available!")
+            self.log.warning("No embeddings index available!")
             return False
 
     def write_library(self):
@@ -308,21 +330,40 @@ class IcoTqStore:
             if failure is False and text is not None:
                 with open(pdf_ind['filename'], 'w') as f:
                     _ = f.write(text)
+                    self.log.info(f"Added {desc} to PDF cache, size: {len(self.pdf_index.keys())}, failure: {failure}")
             self.pdf_index[desc] = pdf_ind
             # self.save_pdf_cache_state()
-            self.log.info(f"Added {desc} to PDF cache, size: {len(self.pdf_index.keys())}, failure: {failure}")
             changed = True
         return text, changed
 
-    def import_texts(self, max_imports: int|None = None):
+    def sync_texts(self, max_imports: int|None = None):
         if len(self.config['tq_sources']) == 0:
             self.log.error(f"No valid sources defined in config, can't import")
             return
         lib_changed = False
+        tensor_debris: dict[str, list[tuple[int, int]]] = {}     # {model_name -> list of (emb_ptr, emb_len)}
+        abort_import = False
+        debris_candidates: list[str] = []
+        lib_counter = 0
         for source in self.config['tq_sources']:
+            if abort_import is True:
+                break
             source_path = os.path.expanduser(source['path'])
+            for entry in self.lib:
+                if entry['source_name'] == source['name']:
+                    debris_candidates.append(entry['desc_filename'])
             for root, _dir, files in os.walk(source_path):
                 for filename in files:
+                    if abort_import is True:
+                        break
+                    if max_imports is not None and lib_counter >= max_imports:
+                        if len(self.lib) > max_imports:
+                            self.log.warning(f"Pruning library to {max_imports} entries!")
+                            self.lib = self.lib[:max_imports]
+                        lib_changed = True
+                        self.log.warning(f"Import reached max {max_imports}, library: {len(self.lib)} entries")
+                        abort_import = True
+                        break
                     parts = os.path.splitext(filename)
                     file_base = parts[0]
                     if len(parts[1]) > 0:
@@ -332,7 +373,7 @@ class IcoTqStore:
                     if ext not in source['file_types']:
                         continue
                     alt_exists = False
-                    if ext in ['epub', 'pdf']:
+                    if ext in ['epub', 'pdf']:  # Check if the file is available in a better file format (e.g. txt)
                         for alt in ['txt', 'epub']:
                             if alt == ext:
                                 continue
@@ -344,6 +385,12 @@ class IcoTqStore:
                             continue                    
                     full_path = os.path.join(root, filename)
                     desc_path = "{"+ source['name'] + "}" + full_path[len(source_path):]
+                    if desc_path in debris_candidates:
+                        self.log.info(f"DEBRIS: Not debris: {desc_path}")
+                        debris_candidates.remove(desc_path)
+                    else:
+                        self.log.info(f"DEBRIS: new file {desc_path}, not in {debris_candidates}")
+                    lib_counter += 1
                     in_lib = False
                     for entry in self.lib:
                         if entry['desc_filename'] == desc_path:
@@ -355,12 +402,14 @@ class IcoTqStore:
                         if ext in ['md', 'py', 'txt']:
                             with open(full_path, 'r') as f:
                                 text = f.read()
+                                self.log.info(f"Importing {desc_path}")
                         elif ext == 'pdf':
                             text, changed = self.get_pdf_text(desc_path, full_path)
                             if changed is True:
                                 lib_changed = True
                         else:
                             self.log.error(f"Unsupported conversion {ext} to text at {desc_path}")
+                            lib_counter -= 1
                             continue
                         if text is not None:
                             entry: LibEntry = LibEntry({
@@ -372,10 +421,72 @@ class IcoTqStore:
                             })
                             self.lib.append(entry)
                             lib_changed = True
-                            if max_imports is not None and len(self.lib) >= max_imports:
-                                self.write_library()
-                                self.log.warning(f"Import reached max {max_imports}, library: {len(self.lib)} entries")
-                                return
+        current_model_name:str|None = None
+        if self.current_model is not None:
+            current_model_name = self.current_model['model_name']
+        for debris_desc in debris_candidates:
+            self.log.info(f"Removing debris {debris_desc}")
+            if debris_desc in self.pdf_index:
+                cache_name = self.pdf_index[debris_desc]['filename']
+                if cache_name != "" and os.path.exists(cache_name):
+                    os.remove(cache_name)
+                    self.log.info(f"Cached entry {debris_desc}, file {cache_name} removed")
+                else:
+                    if cache_name != "" and self.pdf_index[debris_desc]['previous_failure'] is False:
+                        self.log.warning(f"Cache entry for {debris_desc} at {cache_name} does not exist, inconsistent cache!")
+                del self.pdf_index[debris_desc]
+                lib_changed = True
+            for entry in self.lib:
+                if entry['desc_filename'] in debris_candidates:
+                    for entry_model_name in entry['emb_ptrs']:
+                        if entry_model_name not in tensor_debris:
+                            tensor_debris[entry_model_name] = []
+                        tensor_debris[entry_model_name].append(entry['emb_ptrs'][entry_model_name])
+                    self.log.info(f"Library entry {entry['desc_filename']} removed")
+                    self.lib.remove(entry)
+                    lib_changed = True
+        if len(tensor_debris.keys()) > 0:
+            self.log.warning("Rewriting embeddings tensors to remove obsolete entries")
+            for model_name in tensor_debris:
+                # Pass 1 cut emb_vectors
+                self.log.info(f"Removing {len(tensor_debris[model_name])} chunks from tensor {model_name}")
+                if len(tensor_debris[model_name]) == 0:
+                    continue
+                tensor_valid:bool = False
+                removals = sorted(tensor_debris[model_name], reverse=True)
+                if self.load_tensor(model_name=model_name) is False or self.embeddings_matrix is None:
+                    self.log.warning(f"Failed to load tensor for model {model_name}, no embeddings have been created yet, use 'embed' command to create them.")
+                else:
+                    tensor_valid = True
+                if tensor_valid and self.embeddings_matrix is not None:
+                    tensor_changed = False
+                    for start, length in removals:  # sorted in reverse start idx already
+                        self.embeddings_matrix = torch.cat([self.embeddings_matrix[:start,:], self.embeddings_matrix[start+length:,:]])
+                        tensor_changed = True
+                    if tensor_changed is True:
+                        _ = self.save_tensor()
+                # Pass 2 shift emb_ptr starts
+                for ind, entry in enumerate(self.lib):
+                    if model_name in entry['emb_ptrs']:
+                        if tensor_valid is False:
+                            del self.lib[ind]['emb_ptrs'][model_name]
+                        else:
+                            offs = 0
+                            start, _ = entry['emb_ptrs'][model_name]
+                            for st, ln in tensor_debris[model_name]:
+                                if st<start:
+                                    offs += ln
+                            if offs > 0:
+                                new_offs = entry['emb_ptrs'][model_name][0] - offs
+                                self.log.info("Moving emb_ptr start by {offs} to {new_offs}")
+                                if new_offs < 0:
+                                    self.log.error(f"Things went horribly wrong processing {model_name} at {entry['desc_filename']}, offset went to {new_offs} (delta: {offs})")
+                                    self.log.error("INCONSISTENT STATE!")
+                                    return
+                                self.lib[ind]['emb_ptrs'][model_name] = (new_offs, entry['emb_ptrs'][model_name][1])
+                                lib_changed = True
+            if current_model_name is not None:
+                _ = self.load_tensor(model_name = current_model_name)
         if lib_changed is True:
             self.write_library()
             self.log.info(f"Changed library saved: {len(self.lib)} entries")
@@ -413,19 +524,8 @@ class IcoTqStore:
                 try:
                     self.engine = SentenceTransformer(model['model_hf_name'], 
                                                       trust_remote_code=trust_remote_code)
-                    if device=='auto':
-                        if torch.cuda.is_available():
-                            self.engine = self.engine.to(torch.device('cuda'))
-                            self.device = 'cuda'
-                        elif torch.backends.mps.is_available():
-                            self.engine = self.engine.to(torch.device('mps'))
-                            self.device = 'mps'
-                        else:
-                            self.engine = self.engine.to(torch.device('cpu'))
-                            self.device = 'cpu'
-                    else:
-                        self.engine = self.engine.to(torch.device(device))
-                        self.device = device
+                    self.device = self.resolve_device(device)
+                    self.engine = self.engine.to(torch.device(self.device))
                     self.current_model = model
                     self.log.info(f"Model {name} loaded.")
                     self.config['embeddings_model_name'] = name
@@ -437,14 +537,16 @@ class IcoTqStore:
         self.log.error(f"Model {name} is unknown, not in model list")
         return False
 
-    def generate_embeddings(self, save_every_sec:int = 180):
+    def generate_embeddings(self, save_every_sec:int = 180, purge:bool=False):
         if self.current_model is None or self.engine is None:
             self.log.error("No current embeddings model loaded!")
             return
+        if purge is True:
+            self.embeddings_matrix = None
         start_time: float = time.time()
         for ind, entry in enumerate(self.lib):
             self.log.info(f"Embedding: {ind+1}/{len(self.lib)}")
-            if self.current_model['model_name'] in entry['emb_ptrs']:
+            if self.current_model['model_name'] in entry['emb_ptrs'] and purge is False:
                 continue
             text_chunks = self.get_chunks(entry['text'], self.current_model['chunk_size'], self.current_model['chunk_overlap'])
             if len(text_chunks) == 0:

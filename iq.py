@@ -9,8 +9,12 @@ from typing import cast
 def iq_info(its: IcoTqStore, _logger:logging.Logger) -> None:
     its.list_sources()
 
-def iq_embed(its: IcoTqStore, logger:logging.Logger):
-    its.generate_embeddings()
+def iq_index(its: IcoTqStore, logger:logging.Logger, param:str):
+    if param == 'purge':
+        purge = True
+    else:
+        purge = False
+    its.generate_embeddings(purge=purge)
     logger.info("Embeddings generated.")
 
 def iq_search(its: IcoTqStore, logger:logging.Logger, search_spec: str):
@@ -108,7 +112,7 @@ def iq_export(its: IcoTqStore, logger:logging.Logger) -> None:
         return
     print(f"Export to {ebook_mirror_path}")
 
-def iq_import(its: IcoTqStore, _logger:logging.Logger, max_imports_str:str|None=None):
+def iq_sync(its: IcoTqStore, _logger:logging.Logger, max_imports_str:str|None=None):
     if max_imports_str is not None:
         try:
             max_imports = int(max_imports_str)
@@ -116,7 +120,7 @@ def iq_import(its: IcoTqStore, _logger:logging.Logger, max_imports_str:str|None=
             max_imports = None
     else:
         max_imports = None
-    its.import_texts(max_imports=max_imports)
+    its.sync_texts(max_imports=max_imports)
 
 def iq_select(its: IcoTqStore, _logger:logging.Logger, model_id:str):
     try:
@@ -156,12 +160,11 @@ def iq_help(parser:argparse.ArgumentParser, valid_actions:list[tuple[str, str]])
 
 def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
     valid_actions = [('info', 'Overview of available data and sources'), 
-                                            ('export', 'NOT IMPLEMENTED'), 
-                                            ('import', '[max_docs] evaluate available sources and cache text information and metadata, optional max_docs limits number of imported docs'), 
-                                            ('embed', 'Generate embeddings for currently active model'),
+                                            ('sync', "[max_docs] evaluate available sources and cache text information and metadata, optional max_docs limits number of imported docs, sync source repos with cached text for indexing. Use 'index' function afterwards to create the actual index!"), 
+                                            ('index', '[purge] Generate embeddings index for currently active model. Option purge starts index from scratch. (list models, select model-id to change current model)'),
                                             ('list', 'models|sources|docs'),
-                                            ('select', 'model-index as shown by: list models'),
-                                            ('search', 'Search for keywords given with -k <keywords> option'),
+                                            ('select', "model-index as shown by: 'list models', use 'index' to create or update embeddings indices"),
+                                            ('search', "Search for keywords given as repl argument or with '-k <keywords>' option. You need to 'sync' and 'index' first"),
                                             ('help', 'Display usage information')]
     parser: ArgumentParser = argparse.ArgumentParser(description="IcoTq")
     _ = parser.add_argument(
@@ -198,14 +201,12 @@ def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
                 logger.error(f"Invalid action {action}, valid are: {valid_actions}, 'help' for more information")
         if 'info' in actions:
             iq_info(its, logger)
-        if 'export' in actions:
-            iq_export(its, logger)
-        if 'import' in actions:
-            iq_import(its,  logger, max_imports_str=param)
+        if 'sync' in actions:
+            iq_sync(its,  logger, max_imports_str=param)
         if 'help' in actions:
             iq_help(parser, valid_actions)
-        if 'embed' in actions:
-            iq_embed(its, logger)
+        if 'index' in actions:
+            iq_index(its, logger, param)
         if 'search' in actions:
             iq_search(its, logger, param)
         if 'list' in actions:
