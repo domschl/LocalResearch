@@ -607,6 +607,8 @@ class IcoTqStore:
         start_time: float = time.time()
         for ind, entry in enumerate(self.lib):
             self.log.info(f"Embedding: {ind+1}/{len(self.lib)}")
+            if 'emb_ptrs' not in entry:
+                self.lib[ind]['emb_ptrs'] = {}
             if self.current_model['model_name'] in entry['emb_ptrs'] and purge is False:
                 continue
             text_chunks = self.get_chunks(entry['text'], self.current_model['chunk_size'], self.current_model['chunk_overlap'])
