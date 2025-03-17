@@ -250,6 +250,7 @@ def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
                 param = cmd_inp[ind:].strip()
             else:
                 actions = [cmd_inp]
+                param = ""
     print()
 
 def main() -> None:
