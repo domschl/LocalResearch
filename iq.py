@@ -150,6 +150,16 @@ def iq_list(its: IcoTqStore, _logger:logging.Logger, param:str):
     elif param == 'docs':
         for ind, entry in enumerate(its.lib):
             print(f"{ind+1} {entry['desc_filename']}")
+    else:
+        print("Usage either 'list models', 'list sources', or 'list docs'.")
+
+def iq_check(its: IcoTqStore, _logger:logging.Logger, param:str=""):
+    if param == "" or "pdf" in param:
+        its.check_clean(dry_run=True)
+
+def iq_clean(its: IcoTqStore, _logger:logging.Logger, param:str=""):
+    if param == "" or "pdf" in param:
+        its.check_clean(dry_run=False)
 
 def iq_help(parser:argparse.ArgumentParser, valid_actions:list[tuple[str, str]]):
     parser.print_help()
@@ -161,10 +171,12 @@ def iq_help(parser:argparse.ArgumentParser, valid_actions:list[tuple[str, str]])
 def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
     valid_actions = [('info', 'Overview of available data and sources'), 
                                             ('sync', "[max_docs] evaluate available sources and cache text information and metadata, optional max_docs limits number of imported docs, sync source repos with cached text for indexing. Use 'index' function afterwards to create the actual index!"), 
-                                            ('index', '[purge] Generate embeddings index for currently active model. Option purge starts index from scratch. (list models, select model-id to change current model)'),
-                                            ('list', 'models|sources|docs'),
+                                            ('index', "[purge] Generate embeddings index for currently active model. Option purge starts index from scratch. ('list models', 'select <model-id>' to change current model)"),
+                                            ('list', "models|sources|docs"),
                                             ('select', "model-index as shown by: 'list models', use 'index' to create or update embeddings indices"),
                                             ('search', "Search for keywords given as repl argument or with '-k <keywords>' option. You need to 'sync' and 'index' first"),
+                                            ('check', "Verify consistency of data references and indices. Use 'clean' to apply actions."),
+                                            ('clean', "Repair consistency of data references and indices. Remove debris. Use 'check' first for dry-run."),
                                             ('help', 'Display usage information')]
     parser: ArgumentParser = argparse.ArgumentParser(description="IcoTq")
     _ = parser.add_argument(
@@ -213,6 +225,10 @@ def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
             iq_list(its, logger, param)
         if 'select' in actions:
             iq_select(its, logger, param)
+        if 'check' in actions:
+            iq_check(its, logger, param)
+        if 'clean' in actions:
+            iq_clean(its, logger, param)
         if cast(bool, args.non_interactive) is True:
             break
         if first is True:

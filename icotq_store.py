@@ -141,7 +141,7 @@ class IcoTqStore:
         self.embeddings_matrix: torch.Tensor | None = None
         if self.config['embeddings_model_name'] != "":
             _ = self.load_model(self.config['embeddings_model_name'], self.config['embeddings_device'], self.config['embeddings_model_trust_code'])
-        config_subdirs = ['Texts', 'Embeddings', 'PDFTextCache']
+        config_subdirs = ['Embeddings', 'PDFTextCache']
         for cdir in config_subdirs:
             full_path = os.path.join(self.root_path, cdir)
             if os.path.isdir(full_path) is False:
@@ -536,6 +536,67 @@ class IcoTqStore:
                     return False
         self.log.error(f"Model {name} is unknown, not in model list")
         return False
+
+    def check_clean(self, dry_run:bool=True):
+        self.log.info("Checking PDF cache...")
+        lib_changed:bool = False
+        dirty: bool = False
+        index_backup: dict[str, PDFIndex] = {}
+        index_backup_valid:bool = False
+        if dry_run is True:
+            index_backup = self.pdf_index.copy()
+            index_backup_valid = True
+            
+        debris: list[str] = []
+        for pdf_desc in self.pdf_index:
+            found = False
+            for entry in self.lib:
+                if entry['desc_filename'] == pdf_desc:
+                    found = True
+                    break
+            if found is False:
+                debris.append(pdf_desc)
+        if dry_run is True:
+            self.log.info(f"PDF index contains {len(self.pdf_index.keys())} entries, from which {len(debris)} are debris.")
+        else:
+            self.log.warning(f"Deleting {len(debris)} entries from PDF cache index")
+            if len(debris) > 0:
+                lib_changed = True
+                dirty = True
+        for pdf_desc in debris:
+            del self.pdf_index[pdf_desc]
+        pdf_cache = os.path.join(self.root_path, "PDFTextCache")
+        pdf_cache_index = os.path.join(pdf_cache, "pdf_index.json")
+        print(f"PDF_Cache: {pdf_cache_index}, at {pdf_cache}")
+        cache_files = [os.path.join(pdf_cache, f) for f in os.listdir(pdf_cache) if os.path.isfile(os.path.join(pdf_cache, f))]
+        cnt = 0
+        debris = []
+        for filename in cache_files:
+            if filename == pdf_cache_index:
+                continue
+            cnt += 1
+            found = False
+            for cf in self.pdf_index:
+                if self.pdf_index[cf]['filename'] == filename:
+                    found = True
+                    break
+            if found is False:
+                debris.append(filename)
+                dirty = True
+        if dry_run is True:
+            self.log.info(f"PDF cache contains {cnt} files, index length is {len(self.pdf_index.keys())}, {len(debris)} of which are debris and wouild be deleted")
+        else:
+            self.log.warning(f"Deleting {len(debris)} files from PDF cache.")
+            for filename in debris:
+                os.remove(filename)
+        if dry_run is True and index_backup_valid is True:
+            self.pdf_index = index_backup
+        if dry_run is False and lib_changed is True:
+            self.write_library()
+        if dirty is True and dry_run is True:
+            self.log.warning("Problems encounter, consider running 'clean' to fix.")
+        if dirty is False:
+            self.log.info("No problems found.")
 
     def generate_embeddings(self, save_every_sec:int = 180, purge:bool=False):
         if self.current_model is None or self.engine is None:
