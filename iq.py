@@ -161,6 +161,12 @@ def iq_clean(its: IcoTqStore, _logger:logging.Logger, param:str=""):
     if param == "" or "pdf" in param:
         its.check_clean(dry_run=False)
 
+def iq_serve(its: IcoTqStore, _logger:logging.Logger, param:str):
+    if param == "stop":
+        its.stop_server()
+    else:
+        its.start_server()
+
 def iq_help(parser:argparse.ArgumentParser, valid_actions:list[tuple[str, str]]):
     parser.print_help()
     print()
@@ -177,6 +183,7 @@ def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
                                             ('search', "Search for keywords given as repl argument or with '-k <keywords>' option. You need to 'sync' and 'index' first"),
                                             ('check', "Verify consistency of data references and indices. Use 'clean' to apply actions."),
                                             ('clean', "Repair consistency of data references and indices. Remove debris. Use 'check' first for dry-run."),
+                                            ('serve', "Start web-server for search, 'serve stop' to stop server"),
                                             ('help', 'Display usage information')]
     parser: ArgumentParser = argparse.ArgumentParser(description="IcoTq")
     _ = parser.add_argument(
@@ -229,6 +236,8 @@ def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
             iq_check(its, logger, param)
         if 'clean' in actions:
             iq_clean(its, logger, param)
+        if 'serve' in actions:
+            iq_serve(its, logger, param)
         if cast(bool, args.non_interactive) is True:
             break
         if first is True:

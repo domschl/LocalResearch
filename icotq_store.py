@@ -4,6 +4,9 @@ import json
 import uuid
 import time
 import numpy as np
+import aiohttp
+import aiohttp.web
+import asyncio
 
 import torch
 from sentence_transformers import SentenceTransformer
@@ -71,6 +74,8 @@ class IcoTqStore:
         self.pdf_index:dict[str, PDFIndex] = {}
         self.config_file:str = os.path.join(config_path, "icoqt.json")
         self.config:IcotqConfig
+        self.server_running:bool = False
+
         if os.path.exists(self.config_file):
             self.load_config()
         else:
@@ -742,3 +747,46 @@ class IcoTqStore:
         search_results = sorted(search_results, key=lambda x: x['cosine'], reverse=True)
         return search_results
 
+    async def search_handler(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
+        data = await request.json()
+        search_text:str = data['search_text']
+        max_results:int = data.get('max_results', 2)
+        yellow_liner:bool = data.get('yellow_liner', False)
+        context:int = data.get('context', 16)
+        context_steps:int = data.get('context_steps', 4)
+        compress:str = data.get('compress', 'none')
+        search_results = self.search(search_text, max_results=max_results, yellow_liner=yellow_liner, context=context, context_steps=context_steps, compress=compress)
+        return aiohttp.web.json_response(search_results)
+    
+    def start_server(self, host:str="0.0.0.0", port:int=8080):
+        if self.server_running is True:
+            self.log.warning("Server already running!")
+            return
+        app = aiohttp.web.Application()
+        app.router.add_post('/search', self.search_handler)
+
+        runner = aiohttp.web.run_app(app, host=host, port=port)
+        self.loop = asyncio.get_event_loop()
+        self.server_running = True
+
+        async def start():
+                await runner.setup()
+                site = aiohttp.web.TCPSite(runner, host, port)
+                await site.start()
+                self.log.info(f"Server started at {host}:{port}")
+                while self.server_running:
+                    await asyncio.sleep(0.1)
+                await site.stop()
+                await runner.cleanup()
+                self.log.info(f"Server stopped")
+        self.loop.create_task(start())
+
+    def stop_server(self):
+        if self.server_running is False:
+            self.log.warning("Server is not running!")
+            return
+        self.server_running = False
+        self.loop.stop()
+        
+        
+        
