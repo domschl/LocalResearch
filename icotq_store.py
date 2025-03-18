@@ -741,4 +741,4 @@ class IcoTqStore:
             search_results.append(sres)
         search_results = sorted(search_results, key=lambda x: x['cosine'], reverse=True)
         return search_results
- 
+

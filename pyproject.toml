@@ -7,6 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "accelerate>=1.5.1",
     "einops>=0.8.1",
+    "mcp[cli]>=1.4.1",
     "pymupdf>=1.25.3",
     "rich>=13.9.4",
     "sentence-transformers>=3.4.1",
