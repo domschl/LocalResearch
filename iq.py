@@ -15,7 +15,6 @@ def iq_index(its: IcoTqStore, logger:logging.Logger, param:str):
     else:
         purge = False
     its.generate_embeddings(purge=purge)
-    logger.info("Embeddings generated.")
 
 def iq_search(its: IcoTqStore, logger:logging.Logger, search_spec: str):
     max_results = 3

@@ -277,7 +277,7 @@ class IcoTqStore:
                 self.log.warning(f"Embeddings-matrix index incompatible with text library! User 'index purge' to rebuild index! Info: Sum: {sum}, EmbMat: {self.embeddings_matrix.shape}")
             return True
         else:
-            self.log.warning("No embeddings index available!")
+            self.log.warning("No embeddings index available! Use 'sync' to import text, 'index' to generate embeddings.")
             return False
 
     def write_library(self):
@@ -335,7 +335,7 @@ class IcoTqStore:
             if failure is False and text is not None:
                 with open(pdf_ind['filename'], 'w') as f:
                     _ = f.write(text)
-                    self.log.info(f"Added {desc} to PDF cache, size: {len(self.pdf_index.keys())}, failure: {failure}")
+                    self.log.info(f"Added {desc} to PDF cache, size: {len(self.pdf_index.keys())}")
             self.pdf_index[desc] = pdf_ind
             # self.save_pdf_cache_state()
             changed = True
@@ -391,32 +391,44 @@ class IcoTqStore:
                     full_path = os.path.join(root, filename)
                     desc_path = "{"+ source['name'] + "}" + full_path[len(source_path):]
                     if desc_path in debris_candidates:
-                        self.log.info(f"DEBRIS: Not debris: {desc_path}")
                         debris_candidates.remove(desc_path)
-                    else:
-                        self.log.info(f"DEBRIS: new file {desc_path}, not in {debris_candidates}")
                     lib_counter += 1
                     in_lib = False
-                    for entry in self.lib:
+                    lib_text: str|None = None
+                    lib_index: int|None = None
+                    for ind, entry in enumerate(self.lib):
                         if entry['desc_filename'] == desc_path:
                             # Check if changed!
                             in_lib = True
+                            lib_index = ind
+                            lib_text = entry['text']
                             break
-                    if in_lib is False:
-                        text = None
-                        if ext in ['md', 'py', 'txt']:
-                            with open(full_path, 'r') as f:
-                                text = f.read()
-                                self.log.info(f"Importing {desc_path}")
-                        elif ext == 'pdf':
-                            text, changed = self.get_pdf_text(desc_path, full_path)
-                            if changed is True:
+                    text = None
+                    if ext in ['md', 'py', 'txt']:
+                        with open(full_path, 'r') as f:
+                            text = f.read()
+                            self.log.info(f"Importing {desc_path}")
+                        if lib_text is not None:
+                            if text == lib_text:
+                                continue
+                            else:
+                                self.log.warning(f"Text for {desc_path} has changed!")
                                 lib_changed = True
                         else:
-                            self.log.error(f"Unsupported conversion {ext} to text at {desc_path}")
-                            lib_counter -= 1
-                            continue
-                        if text is not None:
+                            lib_changed = True
+                    elif ext == 'pdf':
+                        text, changed = self.get_pdf_text(desc_path, full_path)
+                        if changed is True:
+                            lib_changed = True
+                    else:
+                        self.log.error(f"Unsupported conversion {ext} to text at {desc_path}")
+                        lib_counter -= 1
+                        continue
+                    if text is not None:
+                        if in_lib is True and lib_index is not None:
+                            self.lib[lib_index]['text'] = text
+                            self.lib[lib_index]['emb_ptrs'] = {}  # XXX: this generates garbage emb vectors from old version!
+                        else:
                             entry: LibEntry = LibEntry({
                                 'source_name': source['name'],
                                 'desc_filename': desc_path,
@@ -425,7 +437,7 @@ class IcoTqStore:
                                 'emb_ptrs': {}
                             })
                             self.lib.append(entry)
-                            lib_changed = True
+                        lib_changed = True
         current_model_name:str|None = None
         if self.current_model is not None:
             current_model_name = self.current_model['model_name']
