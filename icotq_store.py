@@ -563,8 +563,10 @@ class IcoTqStore:
             index_backup_valid = True
             
         debris: list[str] = []
+        bad_cnt:int = 0
         for pdf_desc in self.pdf_index:
             if self.pdf_index[pdf_desc]['previous_failure'] is True:
+                bad_cnt += 1
                 continue
             found = False
             for entry in self.lib:
@@ -574,7 +576,7 @@ class IcoTqStore:
             if found is False:
                 debris.append(pdf_desc)
         if dry_run is True:
-            self.log.info(f"PDF index contains {len(self.pdf_index.keys())} entries, from which {len(debris)} are debris.")
+            self.log.info(f"PDF index contains {len(self.pdf_index.keys())} entries, {bad_cnt} PDFs with no extractable text, from which {len(debris)} are debris.")
         else:
             self.log.warning(f"Deleting {len(debris)} entries from PDF cache index")
             if len(debris) > 0:
@@ -600,7 +602,7 @@ class IcoTqStore:
                 debris.append(filename)
                 dirty = True
         if dry_run is True:
-            self.log.info(f"PDF cache contains {cnt} files, index length is {len(self.pdf_index.keys())}, {len(debris)} of which are debris and wouild be deleted")
+            self.log.info(f"PDF cache contains {cnt} files, {bad_cnt} pointers to PDFs without text, index length is {len(self.pdf_index.keys())}, {len(debris)} of which are debris and would be deleted")
         else:
             self.log.warning(f"Deleting {len(debris)} files from PDF cache.")
             for filename in debris:
