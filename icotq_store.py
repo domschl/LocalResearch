@@ -292,8 +292,10 @@ class IcoTqStore:
         if desc in self.pdf_index:
             cur_file_size = os.path.getsize(full_path)
             if cur_file_size == self.pdf_index[desc]['file_size'] and self.pdf_index[desc]['previous_failure'] is False:
+                basename = os.path.basename(self.pdf_index[desc]['filename'])
+                local_path = os.path.join(pdf_cache, basename)
                 try:
-                    with open(self.pdf_index[desc]['filename'], 'r') as f:
+                    with open(local_path, 'r') as f:
                         text = f.read()
                         return text, False
                 except Exception as e:
@@ -324,20 +326,18 @@ class IcoTqStore:
                 cache_filename = ""
                 self.log.info(f"Failed to extract text from: {desc}")
             else:
-                cache_filename = os.path.join(pdf_cache, str(uuid.uuid4()))
+                cache_filename = str(uuid.uuid4())
                 failure = False
-                self.log.info(f"Importing and caching PDF {full_path}")
             pdf_ind: PDFIndex = {
                 'filename': cache_filename,
                 'file_size': os.path.getsize(full_path),
                 'previous_failure': failure
             }
             if failure is False and text is not None:
-                with open(pdf_ind['filename'], 'w') as f:
+                with open(os.path.join(pdf_cache, pdf_ind['filename']), 'w') as f:
                     _ = f.write(text)
                     self.log.info(f"Added {desc} to PDF cache, size: {len(self.pdf_index.keys())}")
             self.pdf_index[desc] = pdf_ind
-            # self.save_pdf_cache_state()
             changed = True
         return text, changed
 
@@ -384,7 +384,6 @@ class IcoTqStore:
                                 continue
                             alt_file = os.path.join(root, file_base + '.' + alt)
                             if os.path.exists(alt_file):
-                                # self.log.info(f"Better format {alt} exists for {filename}")
                                 alt_exists = True
                         if alt_exists is True:  # better format of same file exist, so skip this one
                             continue                    
@@ -407,7 +406,6 @@ class IcoTqStore:
                     if ext in ['md', 'py', 'txt']:
                         with open(full_path, 'r') as f:
                             text = f.read()
-                            self.log.info(f"Importing {desc_path}")
                         if lib_text is not None:
                             if text == lib_text:
                                 continue
@@ -566,6 +564,8 @@ class IcoTqStore:
             
         debris: list[str] = []
         for pdf_desc in self.pdf_index:
+            if self.pdf_index[pdf_desc]['previous_failure'] is True:
+                continue
             found = False
             for entry in self.lib:
                 if entry['desc_filename'] == pdf_desc:
@@ -583,9 +583,8 @@ class IcoTqStore:
         for pdf_desc in debris:
             del self.pdf_index[pdf_desc]
         pdf_cache = os.path.join(self.root_path, "PDFTextCache")
-        pdf_cache_index = os.path.join(pdf_cache, "pdf_index.json")
-        print(f"PDF_Cache: {pdf_cache_index}, at {pdf_cache}")
-        cache_files = [os.path.join(pdf_cache, f) for f in os.listdir(pdf_cache) if os.path.isfile(os.path.join(pdf_cache, f))]
+        pdf_cache_index = "pdf_index.json"
+        cache_files = [f for f in os.listdir(pdf_cache) if os.path.isfile(os.path.join(pdf_cache, f))]
         cnt = 0
         debris = []
         for filename in cache_files:
@@ -605,7 +604,7 @@ class IcoTqStore:
         else:
             self.log.warning(f"Deleting {len(debris)} files from PDF cache.")
             for filename in debris:
-                os.remove(filename)
+                os.remove(os.path.join(pdf_cache, filename))
         if dry_run is True and index_backup_valid is True:
             self.pdf_index = index_backup
         if dry_run is False and lib_changed is True:
@@ -623,7 +622,7 @@ class IcoTqStore:
             self.embeddings_matrix = None
         start_time: float = time.time()
         for ind, entry in enumerate(self.lib):
-            self.log.info(f"Embedding: {ind+1}/{len(self.lib)}")
+            # self.log.info(f"Embedding: {ind+1}/{len(self.lib)}")
             if 'emb_ptrs' not in entry:
                 self.lib[ind]['emb_ptrs'] = {}
             if self.current_model['model_name'] in entry['emb_ptrs'] and purge is False:
@@ -632,7 +631,7 @@ class IcoTqStore:
             if len(text_chunks) == 0:
                 self.log.error(f"Cannot encode empty text list at {entry['desc_filename']}")
                 continue
-            self.log.info(f"Encoding {len(text_chunks)} chunks...")
+            self.log.info(f"Encoding {len(text_chunks)} chunks from {entry['desc_filename']}...")
             embeddings: list[torch.Tensor] = self.engine.encode(sentences=text_chunks, show_progress_bar=True, convert_to_numpy=False)  # pyright: ignore[reportUnknownMemberType, reportAssignmentType]
             emb_matrix = torch.stack(embeddings)
 
