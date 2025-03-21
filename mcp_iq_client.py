@@ -6,25 +6,9 @@ from mcp.client.stdio import stdio_client
 # Create server parameters for stdio connection
 server_params = StdioServerParameters(
     command="python",  # Executable
-    args=["mcp_iq_server.py"],  # Optional command line arguments
+    args=["mcp_iq_server.py"],  # Optional command line arguments, This calls a 'server' stub that in turn uses REST to contact a server started with 'iq serve'
     env=None,  # Optional environment variables
 )
-
-
-# Optional: create a sampling callback
-# async def handle_sampling_message(
-#     message: types.CreateMessageRequestParams,
-# ) -> types.CreateMessageResult:
-#     return types.CreateMessageResult(
-#         role="assistant",
-#         content=types.TextContent(
-#             type="text",
-#             text="Hello, world! from model",
-#         ),
-#         model="gpt-3.5-turbo",
-#         stopReason="endTurn",
-#     )
-
 
 async def run():
     async with stdio_client(server_params) as (read, write):
@@ -41,11 +25,10 @@ async def run():
             print(tools)
 
             # Call a tool
-            result = await session.call_tool("search", arguments={"search_text": "secret space research", "max_results": 2})
+            result = await session.call_tool("search", arguments={"search_text": "Lincoln's death"}) # , "max_results": 2})
             print(result)
 
 
 if __name__ == "__main__":
     import asyncio
-
     asyncio.run(run())
