@@ -7,11 +7,12 @@ import numpy as np
 import aiohttp
 import aiohttp.web
 import asyncio
+import threading
 
 import torch
 from sentence_transformers import SentenceTransformer
 
-from typing import TypedDict, cast
+from typing import TypedDict, cast, NotRequired
 import pymupdf  # pyright: ignore[reportMissingTypeStubs]
 
 
@@ -40,6 +41,14 @@ class PDFIndex(TypedDict):
     previous_failure: bool
     filename: str
     file_size: int
+
+class SearchRequest(TypedDict):
+    search_text: str
+    max_results: NotRequired[int]
+    yellow_liner: NotRequired[bool]
+    context_length: NotRequired[int]
+    context_steps: NotRequired[int]
+    compression_mode: NotRequired[str]
 
 class SearchResult(TypedDict):
     cosine: float
@@ -75,7 +84,9 @@ class IcoTqStore:
         self.config_file:str = os.path.join(config_path, "icoqt.json")
         self.config:IcotqConfig
         self.server_running:bool = False
-
+        self.loop:asyncio.AbstractEventLoop
+        self.server_thread:threading.Thread | None = None
+        
         if os.path.exists(self.config_file):
             self.load_config()
         else:
@@ -668,14 +679,14 @@ class IcoTqStore:
         sorted_simil:list[tuple[int, float]] = sorted(simil, key=lambda x: x[1], reverse=True)
         return sorted_simil, search_vect
 
-    def yellow_line_it(self, text: str, search_embeddings: torch.Tensor, context:int=16, context_steps:int=1) -> np.typing.NDArray[np.float32]:
+    def yellow_line_it(self, text: str, search_embeddings: torch.Tensor, context_length:int=16, context_steps:int=1) -> np.typing.NDArray[np.float32]:
         if self.embeddings_matrix is None or self.engine is None:
             self.log.error("No embeddings available at yellow-lining!")
             return np.array([], dtype=np.float32)
         clr: list[str] = []
         for i in range(0, len(text), context_steps):
-            i0 = i - context // 2
-            i1 = i + context // 2
+            i0 = i - context_length // 2
+            i1 = i + context_length // 2
             if i0 < 0:
                 i1 = i1 - i0
                 i0 = 0
@@ -690,7 +701,7 @@ class IcoTqStore:
         yellow_vect: np.typing.NDArray[np.float32] = torch.matmul(emb_matrix, search_embeddings).cpu().numpy()  # pyright: ignore[reportUnknownMemberType]
         return yellow_vect
 
-    def search(self, search_text:str, max_results:int=2, yellow_liner:bool=False, context:int=16, context_steps:int=4, compress:str="none"):
+    def search(self, search_text:str, max_results:int=2, yellow_liner:bool=False, context_length:int=16, context_steps:int=4, compression_mode:str="none"):
         if self.current_model is None:
             self.log.error("No current model!")
             res:list[SearchResult] = []
@@ -729,14 +740,14 @@ class IcoTqStore:
             desc, idx, count, cosine, entry = sra
             start, _length = entry['emb_ptrs'][self.current_model['model_name']]
             chunk:str = self.get_span_chunk(entry['text'], idx - start, count, self.current_model['chunk_size'], self.current_model['chunk_overlap'])
-            if compress == "light":
+            if compression_mode == "light":
                 new_chunk = chunk
                 old_chunk = None
                 while new_chunk != old_chunk:
                     old_chunk = new_chunk
                     new_chunk = old_chunk.replace("  ", " ").replace("\n\n", "\n")
                 chunk = new_chunk
-            elif compress == "full":
+            elif compression_mode == "full":
                 new_chunk = chunk
                 old_chunk = None
                 while new_chunk != chunk:
@@ -744,7 +755,7 @@ class IcoTqStore:
                     new_chunk = old_chunk.replace("\n", " ").replace("\r"," ").replace("\t", " ").replace("  ", " ")
                 chunk = new_chunk
             if yellow_liner is True:
-                yellow_liner_weights = self.yellow_line_it(chunk, search_embeddings, context=context, context_steps=context_steps)
+                yellow_liner_weights = self.yellow_line_it(chunk, search_embeddings, context_length=context_length, context_steps=context_steps)
             else:
                 yellow_liner_weights = None
             sres:SearchResult = {
@@ -760,39 +771,64 @@ class IcoTqStore:
         search_results = sorted(search_results, key=lambda x: x['cosine'], reverse=True)
         return search_results
 
+
     async def search_handler(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
-        data = await request.json()
+        try:
+            data:SearchRequest = await request.json()
+        except Exception as e:
+            self.log.error(f"Search request format failure: {e}")
+            return aiohttp.web.json_response(data={}, status=400)
+        self.log.info(f"Search request received: {data}")
         search_text:str = data['search_text']
         max_results:int = data.get('max_results', 2)
         yellow_liner:bool = data.get('yellow_liner', False)
-        context:int = data.get('context', 16)
+        context_length:int = data.get('context_length', 16)
         context_steps:int = data.get('context_steps', 4)
-        compress:str = data.get('compress', 'none')
-        search_results = self.search(search_text, max_results=max_results, yellow_liner=yellow_liner, context=context, context_steps=context_steps, compress=compress)
+        compression_mode:str = data.get('compression_mode', 'none')
+        search_results = self.search(search_text, max_results=max_results, yellow_liner=yellow_liner, context_length=context_length, context_steps=context_steps, compression_mode=compression_mode)
+        self.log.info(f"Remote search request: {len(search_results)} answers")
         return aiohttp.web.json_response(search_results)
-    
-    def start_server(self, host:str="0.0.0.0", port:int=8080):
-        if self.server_running is True:
-            self.log.warning("Server already running!")
-            return
-        app = aiohttp.web.Application()
-        app.router.add_post('/search', self.search_handler)
 
-        runner = aiohttp.web.run_app(app, host=host, port=port)
-        self.loop = asyncio.get_event_loop()
+    def _server_task(self, host:str, port:int, in_thread:bool=False):
+        self.log.info(f"_server_task, in_thread={in_thread}")
+        app = aiohttp.web.Application()
+        _ = app.router.add_post('/search', self.search_handler)
+
+        runner = aiohttp.web.AppRunner(app)
+        if in_thread is True:
+            self.loop = asyncio.new_event_loop()
+        else:
+            self.loop = asyncio.get_event_loop()
         self.server_running = True
 
         async def start():
-                await runner.setup()
-                site = aiohttp.web.TCPSite(runner, host, port)
-                await site.start()
-                self.log.info(f"Server started at {host}:{port}")
-                while self.server_running:
-                    await asyncio.sleep(0.1)
-                await site.stop()
-                await runner.cleanup()
-                self.log.info(f"Server stopped")
-        self.loop.create_task(start())
+            await runner.setup()
+            site = aiohttp.web.TCPSite(runner, host, port)
+            await site.start()
+            self.log.info(f"Server started at {host}:{port}")
+            while self.server_running:
+                await asyncio.sleep(0.1)
+            await site.stop()
+            await runner.cleanup()
+            self.log.info(f"Server stopped")
+
+        self.loop.run_until_complete(start())
+        while self.server_running:
+            time.sleep(0.1)
+    
+    def start_server(self, host:str="0.0.0.0", port:int=8080, background:bool=False):
+        if self.server_running is True:
+            self.log.warning("Server already running!")
+            return
+        if background is False:
+            self.log.info("Starting blocking server task")
+            self._server_task(host, port)
+        else:
+            self.log.info("Starting server thread")
+            in_thread:bool = True
+            self.server_thread = threading.Thread(target=self._server_task, args=(host, port, in_thread), daemon=True)
+            self.server_thread.start()
+
 
     def stop_server(self):
         if self.server_running is False:
@@ -800,6 +836,10 @@ class IcoTqStore:
             return
         self.server_running = False
         self.loop.stop()
+        # stop thread, if it is running
+        if self.server_thread is not None and self.server_thread.is_alive():
+            self.server_thread.join()
+            self.server_thread = None
         
         
         

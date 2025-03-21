@@ -41,7 +41,7 @@ async def run():
             print(tools)
 
             # Call a tool
-            result = await session.call_tool("search", arguments={"param": "secret research"})
+            result = await session.call_tool("search", arguments={"search_text": "secret space research", "max_results": 2})
             print(result)
 
 

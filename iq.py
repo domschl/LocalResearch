@@ -9,7 +9,7 @@ from typing import cast
 def iq_info(its: IcoTqStore, _logger:logging.Logger) -> None:
     its.list_sources()
 
-def iq_index(its: IcoTqStore, logger:logging.Logger, param:str):
+def iq_index(its: IcoTqStore, _logger:logging.Logger, param:str):
     if param == 'purge':
         purge = True
     else:
@@ -18,11 +18,11 @@ def iq_index(its: IcoTqStore, logger:logging.Logger, param:str):
 
 def iq_search(its: IcoTqStore, logger:logging.Logger, search_spec: str):
     max_results = 3
-    context = 16
+    context_length = 16
     context_steps = 4
     yellow = True
     cols, _ = os.get_terminal_size()
-    results: list[SearchResult] | None = its.search(search_text=search_spec, yellow_liner=yellow, context=context, context_steps=context_steps, max_results=max_results, compress="full")
+    results: list[SearchResult] | None = its.search(search_text=search_spec, yellow_liner=yellow, context_length=context_length, context_steps=context_steps, max_results=max_results, compression_mode="full")
     print()
     print()
     console = Console()
@@ -161,10 +161,14 @@ def iq_clean(its: IcoTqStore, _logger:logging.Logger, param:str=""):
         its.check_clean(dry_run=False)
 
 def iq_serve(its: IcoTqStore, _logger:logging.Logger, param:str):
+    background:bool = False
+    if 'background' in param:
+        background = True
+
     if param == "stop":
         its.stop_server()
     else:
-        its.start_server()
+        its.start_server(background=background)
 
 def iq_help(parser:argparse.ArgumentParser, valid_actions:list[tuple[str, str]]):
     parser.print_help()
@@ -182,7 +186,7 @@ def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
                                             ('search', "Search for keywords given as repl argument or with '-k <keywords>' option. You need to 'sync' and 'index' first"),
                                             ('check', "Verify consistency of data references and indices. Use 'clean' to apply actions."),
                                             ('clean', "Repair consistency of data references and indices. Remove debris. Use 'check' first for dry-run."),
-                                            ('serve', "Start web-server for search, 'serve stop' to stop server"),
+                                            ('serve', "Start web-server for search, 'serve stop' to stop server, 'serve background' to run server in background to be able to continue to use the console interactively."),
                                             ('help', 'Display usage information')]
     parser: ArgumentParser = argparse.ArgumentParser(description="IcoTq")
     _ = parser.add_argument(
@@ -249,7 +253,7 @@ def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
             continue
         # print(f"{len(cmd)}: >{cmd}<")
         cmd_inp = cmd.strip()
-        if cmd_inp == "" or cmd_inp == 'quit' or cmd_inp == 'exit': 
+        if cmd_inp == 'quit' or cmd_inp == 'exit': 
             quit = True
         else:
             ind = cmd_inp.find(' ')
