@@ -25,8 +25,12 @@ async def run():
             print(tools)
 
             # Call a tool
-            result = await session.call_tool("search", arguments={"search_text": "Lincoln's death"}) # , "max_results": 2})
-            print(result)
+            results = await session.call_tool("search", arguments={"search_text": "Lincoln's death"}) # , "max_results": 2})
+            for result in results.content:
+                if result.type == 'text':
+                    print(result.text)
+                    print('-----------------')
+
 
 
 if __name__ == "__main__":

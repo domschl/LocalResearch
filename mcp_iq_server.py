@@ -9,9 +9,9 @@ from mcp.server.stdio import stdio_server
 import aiohttp
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("IQ")
+logger = logging.getLogger("IQ-MCP-Server")
 
-app = Server("mcp-iq-search")
+app = Server("iq-mcp-search")
 
 
 @app.call_tool()
@@ -33,7 +33,8 @@ async def search_tool(
             if response.status != 200:
                 raise RuntimeError(f"Search request failed with status {response.status}")
             search_results:list[SearchResult] = await response.json()
-        return_results: list[types.TextContent | types.ImageContent | types.EmbeddedResource] = [types.TextContent(type="text", text=srch['chunk']) for srch in search_results]
+        
+        return_results: list[types.TextContent | types.ImageContent | types.EmbeddedResource] = [types.TextContent(type="text", text=srch['desc']+'\n\n'+srch['chunk']) for srch in search_results]
     return return_results
 
 @app.list_tools()
@@ -41,7 +42,7 @@ async def list_tools() -> list[types.Tool]:
     return [
         types.Tool(
             name="search",
-            description="Search embeddings index of LocalResearch",
+            description="Search embeddings index of IQ LocalResearch",
             inputSchema={
                 "type": "object",
                 "required": ["search_text", "max_results"],
@@ -52,7 +53,7 @@ async def list_tools() -> list[types.Tool]:
                     },
                     "max_results": {
                         "type": "int",
-                        "description": "Maximum number of results",
+                        "description": "Maximum number of search-results",
                     },
                 },
             },
@@ -61,18 +62,18 @@ async def list_tools() -> list[types.Tool]:
 
 async def arun():
     async with stdio_server() as streams:
-        logger.info("Server active")
+        logger.info("IQ-MCP Server active")
         await app.run(
             streams[0], streams[1], app.create_initialization_options()
         )
-        logger.info("Server stopped")
+        logger.info("IQ-MCP Server stopped")
 
 def main() -> None:
     logger.info("Starting...")
      
     # its = IcoTqStore()
     # anyio.run(arun)
-    logger.info("Starting STDIO based MCP server...")
+    logger.info("Starting STDIO based IQ-MCP server...")
     asyncio.run(arun())
 
 if __name__ == "__main__":
