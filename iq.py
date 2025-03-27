@@ -17,8 +17,8 @@ def iq_index(its: IcoTqStore, _logger:logging.Logger, param:str):
     its.generate_embeddings(purge=purge)
 
 def iq_search(its: IcoTqStore, logger:logging.Logger, search_spec: str):
-    max_results = 3
-    context_length = 16
+    max_results = 8
+    context_length = 32
     context_steps = 4
     yellow = True
     cols, _ = os.get_terminal_size()
