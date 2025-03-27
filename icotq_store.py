@@ -25,7 +25,6 @@ class TqSource(TypedDict):
 class IcotqConfig(TypedDict):
     icotq_path: str
     tq_sources: list[TqSource]
-    ebook_mirror: str
     embeddings_model_name: str
     embeddings_device: str
     embeddings_model_trust_code: bool
@@ -105,7 +104,6 @@ class IcoTqStore:
                         'path': '~/Notes',
                         'file_types': ['md']
                     })],
-                'ebook_mirror': '~/MetaLibrary',
                 'embeddings_model_name': 'granite-embedding-107m-multilingual',
                 'embeddings_device': 'auto',
                 'embeddings_model_trust_code': True
@@ -149,7 +147,7 @@ class IcoTqStore:
                 }
             ]
             with open(model_list_path, 'w') as f:
-                json.dump(self.model_list, f)
+                json.dump(self.model_list, f, indent=4)
             self.log.warning(f"Initialized {model_list_path} with default embeddings model list. Please verify.")
         self.current_model: EmbeddingsModel | None = None
         self.engine: SentenceTransformer | None = None
@@ -219,14 +217,14 @@ class IcoTqStore:
 
     def save_config(self):
         with open(self.config_file, 'w') as f:
-            json.dump(self.config,f)
+            json.dump(self.config, f, indent=4)
         self.log.info(f"Configuration changes saved to {self.config_file}")
 
     def save_pdf_cache_state(self):
         pdf_cache = os.path.join(self.root_path, "PDFTextCache")
         pdf_cache_index = os.path.join(pdf_cache, "pdf_index.json")
         with open(pdf_cache_index, 'w') as f:
-            json.dump(self.pdf_index, f)
+            json.dump(self.pdf_index, f, indent=2)
 
     def save_tensor(self) -> bool:
         if self.current_model is None:
@@ -260,7 +258,7 @@ class IcoTqStore:
         else:
             return device
 
-    def load_tensor(self, model_name:str|None=None, device:str|None=None) -> bool:
+    def load_tensor(self, model_name:str|None=None, device:str|None=None, warn:bool=True) -> bool:
         if device is None:
             device = self.config['embeddings_device']
         if model_name is None and self.current_model is None:
@@ -283,9 +281,10 @@ class IcoTqStore:
             for entry in self.lib:
                 if model_name in entry['emb_ptrs']:
                     sum += entry['emb_ptrs'][model_name][1]
-            self.log.info(f"Matrix: {self.embeddings_matrix.shape}, chunks: {sum}, texts: {len(self.lib)}")
-            if sum != self.embeddings_matrix.shape[0]:
-                self.log.warning(f"Embeddings-matrix index incompatible with text library! User 'index purge' to rebuild index! Info: Sum: {sum}, EmbMat: {self.embeddings_matrix.shape}")
+            if warn == True:
+                self.log.info(f"Matrix: {self.embeddings_matrix.shape}, chunks: {sum}, texts: {len(self.lib)}")
+                if sum != self.embeddings_matrix.shape[0]:
+                    self.log.warning(f"Embeddings-matrix index incompatible with text library! User 'index purge' to rebuild index! Info: Sum: {sum}, EmbMat: {self.embeddings_matrix.shape}")
             return True
         else:
             self.log.warning("No embeddings index available! Use 'sync' to import text, 'index' to generate embeddings.")
@@ -294,7 +293,7 @@ class IcoTqStore:
     def write_library(self):
         lib_path = os.path.join(self.root_path, "icotq_library.json")
         with open(lib_path, 'w') as f:
-            json.dump(self.lib, f)
+            json.dump(self.lib, f, indent=2)
         self.save_pdf_cache_state()
 
     def get_pdf_text(self, desc:str, full_path:str) -> tuple[str | None, bool]:
@@ -375,6 +374,12 @@ class IcoTqStore:
                     if max_imports is not None and lib_counter >= max_imports:
                         if len(self.lib) > max_imports:
                             self.log.warning(f"Pruning library to {max_imports} entries!")
+                            for entry in self.lib[max_imports:]:
+                                if entry['emb_ptrs'] != {}:
+                                    for entry_model_name in entry['emb_ptrs']:
+                                        if entry_model_name not in tensor_debris:
+                                            tensor_debris[entry_model_name] = []
+                                        tensor_debris[entry_model_name].append(entry['emb_ptrs'][entry_model_name])
                             self.lib = self.lib[:max_imports]
                         lib_changed = True
                         self.log.warning(f"Import reached max {max_imports}, library: {len(self.lib)} entries")
@@ -408,7 +413,6 @@ class IcoTqStore:
                     lib_index: int|None = None
                     for ind, entry in enumerate(self.lib):
                         if entry['desc_filename'] == desc_path:
-                            # Check if changed!
                             in_lib = True
                             lib_index = ind
                             lib_text = entry['text']
@@ -427,8 +431,11 @@ class IcoTqStore:
                             lib_changed = True
                     elif ext == 'pdf':
                         text, changed = self.get_pdf_text(desc_path, full_path)
-                        if changed is True:
-                            lib_changed = True
+                        if in_lib is True and text == lib_text:
+                            continue
+                        else:
+                            if changed is True:
+                                lib_changed = True
                     else:
                         self.log.error(f"Unsupported conversion {ext} to text at {desc_path}")
                         lib_counter -= 1
@@ -436,7 +443,12 @@ class IcoTqStore:
                     if text is not None:
                         if in_lib is True and lib_index is not None:
                             self.lib[lib_index]['text'] = text
-                            self.lib[lib_index]['emb_ptrs'] = {}  # XXX: this generates garbage emb vectors from old version!
+                            if self.lib[lib_index]['emb_ptrs'] != {}:
+                                for entry_model_name in self.lib[lib_index]['emb_ptrs']:
+                                    if entry_model_name not in tensor_debris:
+                                        tensor_debris[entry_model_name] = []
+                                    tensor_debris[entry_model_name].append(self.lib[lib_index]['emb_ptrs'][entry_model_name])
+                            self.lib[lib_index]['emb_ptrs'] = {}
                         else:
                             entry: LibEntry = LibEntry({
                                 'source_name': source['name'],
@@ -450,27 +462,28 @@ class IcoTqStore:
         current_model_name:str|None = None
         if self.current_model is not None:
             current_model_name = self.current_model['model_name']
+        pdf_cache_path = os.path.join(self.root_path, "PDFTextCache")
         for debris_desc in debris_candidates:
             self.log.info(f"Removing debris {debris_desc}")
             if debris_desc in self.pdf_index:
                 cache_name = self.pdf_index[debris_desc]['filename']
-                if cache_name != "" and os.path.exists(cache_name):
-                    os.remove(cache_name)
+                if cache_name != "" and os.path.exists(os.path.join(pdf_cache_path, cache_name)):
+                    os.remove(os.path.join(pdf_cache_path, cache_name))
                     self.log.info(f"Cached entry {debris_desc}, file {cache_name} removed")
                 else:
                     if cache_name != "" and self.pdf_index[debris_desc]['previous_failure'] is False:
                         self.log.warning(f"Cache entry for {debris_desc} at {cache_name} does not exist, inconsistent cache!")
                 del self.pdf_index[debris_desc]
                 lib_changed = True
-            for entry in self.lib:
-                if entry['desc_filename'] in debris_candidates:
-                    for entry_model_name in entry['emb_ptrs']:
-                        if entry_model_name not in tensor_debris:
-                            tensor_debris[entry_model_name] = []
-                        tensor_debris[entry_model_name].append(entry['emb_ptrs'][entry_model_name])
-                    self.log.info(f"Library entry {entry['desc_filename']} removed")
-                    self.lib.remove(entry)
-                    lib_changed = True
+        for entry in self.lib:
+            if entry['desc_filename'] in debris_candidates:
+                for entry_model_name in entry['emb_ptrs']:
+                    if entry_model_name not in tensor_debris:
+                        tensor_debris[entry_model_name] = []
+                    tensor_debris[entry_model_name].append(entry['emb_ptrs'][entry_model_name])
+                self.log.info(f"Library entry {entry['desc_filename']} removed")
+                self.lib.remove(entry)
+                lib_changed = True
         if len(tensor_debris.keys()) > 0:
             self.log.warning("Rewriting embeddings tensors to remove obsolete entries")
             for model_name in tensor_debris:
@@ -480,7 +493,7 @@ class IcoTqStore:
                     continue
                 tensor_valid:bool = False
                 removals = sorted(tensor_debris[model_name], reverse=True)
-                if self.load_tensor(model_name=model_name) is False or self.embeddings_matrix is None:
+                if self.load_tensor(model_name=model_name, warn=False) is False or self.embeddings_matrix is None:
                     self.log.warning(f"Failed to load tensor for model {model_name}, no embeddings have been created yet, use 'embed' command to create them.")
                 else:
                     tensor_valid = True
@@ -567,6 +580,7 @@ class IcoTqStore:
         self.log.info("Checking PDF cache...")
         lib_changed:bool = False
         dirty: bool = False
+        errors: bool = False
         index_backup: dict[str, PDFIndex] = {}
         index_backup_valid:bool = False
         if dry_run is True:
@@ -618,13 +632,29 @@ class IcoTqStore:
             self.log.warning(f"Deleting {len(debris)} files from PDF cache.")
             for filename in debris:
                 os.remove(os.path.join(pdf_cache, filename))
+
+        if self.embeddings_matrix is not None and self.current_model is not None:
+            sum = 0
+            model_name = self.current_model['model_name']
+            for entry in self.lib:
+                if model_name in entry['emb_ptrs']:
+                    sum += entry['emb_ptrs'][model_name][1]
+            self.log.info(f"Matrix: {self.embeddings_matrix.shape}, chunks: {sum}, texts: {len(self.lib)}")
+            if sum != self.embeddings_matrix.shape[0]:
+                self.log.warning(f"Embeddings-matrix index incompatible with text library! User 'index purge' to rebuild index! Info: Sum: {sum}, EmbMat: {self.embeddings_matrix.shape}")
+                errors = True
+            else:
+                self.log.info("Index is consistent with library.")
+        
         if dry_run is True and index_backup_valid is True:
             self.pdf_index = index_backup
         if dry_run is False and lib_changed is True:
             self.write_library()
         if dirty is True and dry_run is True:
             self.log.warning("Problems encounter, consider running 'clean' to fix.")
-        if dirty is False:
+        if errors is True:
+            self.log.warning("Index is inconsistent with library, re-index using 'index purge' to fix!")
+        if dirty is False and errors is False:
             self.log.info("No problems found.")
 
     def generate_embeddings(self, save_every_sec:int = 180, purge:bool=False):
