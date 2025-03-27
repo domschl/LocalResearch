@@ -182,6 +182,7 @@ class IcoTqStore:
         self.read_library()
         if self.current_model is not None:
             _ = self.load_tensor()
+        self.check_clean(dry_run=True)
         
     def list_sources(self) -> None:
         for id, source in enumerate(self.config['tq_sources']):
@@ -528,7 +529,7 @@ class IcoTqStore:
                 _ = self.load_tensor(model_name = current_model_name)
         if lib_changed is True:
             self.write_library()
-            self.log.info(f"Changed library saved: {len(self.lib)} entries")
+            self.log.info(f"Changed library saved: {len(self.lib)} entries, use 'index' to update embeddings!")
 
     @staticmethod
     def get_chunk_ptr(index: int, chunk_size: int, chunk_overlap: int) -> int:
@@ -662,7 +663,9 @@ class IcoTqStore:
                             self.log.warning(f"Multiple allocations for index slot at {ind}: {fi} duplicate references!")
                 if errors is False:
                     self.log.info(f"Embeddings-index is consistent with library, Tensor-shape: {self.embeddings_matrix.shape}")
-        
+        if self.embeddings_matrix is None:
+            self.log.warning("Embeddings-index is not yet created, use 'index' to create")
+            errors = True
         if dry_run is True and index_backup_valid is True:
             self.pdf_index = index_backup
         if dry_run is False and lib_changed is True:
@@ -670,7 +673,7 @@ class IcoTqStore:
         if dirty is True and dry_run is True:
             self.log.warning("Problems encounter, consider running 'clean' to fix.")
         if errors is True:
-            self.log.warning("Embeddings-index is inconsistent with library, re-index using 'index [purge]' to fix! use 'purge' option to rebuild index from scratch.")
+            self.log.warning("Embeddings-index is inconsistent with library, update index using 'index' to fix! Use 'index purge' option to rebuild index from scratch.")
         if dirty is False and errors is False:
             self.log.info("No problems found.")
 
