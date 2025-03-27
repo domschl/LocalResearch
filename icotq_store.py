@@ -517,7 +517,7 @@ class IcoTqStore:
                                     offs += ln
                             if offs > 0:
                                 new_offs = entry['emb_ptrs'][model_name][0] - offs
-                                self.log.info("Moving emb_ptr start by {offs} to {new_offs}")
+                                # self.log.info("Moving emb_ptr start by {offs} to {new_offs}")
                                 if new_offs < 0:
                                     self.log.error(f"Things went horribly wrong processing {model_name} at {entry['desc_filename']}, offset went to {new_offs} (delta: {offs})")
                                     self.log.error("INCONSISTENT STATE!")
@@ -627,7 +627,7 @@ class IcoTqStore:
                 debris.append(filename)
                 dirty = True
         if dry_run is True:
-            self.log.info(f"PDF cache contains {cnt} files, {bad_cnt} pointers to PDFs without text, index length is {len(self.pdf_index.keys())}, {len(debris)} of which are debris and would be deleted")
+            self.log.info(f"PDF cache contains {cnt} files, {bad_cnt} pointers to PDFs without text, {len(debris)} are debris and would be deleted")
         else:
             self.log.warning(f"Deleting {len(debris)} files from PDF cache.")
             for filename in debris:
@@ -644,7 +644,24 @@ class IcoTqStore:
                 self.log.warning(f"Embeddings-matrix index incompatible with text library! User 'index purge' to rebuild index! Info: Sum: {sum}, EmbMat: {self.embeddings_matrix.shape}")
                 errors = True
             else:
-                self.log.info("Index is consistent with library.")
+                fat = [0] * sum
+                for entry in self.lib:
+                    if model_name in entry['emb_ptrs']:
+                        start, length = entry['emb_ptrs'][model_name]
+                        for ind in range(start, start+length):
+                            fat[ind] += 1
+                    else:
+                        self.log.warning(f"Entry {entry['desc_filename']} has not yet been indexed, please use 'index'")
+                        errors = True
+                for ind, fi in enumerate(fat):
+                    if fi != 1:
+                        errors = True
+                        if fi == 0:
+                            self.log.warning(f"Unused index slot at {ind}, this should not happen!")
+                        else:
+                            self.log.warning(f"Multiple allocations for index slot at {ind}: {fi} duplicate references!")
+                if errors is False:
+                    self.log.info(f"Embeddings-index is consistent with library, Tensor-shape: {self.embeddings_matrix.shape}")
         
         if dry_run is True and index_backup_valid is True:
             self.pdf_index = index_backup
@@ -653,7 +670,7 @@ class IcoTqStore:
         if dirty is True and dry_run is True:
             self.log.warning("Problems encounter, consider running 'clean' to fix.")
         if errors is True:
-            self.log.warning("Index is inconsistent with library, re-index using 'index purge' to fix!")
+            self.log.warning("Embeddings-index is inconsistent with library, re-index using 'index [purge]' to fix! use 'purge' option to rebuild index from scratch.")
         if dirty is False and errors is False:
             self.log.info("No problems found.")
 
