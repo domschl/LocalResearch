@@ -19,6 +19,12 @@ from sentence_transformers import SentenceTransformer
 from typing import TypedDict, cast, NotRequired, Any, Generator
 import pymupdf  # pyright: ignore[reportMissingTypeStubs]
 
+try:
+    import pymupdf4llm
+    PYMUPDF4LLM_AVAILABLE = True
+except ImportError:
+    PYMUPDF4LLM_AVAILABLE = False
+import torch
 
 class TqSource(TypedDict):
     name: str
@@ -98,6 +104,11 @@ class IcoTqStore:
         tmp.setLevel(logging.ERROR)
         tmp_st = logging.getLogger("sentence_transformers")
         tmp_st.setLevel(logging.WARNING)
+
+        if PYMUPDF4LLM_AVAILABLE:
+            self.log.info("pymupdf4llm library found, will be used as fallback for PDF text extraction.")
+        else:
+            self.log.warning("pymupdf4llm library not found. PDF text extraction will rely solely on pymupdf. Install with: pip install pymupdf4llm")
 
         # Determine config file path
         if config_file_override:
@@ -528,19 +539,33 @@ class IcoTqStore:
 
     # === PDF Handling (Internal, Assumes Lock Held) ===
 
-    def _get_pdf_text_internal(self, desc:str, full_path:str) -> tuple[str | None, bool]: # Changed Optional
-        """Gets PDF text, using cache if possible. Assumes lock is held."""
-        # ... (logic remains the same, internal types are okay) ...
-        text: str | None = None
-        changed: bool = False
+    # === PDF Handling (Internal, Assumes Lock Held) ===
 
+    def _get_pdf_text_internal(self, desc:str, full_path:str) -> tuple[str | None, bool]: # Changed Optional
+        """
+        Gets PDF text, using cache if possible.
+        Attempts pymupdf first, then pymupdf4llm (if available) as fallback.
+        Assumes lock is held.
+        """
+        text: str | None = None
+        changed: bool = False # Indicates if pdf_index was modified
+
+        # Check cache validity
         if desc in self.pdf_index:
             cached_info = self.pdf_index[desc]
             try:
                 cur_file_size = os.path.getsize(full_path)
+
+                # Condition to skip extraction: Size matches AND it was a known previous failure
                 if (cur_file_size == cached_info['file_size'] and
-                        not cached_info['previous_failure'] and
-                        cached_info.get('filename')):
+                        cached_info['previous_failure']):
+                    self.log.debug(f"Skipping PDF {desc}: Size matches and previously failed extraction.")
+                    return None, False # Return None, index not changed (still marked as failure)
+
+                # Condition to use cache: Size matches AND it was *not* a previous failure AND cache file exists
+                elif (cur_file_size == cached_info['file_size'] and
+                      not cached_info['previous_failure'] and
+                      cached_info.get('filename')):
 
                     basename = os.path.basename(cached_info['filename'])
                     local_path = os.path.join(self.pdf_cache_path, basename)
@@ -549,22 +574,22 @@ class IcoTqStore:
                         try:
                             with open(local_path, 'r', encoding='utf-8') as f:
                                 text = f.read()
-                            return text, False
+                            # self.log.debug(f"Read PDF cache for {desc}")
+                            return text, False # Return cached text, index not changed
                         except Exception as e:
                             self.log.warning(f"Failed to read PDF cache file {local_path} for {desc}: {e}. Re-extracting.")
-                            text = None
+                            text = None # Proceed to re-extract
                     else:
                          self.log.warning(f"PDF cache index points to non-existent file {local_path} for {desc}. Re-extracting.")
-                         text = None
+                         text = None # Proceed to re-extract
 
                 elif cur_file_size != cached_info['file_size']:
                     self.log.info(f"PDF file size changed for {desc}, re-importing text.")
-                    text = None
-                elif cached_info['previous_failure']:
-                    return None, False
-                else:
+                    text = None # Force re-extraction, ignore previous_failure status
+
+                else: # Size matches, not failed, but filename missing? Inconsistent.
                     self.log.warning(f"Inconsistent PDF cache state for {desc}. Re-extracting.")
-                    text = None
+                    text = None # Proceed to re-extract
 
             except FileNotFoundError:
                 self.log.warning(f"Original PDF file {full_path} not found while checking cache for {desc}. Cannot get text.")
@@ -572,13 +597,15 @@ class IcoTqStore:
                 return None, changed
             except Exception as e:
                 self.log.error(f"Error accessing file {full_path} or its cache info for {desc}: {e}. Cannot get text.")
-                return None, False
+                return None, False # Don't change index on access error
 
+        # If text is still None (cache miss, size change, or read failure), attempt extraction
         if text is None:
             extracted_text: str | None = None
-            failure = True
-            cache_filename = ""
-            temp_pdf_path: str | None = None # For temp file in atomic save
+            extraction_method: str = "None" # Track which method succeeded
+
+            # --- Attempt 1: pymupdf ---
+            self.log.debug(f"Attempting PDF extraction for {desc} using pymupdf...")
             try:
                 doc = pymupdf.open(full_path)
                 extracted_pages = []
@@ -586,60 +613,107 @@ class IcoTqStore:
                     try:
                         page_text = page.get_text()
                         if isinstance(page_text, str): extracted_pages.append(page_text)
-                        else: self.log.warning(f"Non-string text found on page {page_num+1} of {full_path}.")
-                    except Exception as page_e: self.log.warning(f"Failed to extract text from page {page_num+1} of {full_path}: {page_e}")
+                        else: self.log.warning(f"Non-string text on page {page_num+1} of {full_path}.")
+                    except Exception as page_e: self.log.warning(f"Failed extraction on page {page_num+1} of {full_path}: {page_e}")
                 doc.close()
 
                 if extracted_pages:
-                    extracted_text = "\n".join(extracted_pages)
-                    if extracted_text.strip():
-                        failure = False
-                        cache_filename = str(uuid.uuid4()) + ".txt"
-                        self.log.info(f"Successfully extracted text from: {desc}")
+                    combined_text = "\n".join(extracted_pages)
+                    if combined_text.strip(): # Check if not just whitespace
+                        extracted_text = combined_text
+                        extraction_method = "pymupdf"
+                        self.log.info(f"Successfully extracted text from {desc} using pymupdf.")
                     else:
-                        self.log.info(f"Extracted only whitespace from: {desc}. Treating as failure.")
-                        extracted_text = None
+                        self.log.info(f"Extracted only whitespace from {desc} using pymupdf.")
                 else:
-                    self.log.info(f"No text could be extracted from: {desc}")
-                    extracted_text = None
+                    self.log.info(f"No text could be extracted from {desc} using pymupdf.")
 
             except FileNotFoundError:
-                 self.log.error(f"PDF file {full_path} not found during extraction for {desc}.")
+                 self.log.error(f"PDF file {full_path} not found during pymupdf extraction for {desc}.")
                  if desc in self.pdf_index: del self.pdf_index[desc]; changed = True
-                 return None, changed
+                 return None, changed # Abort extraction for this file
             except Exception as e:
-                self.log.error(f"Failed to open or process PDF {full_path} for {desc}: {e}", exc_info=True)
-                extracted_text = None
+                self.log.error(f"Failed pymupdf extraction for {desc}: {e}", exc_info=True)
+                # Don't set extracted_text, proceed to fallback if available
+
+            # --- Attempt 2: pymupdf4llm (Fallback) ---
+            if extracted_text is None and PYMUPDF4LLM_AVAILABLE:
+                self.log.info(f"pymupdf failed for {desc}, attempting fallback using pymupdf4llm...")
+                try:
+                    # Use pymupdf4llm to convert the document to markdown
+                    # Requires pymupdf4llm to be installed: pip install pymupdf4llm
+                    md_text = pymupdf4llm.to_markdown(full_path) # May take longer
+
+                    if md_text and md_text.strip():
+                        extracted_text = md_text # Use the markdown text
+                        extraction_method = "pymupdf4llm"
+                        self.log.info(f"Successfully extracted markdown text from {desc} using pymupdf4llm.")
+                    else:
+                        self.log.info(f"pymupdf4llm returned empty/whitespace text for {desc}.")
+
+                except FileNotFoundError:
+                    # Should have been caught by pymupdf attempt, but handle defensively
+                    self.log.error(f"PDF file {full_path} not found during pymupdf4llm fallback for {desc}.")
+                    if desc in self.pdf_index: del self.pdf_index[desc]; changed = True
+                    return None, changed # Abort extraction
+                except Exception as e:
+                    self.log.error(f"Failed pymupdf4llm fallback extraction for {desc}: {e}", exc_info=True)
+                    # extracted_text remains None
+
+            # --- Process Extraction Result ---
+            final_failure = (extracted_text is None)
+            cache_filename = ""
+            temp_pdf_path: str | None = None # For temp file in atomic save
+
+            if not final_failure:
+                 cache_filename = str(uuid.uuid4()) + ".txt" # Use .txt even for markdown for simplicity
+
+            # Get current file size for the index entry
+            current_size = -1
+            try:
+                if os.path.exists(full_path):
+                    current_size = os.path.getsize(full_path)
+            except OSError as e:
+                 self.log.warning(f"Could not get size of {full_path} for index: {e}")
+
 
             new_pdf_ind: PDFIndex = {
                 'filename': cache_filename,
-                'file_size': os.path.getsize(full_path) if os.path.exists(full_path) else -1,
-                'previous_failure': failure
+                'file_size': current_size,
+                'previous_failure': final_failure # Mark failure only if *both* methods failed
             }
 
-            if not failure and extracted_text is not None:
+            # Write new cache file if extraction succeeded
+            if not final_failure and extracted_text is not None:
                 cache_file_path = os.path.join(self.pdf_cache_path, cache_filename)
-                temp_fd_pdf, temp_pdf_path = None, None # Ensure vars exist for finally
+                temp_fd_pdf, temp_pdf_path = None, None
                 try:
+                    # Atomically save the extracted text
                     temp_fd_pdf, temp_pdf_path = tempfile.mkstemp(dir=self.pdf_cache_path, prefix=cache_filename + '.tmp')
                     with os.fdopen(temp_fd_pdf, 'w', encoding='utf-8') as f:
                         f.write(extracted_text)
                     os.replace(temp_pdf_path, cache_file_path)
                     temp_pdf_path = None # Prevent removal in finally
-                    self.log.info(f"Added/Updated {desc} in PDF cache ({cache_filename}), size: {len(self.pdf_index.keys())}")
-                    text = extracted_text
+                    self.log.info(f"Added/Updated {desc} in PDF cache ({cache_filename}) using {extraction_method}.")
+                    text = extracted_text # Set return text
                 except (IOError, OSError) as e:
                      self.log.error(f"Failed to write PDF cache file {cache_file_path} for {desc}: {e}. Extraction result lost.")
-                     new_pdf_ind['previous_failure'] = True; new_pdf_ind['filename'] = ""; text = None
+                     # Revert state to failure if write failed
+                     new_pdf_ind['previous_failure'] = True
+                     new_pdf_ind['filename'] = ""
+                     text = None
                 except Exception as e:
                     self.log.error(f"Unexpected error writing PDF cache file {cache_file_path} for {desc}: {e}", exc_info=True)
-                    new_pdf_ind['previous_failure'] = True; new_pdf_ind['filename'] = ""; text = None
+                    new_pdf_ind['previous_failure'] = True
+                    new_pdf_ind['filename'] = ""
+                    text = None
                 finally:
+                     # Ensure temp file is cleaned up on error
                      if temp_pdf_path and os.path.exists(temp_pdf_path):
                          try: os.remove(temp_pdf_path)
-                         except OSError: pass
+                         except OSError as rm_e: self.log.error(f"Failed remove temp pdf cache {temp_pdf_path}: {rm_e}")
 
-
+            # Remove old cache file if necessary
             old_filename = self.pdf_index.get(desc, {}).get('filename')
             if old_filename and old_filename != cache_filename:
                 old_cache_path = os.path.join(self.pdf_cache_path, os.path.basename(old_filename))
@@ -647,11 +721,15 @@ class IcoTqStore:
                     try: os.remove(old_cache_path); self.log.debug(f"Removed old PDF cache file {old_cache_path}")
                     except OSError as e: self.log.warning(f"Failed to remove old PDF cache file {old_cache_path}: {e}")
 
+            # Update the index entry, even if extraction failed (to record the failure status)
             self.pdf_index[desc] = new_pdf_ind
-            changed = True
+            changed = True # Index was modified
 
+            if final_failure:
+                self.log.warning(f"Both pymupdf and fallback failed to extract text from: {desc}")
+
+        # Return the extracted text (if successful) and whether the index changed
         return text, changed
-
 
     # === Public Interface Methods (Acquire Lock) ===
 
@@ -1359,6 +1437,8 @@ class IcoTqStore:
         if self.engine is None: raise IcotqError("Cannot perform yellow-lining: Engine not available.")
         if not text: return np.array([], dtype=np.float32)
 
+        target_device = self.engine.device # Just use the engine's current device
+
         clr: list[str] = [] # Changed from List
         text_len = len(text)
         for i in range(0, text_len, context_steps):
@@ -1371,8 +1451,6 @@ class IcoTqStore:
         if not clr: clr = [text]
 
         try:
-            target_device = torch.device(self.resolve_device(self.config['embeddings_device']))
-            if str(self.engine.device) != str(target_device): self.log.warning(f"Moving engine to {target_device} for yellow-lining."); self.engine = self.engine.to(target_device)
             snippet_embeddings: list[torch.Tensor] = self.engine.encode(sentences=clr, show_progress_bar=False, convert_to_numpy=False, batch_size=128) # Changed from List
             if not snippet_embeddings: self.log.warning("Yellow-lining failed: no snippet embeddings."); return np.array([], dtype=np.float32)
 
@@ -1390,15 +1468,28 @@ class IcoTqStore:
 
 
     def search(self, search_text:str, max_results:int=10, yellow_liner:bool=False, context_length:int=16, context_steps:int=4, compression_mode:str="none") -> list[SearchResult]: # Changed from List
-        """Performs vector search, resolves, merges, highlights."""
-        with self._lock:
-            if self.current_model is None or self.embeddings_matrix is None or self.engine is None: self.log.error("Search cannot proceed: Model/embeddings not available."); return []
-            if self.embeddings_matrix.shape[0] == 0: self.log.warning("Search cannot proceed: Embeddings matrix empty."); return []
+        """
+        Performs vector search, resolves results to library entries, handles merging,
+        and optionally adds yellow-liner highlighting.
+        """
+        with self._lock: # Acquire lock for reading lib and matrix
+            if self.current_model is None or self.embeddings_matrix is None or self.engine is None:
+                self.log.error("Search cannot proceed: Model or embeddings not loaded/available.")
+                return []
+            if self.embeddings_matrix.shape[0] == 0:
+                 self.log.warning("Search cannot proceed: Embeddings matrix is empty.")
+                 return []
 
             target_model_name = self.current_model['model_name']
+            # --- Determine target device based on the main embeddings matrix ---
+            target_device = self.embeddings_matrix.device
+
             try:
+                # 1. Get Top-K Similarity Scores (ensures engine is on target_device)
                 sorted_simil_all, search_embeddings_cpu = self._search_vect_internal(search_text)
-                top_k_simil = sorted_simil_all[:max_results * 2]
+                # Now self.engine is guaranteed to be on target_device if _search_vect_internal succeeded
+
+                top_k_simil = sorted_simil_all[:max_results * 2] # Get more initially for potential merging
 
                 idx_to_entry_map: dict[int, tuple[LibEntry, int]] = {}
                 for entry in self.lib:
@@ -1435,6 +1526,18 @@ class IcoTqStore:
                 merged_results.sort(key=lambda x: x[3], reverse=True)
                 final_merged_list = merged_results[:max_results]
 
+                # --- Ensure engine is on the correct device ONCE before the yellow-lining loop ---
+                # (Redundant if _search_vect_internal already did it, but safe explicit check)
+                # Compare torch.device objects directly
+                if self.engine.device != target_device:
+                     self.log.info(f"Ensuring search engine is on device {target_device} for yellow-lining.")
+                     try:
+                         self.engine = self.engine.to(target_device)
+                     except Exception as e:
+                          # If move fails here, we can't yellow-line
+                          self.log.error(f"Failed to move engine to {target_device} for yellow-lining: {e}. Skipping highlighting.")
+                          yellow_liner = False # Disable yellow-lining if move fails
+
                 search_results_final: list[SearchResult] = [] # Changed from List
                 for desc, start_tensor_idx, count, cosine, entry in final_merged_list:
                     entry_start_ptr, _ = entry['emb_ptrs'][target_model_name]
@@ -1452,8 +1555,18 @@ class IcoTqStore:
 
                     yellow_liner_weights: np.typing.NDArray[np.float32] | None = None # Changed Optional
                     if yellow_liner and chunk_text:
-                         try: yellow_liner_weights = self._yellow_line_it_internal(chunk_text, search_embeddings_cpu, context_length, context_steps)
-                         except IcotqError as yl_e: self.log.error(f"Failed yellow-liner for '{desc}': {yl_e}")
+                         try:
+                             # Pass the known correct target_device to avoid re-checking inside
+                             yellow_liner_weights = self._yellow_line_it_internal(
+                                 chunk_text,
+                                 search_embeddings_cpu,
+                                 context_length,
+                                 context_steps,
+                                 # Pass the correct device explicitly
+                                 # expected_device=target_device
+                             )
+                         except IcotqError as yl_e:
+                             self.log.error(f"Failed to generate yellow-liner for '{desc}': {yl_e}")
 
                     sres: SearchResult = {'cosine': cosine, 'index': start_tensor_idx, 'offset': offset_in_entry, 'desc': desc, 'chunk': chunk_text, 'text': entry['text'], 'yellow_liner': yellow_liner_weights}
                     search_results_final.append(sres)
