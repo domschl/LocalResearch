@@ -1,4 +1,3 @@
-```python
 # --- START OF FILE icotq_store_refactored.py ---
 
 import logging
@@ -94,7 +93,7 @@ class IcotqConfigurationError(IcotqError):
 
 
 class IcoTqStore:
-    def __init__(self) -> None:
+    def __init__(self, config_file_override: Optional[str] = None) -> None:
         self.log:logging.Logger = logging.getLogger("IcoTqStore")
         # Disable log spam
         tmp = logging.getLogger("transformers_modules")
@@ -102,16 +101,32 @@ class IcoTqStore:
         tmp_st = logging.getLogger("sentence_transformers")
         tmp_st.setLevel(logging.WARNING)
 
-        config_path = os.path.expanduser("~/.config/icotq")  # Turquoise icosaeder
-        if not os.path.isdir(config_path):
-            os.makedirs(config_path)
+        # Determine config file path
+        if config_file_override:
+            # Use the override path if provided
+            self.config_file:str = config_file_override
+            self.log.info(f"Using overridden config file path: {self.config_file}")
+        else:
+            # Default path resolution
+            config_path = os.path.expanduser("~/.config/icotq")  # Turquoise icosaeder
+            if not os.path.isdir(config_path):
+                try:
+                    os.makedirs(config_path)
+                except OSError as e:
+                    # Handle error during default config path creation if needed
+                    self.log.error(f"Failed to create default config directory {config_path}: {e}")
+                    # Decide how critical this is - maybe raise? For now, log and continue
+            self.config_file = os.path.join(config_path, "icoqt.json")
+            self.log.info(f"Using default config file path: {self.config_file}")
 
-        # --- Core State ---
+
+        # --- Core State (initialize before loading config) ---
         self.lib: list[LibEntry] = []
         self.pdf_index:dict[str, PDFIndex] = {}
-        self.config_file:str = os.path.join(config_path, "icoqt.json")
+        # self.config_file:str = os.path.join(config_path, "icoqt.json") # <- Line removed/replaced above
         self.config:IcotqConfig
         self.current_model: EmbeddingsModel | None = None
+
         self.engine: SentenceTransformer | None = None
         self.device: str | None = None
         self.embeddings_matrix: torch.Tensor | None = None # In-memory tensor for the current_model
@@ -345,28 +360,50 @@ class IcoTqStore:
     def _atomic_save_json(self, data: Any, final_path: str):
         """Atomically saves data as JSON using a temporary file and rename."""
         temp_fd, temp_path = None, None
+        fd_needs_explicit_close = False # Flag to track if we need to close fd manually
         try:
             # Create temp file in the same directory for atomic rename
             temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(final_path), prefix=os.path.basename(final_path) + '.tmp')
+            fd_needs_explicit_close = True # Got fd, assume we must close unless 'with' succeeds
+
             with os.fdopen(temp_fd, 'w') as f:
+                # If this block executes, 'with' will handle closing the fd
+                fd_needs_explicit_close = False
                 json.dump(data, f, indent=2) # Keep indent consistent
-            os.replace(temp_path, final_path) # Atomic rename/replace
+
+            # If 'with' completed, fd is closed. Now rename.
+            os.replace(temp_path, final_path)
+            temp_path = None # Prevent removal in finally if rename succeeded
+
             # self.log.debug(f"Atomically saved JSON to {final_path}")
+
         except (IOError, OSError, json.JSONDecodeError, TypeError) as e:
-            # Clean up temp file if rename failed
+            # Log or handle specific exceptions if needed before re-raising
+            self.log.error(f"Error during atomic save to {final_path}: {e}")
+            # Ensure temp file is cleaned up if it exists and rename didn't happen
             if temp_path and os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)
                 except OSError as rm_e:
                     self.log.error(f"Failed to remove temporary file {temp_path} after save error: {rm_e}")
+            # Re-raise as a critical error
             raise IcotqCriticalError(f"Failed to atomically save JSON to {final_path}: {e}\n{traceback.format_exc()}") from e
         finally:
-            # Ensure fd is closed if os.fdopen failed before 'with'
-            if temp_fd is not None and not os.fdopen(temp_fd, 'w').closed:
+             # Only close fd if mkstemp succeeded but 'with' failed to take over
+             if fd_needs_explicit_close and temp_fd is not None:
                  try:
                      os.close(temp_fd)
-                 except OSError:
-                     pass # Ignore close error if already closed by 'with' or failed
+                     # self.log.debug(f"Explicitly closed potentially dangling temp_fd {temp_fd}")
+                 except OSError as close_e:
+                     # Ignore error during cleanup close, but maybe log it?
+                     self.log.warning(f"Ignoring error closing temp_fd {temp_fd} in finally: {close_e}")
+             # Final check to remove temp_path if rename failed/didn't happen
+             if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                    self.log.warning(f"Removed leftover temp file in finally block: {temp_path}")
+                except OSError as rm_e:
+                    self.log.error(f"Failed to remove leftover temp file {temp_path} in finally block: {rm_e}")
 
     def _atomic_save_tensor(self, tensor_data: torch.Tensor | None, final_path: str):
         """Atomically saves a PyTorch tensor using a temporary file and rename."""
