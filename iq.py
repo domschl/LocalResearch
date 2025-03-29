@@ -105,7 +105,7 @@ def iq_export(its: IcoTqStore, logger:logging.Logger) -> None:
     if 'ebook_mirror' not in its.config:
         logger.error(f"Cannot export, destination 'ebook_mirror' not defined in config")
         return
-    ebook_mirror_path = os.path.expanduser(its.config['ebook_mirror'])
+    ebook_mirror_path: str = os.path.expanduser(its.config['ebook_mirror'])
     if os.path.isdir(ebook_mirror_path) is False:
         logger.error(f"Destination directory {ebook_mirror_path} does not exist, aborting export!")
         return
@@ -129,7 +129,6 @@ def iq_select(its: IcoTqStore, _logger:logging.Logger, model_id:str):
     except ValueError:
         pass
     _ = its.load_model(model_id, its.config["embeddings_device"], its.config["embeddings_model_trust_code"])
-    _ = its.load_tensor()
 
 def iq_list(its: IcoTqStore, _logger:logging.Logger, param:str):
     if param == 'models':

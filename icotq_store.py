@@ -536,9 +536,6 @@ class IcoTqStore:
         except IcotqCriticalError as e:
              raise IcotqCriticalError(f"Failed to save configuration: {e}") from e
 
-
-    # === PDF Handling (Internal, Assumes Lock Held) ===
-
     # === PDF Handling (Internal, Assumes Lock Held) ===
 
     def _get_pdf_text_internal(self, desc:str, full_path:str) -> tuple[str | None, bool]: # Changed Optional
