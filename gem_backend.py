@@ -28,7 +28,8 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_STORE_PATH = os.path.expanduser("~/IcoTqStore")
 # Allow overriding via environment variable
 STORE_DATA_PATH = DEFAULT_STORE_PATH # os.environ.get("ICOTQ_STORE_PATH", DEFAULT_STORE_PATH)
-CONFIG_FILE_PATH = os.path.expanduser("~/.config/icotq/icoqt.json")  # join(STORE_DATA_PATH, "icotq_config_aiohttp.json") # Use a dedicated config
+config_path = os.path.join(STORE_DATA_PATH, "config")
+CONFIG_FILE_PATH = os.path.expanduser(os.path.join(config_path, "icotq.json"))  # join(STORE_DATA_PATH, "icotq_config_aiohttp.json") # Use a dedicated config
 
 # --- Logging ---
 logging.basicConfig(

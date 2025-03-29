@@ -6,7 +6,7 @@ from mcp.client.stdio import stdio_client
 # Create server parameters for stdio connection
 server_params = StdioServerParameters(
     command="python",  # Executable
-    args=["mcp_server.py"],  # Optional command line arguments, This calls a 'server' stub that in turn uses REST to contact a server started with 'iq serve'
+    args=["mcp_iq_server.py"],  # Optional command line arguments, This calls a 'server' stub that in turn uses REST to contact a server started with 'iq serve'
     env=None,  # Optional environment variables
 )
 

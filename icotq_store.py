@@ -4,8 +4,8 @@ import json
 import uuid
 import time
 import numpy as np
-import aiohttp
-import aiohttp.web
+# import aiohttp
+# import aiohttp.web
 import asyncio
 import threading
 import tempfile
@@ -1843,141 +1843,6 @@ class IcoTqStore:
             except Exception as e: 
                 self.log.critical(f"Unexpected critical error during search: {e}", exc_info=True)
                 return []
-
-
-    # === Server Functionality ===
-
-    async def search_handler(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
-        """Handles incoming search requests via HTTP."""
-        try:
-            data: SearchRequest = await request.json()
-            search_text = data.get('search_text')
-            if not search_text: 
-                return aiohttp.web.json_response({"error": "Missing 'search_text' field"}, status=400)
-            # ... (input validation) ...
-            max_results=data.get('max_results', 10)
-            yellow_liner=data.get('yellow_liner', False)
-            context_length=data.get('context_length', 16)
-            context_steps=data.get('context_steps', 4)
-            compression_mode=data.get('compression_mode', 'none')
-            if max_results <= 0: 
-                max_results = 10
-
-            self.log.info(f"Received search request: text='{search_text[:50]}...', max={max_results}, yellow={yellow_liner}")
-            search_results = self.search(search_text, max_results=max_results, yellow_liner=yellow_liner, context_length=context_length, context_steps=context_steps, compression_mode=compression_mode)
-            self.log.info(f"Responding with {len(search_results)} results.")
-            for result in search_results:
-                if result.get('yellow_liner') is not None: 
-                    result['yellow_liner'] = result['yellow_liner'].tolist()  # pyright: ignore[reportOptionalMemberAccess, reportGeneralTypeIssues]
-            return aiohttp.web.json_response(search_results) # type: ignore
-
-        except json.JSONDecodeError: 
-            return aiohttp.web.json_response({"error": "Invalid JSON format"}, status=400)
-        except Exception as e: 
-            self.log.error(f"Error processing search request: {e}", exc_info=True)
-            return aiohttp.web.json_response({"error": "Internal server error"}, status=500)
-
-
-    def _server_task(self, host: str, port: int, in_thread: bool = False):
-        """The asyncio server task runner."""
-        # ... (logic remains the same, no typing changes needed here) ...
-        self.log.info(f"Starting server task (in_thread={in_thread})...")
-        loop = None
-        try:
-            app = aiohttp.web.Application()
-            _ = app.router.add_post('/search', self.search_handler)
-            runner = aiohttp.web.AppRunner(app)
-            if in_thread: 
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            else:
-                try: 
-                    loop = asyncio.get_event_loop()
-                except RuntimeError: 
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-            self.loop = loop
-
-            async def start_runner():
-                await runner.setup()
-                site = aiohttp.web.TCPSite(runner, host, port)
-                await site.start()
-                self.log.info(f"Server started successfully at http://{host}:{port}")
-                while self.server_running: await asyncio.sleep(0.5)
-                self.log.info("Server shutdown signal received.")
-                await site.stop()
-                self.log.info("Server site stopped.")
-            async def cleanup_runner(): 
-                await runner.cleanup()
-                self.log.info("Server runner cleaned up.")
-
-            loop.run_until_complete(start_runner())
-            loop.run_until_complete(cleanup_runner())
-
-        except OSError as e:
-             if "address already in use" in str(e).lower(): 
-                self.log.critical(f"Server failed: Port {port} on '{host}' in use.")
-             else: 
-                self.log.critical(f"Server failed OS error: {e}", exc_info=True)
-             self.server_running = False
-        except Exception as e: 
-            self.log.critical(f"Server task critical error: {e}", exc_info=True)
-            self.server_running = False
-        finally:
-            if loop and not loop.is_closed():
-                 if in_thread: 
-                    loop.close()
-                 self.log.info("Server asyncio loop closed.")
-            self.loop = None
-            self.log.info("Server task finished.")
-
-
-    def start_server(self, host: str = "0.0.0.0", port: int = 8080, background: bool = False):
-        """Starts the search API server."""
-        if self.server_running: 
-            self.log.warning("Server already running/starting.")
-            return
-        self.server_running = True
-        if background:
-            self.log.info("Starting server in background thread...")
-            self.server_thread = threading.Thread(target=self._server_task, args=(host, port, True), daemon=True)
-            self.server_thread.start()
-            time.sleep(1)
-            if not self.server_running: 
-                self.log.error("Server failed to start in background.")
-                self.server_thread = None
-        else:
-            self.log.info("Starting server in foreground (blocking)...")
-            try: 
-                self._server_task(host, port, False)
-            except KeyboardInterrupt: 
-                self.log.info("Server stopped by user.")
-            finally: 
-                self.server_running = False
-
-
-    def stop_server(self):
-        """Stops the running search API server."""
-        if not self.server_running and self.server_thread is None: 
-            self.log.warning("Server not running.")
-            return
-        self.log.info("Attempting to stop server...")
-        self.server_running = False
-        if self.loop and self.loop.is_running(): 
-            _ = self.loop.call_soon_threadsafe(self.loop.stop)
-            self.log.debug("Requested asyncio loop stop.")
-        if self.server_thread and self.server_thread.is_alive():
-            self.log.info("Waiting for server thread exit...")
-            self.server_thread.join(timeout=10)
-            if self.server_thread.is_alive(): 
-                self.log.warning("Server thread join timed out.")
-            else: 
-                self.log.info("Server thread finished.")
-            self.server_thread = None
-        if self.server_running: 
-            self.log.warning("Server flag still true after stop.")
-            self.server_running = False
-        self.log.info("Server stop sequence completed.")
 
 
     # === Static Utility Methods ===

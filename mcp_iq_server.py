@@ -29,7 +29,7 @@ async def search_tool(
 
     # Start the REST server with 'uv run iq.py serve' (or just start iq.py and enter 'serve' or 'serve background' in console)
     async with aiohttp.ClientSession() as session:
-        async with session.post("http://localhost:8080/search", json=search_request) as response:
+        async with session.post("http://localhost:8000/api/search", json=search_request) as response:
             if response.status != 200:
                 raise RuntimeError(f"Search request failed with status {response.status}")
             search_results:list[SearchResult] = await response.json()
