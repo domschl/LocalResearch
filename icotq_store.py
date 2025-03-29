@@ -121,13 +121,13 @@ class IcoTqStore:
             self.config_file = config_file_override
             self.log.info(f"Using overridden config file path: {self.config_file}")
         else:
-            config_path = os.path.expanduser("~/.config/icotq")
+            config_path = os.path.expanduser("~/IcoTqStore/config")
             if not os.path.isdir(config_path):
                 try:
                     os.makedirs(config_path)
                 except OSError as e:
                     self.log.error(f"Failed to create default config directory {config_path}: {e}")
-            self.config_file = os.path.join(config_path, "icoqt.json")
+            self.config_file = os.path.join(config_path, "icotq.json")
             self.log.info(f"Using default config file path: {self.config_file}")
 
         # --- Core State ---
@@ -139,6 +139,7 @@ class IcoTqStore:
         self.device: str | None = None # Changed from Optional[...]
         self.embeddings_matrix: torch.Tensor | None = None # Changed from Optional[...]
         self.root_path:str = ""
+        self.config_path:str = ""
         self.embeddings_path: str = ""
         self.pdf_cache_path: str = "" # Added type hint
         self.model_list: list[EmbeddingsModel] = [] # Changed from List[EmbeddingsModel]
@@ -245,6 +246,9 @@ class IcoTqStore:
         self.root_path = os.path.expanduser(self.config['icotq_path'])
         if not self.root_path:
              raise IcotqConfigurationError("`icotq_path` cannot be empty in configuration.")
+        self.config_path = os.path.join(self.root_path, "config")
+        if os.path.isdir(self.config_path) is False:
+            os.makedirs(self.config_path, exist_ok=True)
 
         valid_sources: list[TqSource] = [] # Changed from List
         known_types: list[str] = ['txt', 'md', 'pdf'] # Changed from List
@@ -277,7 +281,7 @@ class IcoTqStore:
 
     def _load_or_init_model_list(self):
         """Loads the list of known embedding models or creates a default."""
-        model_list_path = os.path.join(self.root_path, "model_list.json")
+        model_list_path = os.path.join(self.config_path, "model_list.json")
         if os.path.exists(model_list_path):
             try:
                 with open(model_list_path, 'r') as f:
