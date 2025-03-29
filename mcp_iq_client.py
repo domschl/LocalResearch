@@ -6,7 +6,7 @@ from mcp.client.stdio import stdio_client
 # Create server parameters for stdio connection
 server_params = StdioServerParameters(
     command="python",  # Executable
-    args=["mcp_iq_server.py"],  # Optional command line arguments, This calls a 'server' stub that in turn uses REST to contact a server started with 'iq serve'
+    args=["mcp_server.py"],  # Optional command line arguments, This calls a 'server' stub that in turn uses REST to contact a server started with 'iq serve'
     env=None,  # Optional environment variables
 )
 
@@ -25,7 +25,7 @@ async def run():
             print(tools)
 
             # Call a tool
-            results = await session.call_tool("search", arguments={"search_text": "Lincoln's death"}) # , "max_results": 2})
+            results = await session.call_tool("search", arguments={"query": "Lincoln's death"}) # , "max_results": 2})
             for result in results.content:
                 if result.type == 'text':
                     print(result.text)

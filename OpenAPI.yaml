@@ -1,0 +1,120 @@
+openapi: 3.0.3
+info:
+  title: IcoTq Vector Search API
+  version: 1.0.0
+paths:
+  /api/search:
+    post:
+      summary: Perform Vector Search
+      description: Searches the indexed documents using vector similarity based on the provided text.
+      tags:
+        - Search
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchRequest' # Reference schema below
+            example:
+              search_text: "machine learning techniques"
+              max_results: 5
+              yellow_liner: true
+      responses:
+        '200':
+          description: Search results returned successfully.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SearchApiResponseItem' # Reference schema
+        '400':
+          description: Invalid request body or parameters.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error during search.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Store not initialized or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    SearchRequest:
+      type: object
+      required:
+        - search_text
+      properties:
+        search_text:
+          type: string
+          description: The text query to search for.
+        max_results:
+          type: integer
+          format: int32
+          default: 10
+          minimum: 1
+          description: Maximum number of results to return.
+        yellow_liner:
+          type: boolean
+          default: false
+          description: Whether to compute yellow-liner highlighting scores.
+        context_length:
+          type: integer
+          format: int32
+          default: 16
+          description: Character context window size for yellow-liner.
+        context_steps:
+          type: integer
+          format: int32
+          default: 4
+          description: Step size for yellow-liner context windows.
+        compression_mode:
+          type: string
+          enum: [none, light, full]
+          default: none
+          description: Compression mode for result chunks.
+
+    SearchApiResponseItem:
+      type: object
+      properties:
+        cosine:
+          type: number
+          format: float
+          description: Cosine similarity score.
+        index:
+          type: integer
+          format: int32
+          description: Starting index of the result chunk in the global tensor.
+        offset:
+          type: integer
+          format: int32
+          description: Starting offset of the result chunk within the document's chunks.
+        desc:
+          type: string
+          description: Descriptor filename of the source document.
+        chunk:
+          type: string
+          description: The relevant text chunk from the document.
+        yellow_liner:
+          type: array | null # Allow null explicitly
+          items:
+            type: number
+            format: float
+          description: Array of highlighting scores (if requested), null otherwise.
+          nullable: true # OpenAPI v3 way to indicate optional/nullable
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Description of the error.

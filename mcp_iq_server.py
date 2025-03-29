@@ -20,10 +20,10 @@ async def search_tool(
 ) -> list[types.TextContent | types.ImageContent | types.EmbeddedResource]:
     if name != "search":
         raise ValueError(f"Unknown tool: {name}")
-    if "search_text" not in arguments:
-        raise ValueError("Missing required argument 'search_text'")
+    if "query" not in arguments:
+        raise ValueError("Missing required argument 'query'")
     search_request: SearchRequest = {
-        'search_text': arguments['search_text'],
+        'search_text': arguments['query'],
         'max_results': cast(int, arguments.get('max_results', 3))
     }
 
@@ -45,9 +45,9 @@ async def list_tools() -> list[types.Tool]:
             description="Search embeddings index of IQ LocalResearch",
             inputSchema={
                 "type": "object",
-                "required": ["search_text", "max_results"],
+                "required": ["query", "max_results"],
                 "properties": {
-                    "search_text": {
+                    "query": {
                         "type": "string",
                         "description": "text to search for",
                     },

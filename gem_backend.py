@@ -2,9 +2,7 @@ import os
 import sys
 import json
 import logging
-import traceback
-import asyncio
-from typing import TypedDict, cast, List, Dict, Any, Optional # Keep basic typing helpers
+from typing import TypedDict, cast, Any
 
 import numpy as np
 from aiohttp import web
@@ -14,8 +12,8 @@ import aiohttp_cors
 try:
     from icotq_store import (
         IcoTqStore, TqSource, SearchResult as StoreSearchResult,
-        IcotqError, EmbeddingsModel, IcotqCriticalError, IcotqConsistencyError,
-        IcotqConfigurationError
+        IcotqError,
+        ModelInfo
     )
 except ImportError:
     print("ERROR: Could not import IcoTqStore. Make sure 'icotq_store.py' is accessible.")
@@ -108,7 +106,7 @@ async def initialize_store(app: web.Application):
          app['store'] = None
 
 
-async def cleanup_store(app: web.Application):
+async def cleanup_store(_app: web.Application):
     """Placeholder for any cleanup needed on shutdown."""
     log.info("Cleaning up backend resources...")
     # store instance might have resources to release if added later (e.g., file handles)
@@ -145,12 +143,7 @@ async def get_status_handler(request: web.Request) -> web.Response:
          return web.json_response({"error": "Store not initialized"}, status=503) # Service Unavailable
 
     try:
-        # Safely access store state (consider lock if reading involves complex state)
-        with store_instance._lock:
-             model_name = store_instance.current_model['model_name'] if store_instance.current_model else None
-             lib_size = len(store_instance.lib)
-             available_models = [m['model_name'] for m in store_instance.model_list]
-             sources = store_instance.config.get('tq_sources', []) # Assuming config is loaded
+        lib_size, model_name, available_models, sources = store_instance.get_status_info()
 
         status = StatusResponse(
             library_size=lib_size,
@@ -158,7 +151,7 @@ async def get_status_handler(request: web.Request) -> web.Response:
             available_models=available_models,
             sources=sources
         )
-        return web.json_response(cast(Dict[str, Any], status)) # Cast TypedDict for response
+        return web.json_response(cast(dict[str, Any], status))  # pyright:ignore[reportInvalidCast, reportExplicitAny]
     except Exception as e:
         log.error(f"Error getting status: {e}", exc_info=True)
         return web.json_response({"error": "Internal server error getting status"}, status=500)
@@ -231,12 +224,8 @@ async def get_models_handler(request: web.Request) -> web.Response:
     if store_instance is None: return web.json_response({"error": "Store not initialized"}, status=503)
 
     try:
-        with store_instance._lock:
-            models_list = [
-                ModelInfo(model_hf_name=m['model_hf_name'], model_name=m['model_name'])
-                for m in store_instance.model_list
-            ]
-        return web.json_response(cast(List[Dict[str, Any]], models_list))
+        models_list: list[ModelInfo] = store_instance.get_available_model_info()
+        return web.json_response(cast(list[dict[str, Any]], models_list))  # pyright:ignore[reportExplicitAny]
     except Exception as e:
         log.error(f"API: Error getting models list: {e}", exc_info=True)
         return web.json_response({"error": "Failed to retrieve model list."}, status=500)
@@ -248,7 +237,7 @@ async def load_model_handler(request: web.Request) -> web.Response:
     if store_instance is None: return web.json_response({"error": "Store not initialized"}, status=503)
 
     try:
-        data = await request.json()
+        data = await request.json()  # pyright:ignore[reportAny]
     except json.JSONDecodeError:
         return web.json_response({"error": "Invalid JSON body"}, status=400)
     except Exception as e: # Handle cases where request body isn't JSON
@@ -257,15 +246,15 @@ async def load_model_handler(request: web.Request) -> web.Response:
 
 
     # Manual validation
-    model_name = data.get('model_name')
+    model_name = data.get('model_name')  # pyright:ignore[reportAny]
     if not model_name or not isinstance(model_name, str):
         return web.json_response({"error": "Missing or invalid 'model_name' field"}, status=400)
 
-    device = data.get('device', 'auto')
+    device = data.get('device', 'auto')  # pyright:ignore[reportAny]
     if not isinstance(device, str):
          return web.json_response({"error": "Invalid 'device' field type"}, status=400)
 
-    trust_code = data.get('trust_remote_code', False)
+    trust_code = data.get('trust_remote_code', False)  # pyright:ignore[reportAny]
     if not isinstance(trust_code, bool):
          return web.json_response({"error": "Invalid 'trust_remote_code' field type"}, status=400)
 
@@ -295,7 +284,7 @@ async def search_api_handler(request: web.Request) -> web.Response:
     if store_instance is None: return web.json_response({"error": "Store not initialized"}, status=503)
 
     try:
-        req_data = await request.json()
+        req_data = await request.json()  # pyright:ignore[reportAny]
     except json.JSONDecodeError:
         return web.json_response({"error": "Invalid JSON body"}, status=400)
     except Exception as e:
@@ -303,33 +292,33 @@ async def search_api_handler(request: web.Request) -> web.Response:
         return web.json_response({"error": "Could not parse request body"}, status=400)
 
     # Manual validation and default setting
-    search_text = req_data.get('search_text')
+    search_text = req_data.get('search_text')  # pyright:ignore[reportAny]
     if not search_text or not isinstance(search_text, str):
         return web.json_response({"error": "Missing or invalid 'search_text'"}, status=400)
 
     try:
-        max_results = int(req_data.get('max_results', 10))
+        max_results = int(req_data.get('max_results', 10))  # pyright:ignore[reportAny]
         if max_results <= 0: max_results = 10
     except (ValueError, TypeError):
         return web.json_response({"error": "Invalid 'max_results' value"}, status=400)
 
-    yellow_liner = req_data.get('yellow_liner', False)
+    yellow_liner = req_data.get('yellow_liner', False)  # pyright:ignore[reportAny]
     if not isinstance(yellow_liner, bool):
          return web.json_response({"error": "Invalid 'yellow_liner' value"}, status=400)
 
     try:
-        context_length = int(req_data.get('context_length', 16))
+        context_length = int(req_data.get('context_length', 16))  # pyright:ignore[reportAny]
         if context_length <= 0: context_length = 16
     except (ValueError, TypeError):
         return web.json_response({"error": "Invalid 'context_length' value"}, status=400)
 
     try:
-        context_steps = int(req_data.get('context_steps', 4))
+        context_steps = int(req_data.get('context_steps', 4))  # pyright:ignore[reportAny]
         if context_steps <= 0: context_steps = 4
     except (ValueError, TypeError):
         return web.json_response({"error": "Invalid 'context_steps' value"}, status=400)
 
-    compression_mode = req_data.get('compression_mode', 'none')
+    compression_mode = req_data.get('compression_mode', 'none')  # pyright:ignore[reportAny]
     if compression_mode not in ['none', 'light', 'full']:
          return web.json_response({"error": "Invalid 'compression_mode' value"}, status=400)
 
@@ -341,7 +330,7 @@ async def search_api_handler(request: web.Request) -> web.Response:
             yellow_liner=yellow_liner,
             context_length=context_length,
             context_steps=context_steps,
-            compression_mode=compression_mode
+            compression_mode=compression_mode  # pyright:ignore[reportAny]
         )
 
         # Convert results to API response format (JSON serializable)
@@ -351,9 +340,9 @@ async def search_api_handler(request: web.Request) -> web.Response:
             if res.get('yellow_liner') is not None:
                 # Ensure it's serializable (numpy arrays aren't by default)
                 if isinstance(res['yellow_liner'], np.ndarray):
-                    yellow_list = res['yellow_liner'].tolist()
-                elif isinstance(res['yellow_liner'], list): # Should not happen based on store code, but check
-                     yellow_list = res['yellow_liner']
+                    yellow_list = cast(list[float], res['yellow_liner'].tolist())
+                else:
+                    yellow_list = None
 
             api_item: SearchApiResponseItem = {
                 "cosine": res["cosine"],
@@ -366,7 +355,7 @@ async def search_api_handler(request: web.Request) -> web.Response:
             }
             api_results.append(api_item)
 
-        return web.json_response(cast(List[Dict[str, Any]], api_results))
+        return web.json_response(cast(list[dict[str, Any]], api_results))  # pyright:ignore[reportExplicitAny]
 
     except IcotqError as e:
          log.error(f"API: Search error: {e}", exc_info=True)
@@ -376,11 +365,11 @@ async def search_api_handler(request: web.Request) -> web.Response:
           return web.json_response({"error": "Unexpected server error during search."}, status=500)
 
 # --- Setup and Run ---
-async def root_handler(request: web.Request) -> web.Response:
+async def root_handler(_request: web.Request) -> web.Response:
     """Serves the main index.html file."""
     index_path = os.path.join(SCRIPT_DIR, 'static', 'index.html')
     try:
-        return web.FileResponse(index_path)
+        return cast(web.Response, web.FileResponse(index_path))  # pyright:ignore[reportInvalidCast]
     except FileNotFoundError:
         log.error(f"index.html not found at {index_path}")
         return web.Response(text="Frontend not found.", status=404)
@@ -390,13 +379,13 @@ async def root_handler(request: web.Request) -> web.Response:
 
 def setup_routes(app: web.Application):
     """Add routes to the application."""
-    app.router.add_get("/api/status", get_status_handler)
-    app.router.add_post("/api/actions/sync", trigger_sync_handler)
-    app.router.add_post("/api/actions/index", trigger_index_handler) # Takes ?purge=true
-    app.router.add_post("/api/actions/check", trigger_check_handler) # Takes ?dry_run=false
-    app.router.add_get("/api/models", get_models_handler)
-    app.router.add_post("/api/models/load", load_model_handler)
-    app.router.add_post("/api/search", search_api_handler)
+    _ = app.router.add_get("/api/status", get_status_handler)
+    _ = app.router.add_post("/api/actions/sync", trigger_sync_handler)
+    _ = app.router.add_post("/api/actions/index", trigger_index_handler) # Takes ?purge=true
+    _ = app.router.add_post("/api/actions/check", trigger_check_handler) # Takes ?dry_run=false
+    _ = app.router.add_get("/api/models", get_models_handler)
+    _ = app.router.add_post("/api/models/load", load_model_handler)
+    _ = app.router.add_post("/api/search", search_api_handler)
     # TODO: Add routes for managing sources (GET /api/sources, POST /api/sources, DELETE /api/sources/{id})
     # Static File Serving
     static_dir = os.path.join(SCRIPT_DIR, 'static')
@@ -404,11 +393,11 @@ def setup_routes(app: web.Application):
         log.warning(f"Static directory not found at {static_dir}. Frontend will not be served.")
     else:
         # Serve files under /static/ URL path from the ./static/ directory
-        app.router.add_static('/static/', path=static_dir, name='static')
+        _ = app.router.add_static('/static/', path=static_dir, name='static')
         log.info(f"Serving static files from: {static_dir}")
 
         # Serve index.html at the root path '/'
-        app.router.add_get('/', root_handler)
+        _ = app.router.add_get('/', root_handler)
 
 def main():
     """Main entry point to set up and run the server."""
@@ -436,7 +425,7 @@ def main():
 
     # Apply CORS to all routes.
     for route in list(app.router.routes()):
-        cors.add(route)
+        cors.add(route)  # pyright:ignore[reportUnknownMemberType]
     # ----------------------
 
     log.info(f"Starting IcoTq backend server on http://{HOST}:{PORT}")
