@@ -9,6 +9,9 @@ import os
 import itertools
 from typing import Any, cast # Use modern typing
 
+# Just get the TypedDicts directly from server...
+from mcp_server import ErrorObject
+
 # --- Logging ---
 logging.basicConfig(
     level=logging.INFO,
@@ -19,10 +22,10 @@ log = logging.getLogger("MCPClient")
 # --- JSON-RPC Helper ---
 _id_counter = itertools.count() # Simple counter for unique request IDs
 
-def create_jsonrpc_request(method: str, params: dict | list | None = None) -> tuple[int, dict[str, Any]]:
+def create_jsonrpc_request(method: str, params: Any = None) -> tuple[int, dict[str, Any]]:  # pyright: ignore[reportExplicitAny, reportAny]
     """Creates a JSON-RPC request dictionary with a unique ID."""
     req_id = next(_id_counter)
-    request: dict[str, Any] = { # Type hint for clarity
+    request: dict[str, Any] = {  # pyright: ignore[reportExplicitAny]
         "jsonrpc": "2.0",
         "method": method,
         "id": req_id
@@ -31,9 +34,9 @@ def create_jsonrpc_request(method: str, params: dict | list | None = None) -> tu
         request["params"] = params
     return req_id, request
 
-def create_jsonrpc_notification(method: str, params: dict | list | None = None) -> dict[str, Any]:
+def create_jsonrpc_notification(method: str, params: Any = None) -> dict[str, Any]:  # pyright: ignore[reportExplicitAny, reportAny]
     """Creates a JSON-RPC notification dictionary (no ID)."""
-    notification: dict[str, Any] = { # Type hint for clarity
+    notification: dict[str, Any] = {  # pyright: ignore[reportExplicitAny]
         "jsonrpc": "2.0",
         "method": method,
     }
@@ -43,7 +46,7 @@ def create_jsonrpc_notification(method: str, params: dict | list | None = None) 
 
 # --- Client Logic ---
 
-def write_request(proc: subprocess.Popen[bytes] | None, request_dict: dict[str, Any]) -> bool:
+def write_request(proc: subprocess.Popen[bytes] | None, request_dict: dict[str, Any]) -> bool:  # pyright: ignore[reportExplicitAny]
     """Helper to JSON encode, add newline, encode UTF-8, and write to stdin."""
     if not proc or proc.stdin is None or proc.stdin.closed:
          log.error("Cannot write request: Server stdin is not available or closed.")
@@ -52,7 +55,7 @@ def write_request(proc: subprocess.Popen[bytes] | None, request_dict: dict[str, 
         request_json = json.dumps(request_dict)
         request_bytes = (request_json + '\n').encode('utf-8')
         log.debug(f"Writing to server stdin: {request_bytes!r}")
-        proc.stdin.write(request_bytes)
+        _ = proc.stdin.write(request_bytes)
         proc.stdin.flush()
         return True
     except (OSError, BrokenPipeError) as e:
@@ -69,15 +72,6 @@ def cleanup_server_proc(server_proc: subprocess.Popen[bytes] | None):
 
     # Check if already terminated before attempting communication
     if server_proc.poll() is None:
-        # --- REMOVED: Do NOT close stdin manually here ---
-        # if server_proc.stdin and not server_proc.stdin.closed:
-        #     try:
-        #         server_proc.stdin.close()
-        #         log.debug("Closed server stdin.")
-        #     except OSError as e:
-        #          log.warning(f"Error closing server stdin: {e}")
-        # ---
-
         # Wait for termination using communicate()
         # communicate() will handle closing stdin (if needed) and reading output
         try:
@@ -106,7 +100,7 @@ def cleanup_server_proc(server_proc: subprocess.Popen[bytes] | None):
             log.warning("Server process killed.")
             if stderr_res_b: log.error(f"Server stderr (after kill):\n{stderr_res_b.decode('utf-8', errors='replace')}")
         except Exception as e:
-             log.exception("Error during server process communicate/cleanup.")
+             log.exception(f"Error during server process communicate/cleanup: {e}")
     else:
          # Process already terminated, read any remaining output directly
          log.info(f"Server process already terminated (code: {server_proc.returncode}).")
@@ -171,11 +165,11 @@ def run_client(server_script_path: str, backend_url: str, queries: list[str], ma
             resp_id = response_data.get("id")
             if resp_id == init_id:
                 if "error" in response_data:
-                    error_obj = response_data["error"]
+                    error_obj:ErrorObject = response_data["error"]
                     log.critical(f"Initialization failed: [{error_obj.get('code')}] {error_obj.get('message')}. Aborting.")
                     return # Stop if initialization fails
                 elif "result" in response_data:
-                    log.info("Received 'initialize' response. Server capabilities: {}".format(response_data["result"].get('capabilities', {})))
+                    log.info("Received 'initialize' response. Server capabilities: {}".format(response_data["result"].get('capabilities', {})))  # pyright: ignore[reportAny]
                     log.info("Sending 'initialized' notification...")
                     initialized_notification = create_jsonrpc_notification("notifications/initialized")
                     if not write_request(server_proc, initialized_notification): return
@@ -220,7 +214,7 @@ def run_client(server_script_path: str, backend_url: str, queries: list[str], ma
                  continue
 
             if resp_id in expected_responses:
-                method_name = expected_responses.pop(resp_id) # Consume expected response
+                method_name = expected_responses.pop(resp_id)  # pyright: ignore[reportAny]
 
                 if "error" in response_data:
                     error_obj = response_data["error"]
@@ -228,23 +222,24 @@ def run_client(server_script_path: str, backend_url: str, queries: list[str], ma
                     if method_name == "tools/list": tools_list_received = True # Count as processed even if error
                     if method_name == "tools/call": processed_search_count += 1 # Count as processed even if error
                 elif "result" in response_data:
-                    result = response_data["result"]
+                    result = response_data["result"]  # pyright: ignore[reportAny]
                     log.info(f"Received success response for '{method_name}' (id: {resp_id})")
                     if method_name == "tools/list":
-                        tools = result.get("tools", [])
-                        log.info(f"Available Tools: {[t.get('name') for t in tools if isinstance(t, dict)]}")
+                        tools = result.get("tools", [])  # pyright: ignore[reportAny]
+                        log.info(f"Available Tools: {[t.get('name') for t in tools if isinstance(t, dict)]}")  # pyright: ignore[reportUnknownMemberType, reportAny]
                         tools_list_received = True
                     elif method_name == "tools/call":
-                        content = result.get("content", [])
-                        log.info(f"Search successful. Results ({len(content)} blocks):")
+                        content = result.get("content", [])  # pyright: ignore[reportAny]
+                        log.info(f"Search successful. Results ({len(content)} blocks):")  # pyright: ignore[reportAny]
                         if not isinstance(content, list):
                             log.error(f"Search result 'content' field is not a list: {content}")
                         elif not content:
                             print("  (No results content blocks returned)")
                         else:
-                            for idx, block in enumerate(content):
-                                if isinstance(block, dict) and block.get("type") == "text":
-                                    text = block.get('text', '').replace('\n', ' ')
+                            for idx, block in enumerate(content):  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]
+                                if isinstance(block, dict) and block.get("type") == "text":  # pyright: ignore[reportUnknownMemberType]
+                                    text:str = cast(str, block.get('text', ''))
+                                    text = text.replace('\n', ' ')
                                     print(f"  --- Result Block {idx+1} ---")
                                     print(text) # Print the formatted text directly
                                 else:
@@ -298,13 +293,13 @@ def run_client(server_script_path: str, backend_url: str, queries: list[str], ma
         _ = write_request(server_proc, exit_notification) # Send and ignore result/errors
 
     except Exception as e:
-        log.exception("An error occurred in the client.")
+        log.exception(f"An error occurred in the client: {e}")
     finally:
         # Cleanup the server process
         cleanup_server_proc(server_proc)
 
 
-def read_response(proc: subprocess.Popen[bytes] | None) -> tuple[dict | None, bool]:
+def read_response(proc: subprocess.Popen[bytes] | None) -> tuple[dict[str, Any] | None, bool]:  # pyright: ignore[reportExplicitAny]
     """Reads a line from stdout, decodes, parses JSON. Returns (data, terminated_flag)."""
     if not proc or proc.stdout is None:
         log.error("Cannot read response: Server stdout is not available.")
@@ -314,6 +309,7 @@ def read_response(proc: subprocess.Popen[bytes] | None) -> tuple[dict | None, bo
         log.warning(f"Server process terminated (code {proc.returncode}) before reading next response.")
         return None, True
 
+    response_line: str = ""
     try:
         response_line_bytes = proc.stdout.readline()
         if not response_line_bytes:
@@ -325,12 +321,12 @@ def read_response(proc: subprocess.Popen[bytes] | None) -> tuple[dict | None, bo
         if not response_line:
              return None, False # Ignore empty lines but don't assume termination
 
-        response_data = json.loads(response_line)
+        response_data = json.loads(response_line)  # pyright: ignore[reportAny]
         if not isinstance(response_data, dict):
              log.error(f"Received non-object JSON response: {response_line}")
              return None, False # Invalid data, but maybe server continues
 
-        return response_data, False
+        return response_data, False  # pyright: ignore[reportUnknownVariableType]
 
     except (OSError, BrokenPipeError) as e:
          log.error(f"Error reading from server stdout: {e}. Server likely terminated.")
@@ -346,21 +342,21 @@ def read_response(proc: subprocess.Popen[bytes] | None) -> tuple[dict | None, bo
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="MCP Client to test the IcoTq MCP Server (JSON-RPC Compliant).")
-    parser.add_argument(
+    _ = parser.add_argument(
         "server_script",
         help="Path to the mcp_server.py script."
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "queries",
         nargs='+',
         help="One or more search queries to send to the server via tools/call."
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--backend-url",
         default="http://localhost:8000", # Keep default consistent
         help="URL of the gem_backend REST API passed to the server (default: http://localhost:8000)"
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--max-results",
         type=int,
         default=5,
@@ -368,5 +364,5 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    run_client(args.server_script, args.backend_url, args.queries, args.max_results)
+    run_client(args.server_script, args.backend_url, args.queries, args.max_results)  # pyright: ignore[reportAny]
 # --- END OF FILE mcp_client.py ---

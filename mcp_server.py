@@ -3,7 +3,6 @@ import sys
 import json
 import logging
 import argparse
-import itertools
 from typing import Any, TypedDict, NotRequired, cast # Use modern typing
 
 import requests
@@ -28,7 +27,7 @@ TOOL_NAME_SEARCH = "search" # Define the tool name
 class JsonRpcRequest(TypedDict):
     jsonrpc: str # Should be "2.0"
     method: str
-    params: NotRequired[dict[str, Any] | list[Any]] # Object or Array
+    params: NotRequired[dict[str, Any] | list[Any]]  # pyright: ignore[reportExplicitAny]
     id: NotRequired[str | int | None] # Request ID (optional for notifications)
 
 class JsonRpcResponse(TypedDict):
@@ -36,12 +35,12 @@ class JsonRpcResponse(TypedDict):
     id: str | int | None # Should match request id
 
 class JsonRpcSuccessResponse(JsonRpcResponse):
-    result: Any # Method-specific result
+    result: Any  # pyright: ignore[reportExplicitAny]
 
 class ErrorObject(TypedDict):
     code: int
     message: str
-    data: NotRequired[Any]
+    data: NotRequired[Any]  # pyright: ignore[reportExplicitAny]
 
 class JsonRpcErrorResponse(JsonRpcResponse):
     error: ErrorObject
@@ -54,7 +53,7 @@ class ClientInfo(TypedDict, total=False):
 class InitializeParams(TypedDict):
     protocolVersion: str
     clientInfo: NotRequired[ClientInfo]
-    capabilities: NotRequired[dict[str, Any]]
+    capabilities: NotRequired[dict[str, Any]]  # pyright: ignore[reportExplicitAny]
 
 class ServerInfo(TypedDict):
     name: str
@@ -92,7 +91,7 @@ class ListToolsResult(TypedDict):
 
 class ToolCallParams(TypedDict):
     name: str
-    arguments: dict[str, Any] # Arguments still received here
+    arguments: dict[str, Any]  # pyright: ignore[reportExplicitAny]
 
 class ToolCallResultContentItem(TypedDict):
     type: str
@@ -147,7 +146,7 @@ def handle_initialize(params: InitializeParams | None, req_id: str | int | None)
     """Handles the 'initialize' request with MINIMAL capabilities."""
     log.info("Processing 'initialize' request (minimal capabilities response).")
     client_protocol = params.get("protocolVersion", "unknown") if params else "unknown"
-    client_info = params.get("clientInfo", {}) if params else {}
+    client_info = params.get("clientInfo", {}) if params else {}    # pyright: ignore[reportUnknownVariableType]
     log.info(f"Client protocol version: {client_protocol}, ClientInfo: {client_info}")
 
     server_info = ServerInfo(name="IcoTq MCP Search Provider", version="0.1.5") # Bump version
@@ -171,30 +170,28 @@ def handle_list_tools(req_id: str | int | None) -> JsonRpcResponse:
 
 def handle_tools_call(params: ToolCallParams | None, req_id: str | int | None, backend_url: str) -> JsonRpcResponse:
     """Handles the 'tools/call' request."""
-    # This handler remains the same - it still expects 'query' and optional 'maxResults'
-    # in the 'arguments' dictionary from the client.
     log.info("Processing 'tools/call' request.")
-    # ... (Validation of params, tool_name, arguments remains the same) ...
     if not isinstance(params, dict):
         return JsonRpcErrorResponse(jsonrpc="2.0", id=req_id, error=ErrorObject(code=INVALID_PARAMS, message="Invalid params: Expected object."))
     tool_name = params.get("name")
     arguments = params.get("arguments")
     if tool_name != TOOL_NAME_SEARCH:
          return JsonRpcErrorResponse(jsonrpc="2.0", id=req_id, error=ErrorObject(code=METHOD_NOT_FOUND, message=f"Tool '{tool_name}' not found."))
-    if not isinstance(arguments, dict):
-         return JsonRpcErrorResponse(jsonrpc="2.0", id=req_id, error=ErrorObject(code=INVALID_PARAMS, message="Invalid 'arguments': Expected object."))
-    if not isinstance(params, dict): return JsonRpcErrorResponse(jsonrpc="2.0", id=req_id, error=ErrorObject(code=INVALID_PARAMS, message="Invalid params: Expected object."))
+    # if not isinstance(arguments, dict):
+    #      return JsonRpcErrorResponse(jsonrpc="2.0", id=req_id, error=ErrorObject(code=INVALID_PARAMS, message="Invalid 'arguments': Expected object."))
+    # if not isinstance(params, dict): return JsonRpcErrorResponse(jsonrpc="2.0", id=req_id, error=ErrorObject(code=INVALID_PARAMS, message="Invalid params: Expected object."))
     tool_name = params.get("name")
     arguments = params.get("arguments")
     if tool_name != TOOL_NAME_SEARCH: return JsonRpcErrorResponse(jsonrpc="2.0", id=req_id, error=ErrorObject(code=METHOD_NOT_FOUND, message=f"Tool '{tool_name}' not found."))
-    if not isinstance(arguments, dict): return JsonRpcErrorResponse(jsonrpc="2.0", id=req_id, error=ErrorObject(code=INVALID_PARAMS, message="Invalid 'arguments': Expected object."))
+    # if not isinstance(arguments, dict): return JsonRpcErrorResponse(jsonrpc="2.0", id=req_id, error=ErrorObject(code=INVALID_PARAMS, message="Invalid 'arguments': Expected object."))
 
     # Extract arguments - this logic doesn't change
     query = arguments.get("query")
-    max_results = arguments.get("maxResults", 5)
+    max_results:int = arguments.get("maxResults", 5)
     if not query or not isinstance(query, str):
-         return JsonRpcErrorResponse(jsonrpc="2.0", id=req_id, error=ErrorObject(code=INVALID_PARAMS, message="Missing or invalid 'query' in arguments."))
-    if not isinstance(max_results, int) or max_results <= 0:
+        return JsonRpcErrorResponse(jsonrpc="2.0", id=req_id, error=ErrorObject(code=INVALID_PARAMS, message="Missing or invalid 'query' in arguments."))
+    # if not isinstance(max_results, int) or max_results <= 0:
+    if max_results <= 0:
         max_results = 5
         log.warning("Invalid 'maxResults' in arguments, using default 5.")
 
@@ -206,23 +203,29 @@ def handle_tools_call(params: ToolCallParams | None, req_id: str | int | None, b
     try:
         response = requests.post(api_url, json=payload, timeout=30)
         response.raise_for_status()
-        backend_results: list[dict[str, Any]] = response.json()
+        backend_results: list[dict[str, Any]] = response.json()  # pyright: ignore[reportExplicitAny]
         log.debug(f"Received {len(backend_results)} results from backend.")
         mcp_content_items: list[ToolCallResultContentItem] = []
         if not backend_results: mcp_content_items.append(ToolCallResultContentItem(type="text", text="No results found."))
         else:
              for i, item in enumerate(backend_results):
-                 if isinstance(item, dict) and "desc" in item and "chunk" in item:
-                      text_content = f"Result {i+1}:\nSource: {item['desc']}\nContent: {item['chunk']}"
-                      mcp_content_items.append(ToolCallResultContentItem(type="text", text=text_content))
-                 else: log.warning(f"Skipping invalid result item from backend: {item}")
+                # if isinstance(item, dict) and "desc" in item and "chunk" in item:
+                if "desc" in item and "chunk" in item:
+                    text_content = f"Result {i+1}:\nSource: {item['desc']}\nContent: {item['chunk']}"
+                    mcp_content_items.append(ToolCallResultContentItem(type="text", text=text_content))
+                else: log.warning(f"Skipping invalid result item from backend: {item}")
         result = ToolCallResult(content=mcp_content_items)
         return JsonRpcSuccessResponse(jsonrpc="2.0", id=req_id, result=result)
-    # ... (Error handling remains the same) ...
     except requests.exceptions.ConnectionError as e:
         return JsonRpcErrorResponse(jsonrpc="2.0", id=req_id, error=ErrorObject(code=BACKEND_CONNECTION_ERROR, message=f"Cannot connect to backend API at {backend_url}"))
-    # ... etc ...
-
+    except requests.exceptions.Timeout as e:
+        return JsonRpcErrorResponse(jsonrpc="2.0", id=req_id, error=ErrorObject(code=BACKEND_TIMEOUT_ERROR, message=f"Backend API request timed out: {e}"))
+    except requests.exceptions.RequestException as e:
+        return JsonRpcErrorResponse(jsonrpc="2.0", id=req_id, error=ErrorObject(code=BACKEND_REQUEST_ERROR, message=f"Backend API request failed: {e}"))
+    except json.JSONDecodeError as e:
+        return JsonRpcErrorResponse(jsonrpc="2.0", id=req_id, error=ErrorObject(code=BACKEND_REQUEST_ERROR, message=f"Invalid JSON response from backend: {e}"))
+    except Exception as e:  # General exception handling
+        return JsonRpcErrorResponse(jsonrpc="2.0", id=req_id, error=ErrorObject(code=INTERNAL_ERROR, message=f"Unexpected error: {e}"))
 
 def handle_shutdown(req_id: str | int | None) -> JsonRpcResponse:
     # (Remains the same)
@@ -239,8 +242,8 @@ def main_loop(backend_url: str):
         response: JsonRpcResponse | None = None
         request_id: str | int | None = None
         try:
-            request_data: dict[str, Any] = json.loads(line)
-            if not isinstance(request_data, dict): raise ValueError("Request must be a JSON object")
+            request_data: dict[str, Any] = json.loads(line)  # pyright: ignore[reportExplicitAny]
+            # if not isinstance(request_data, dict): raise ValueError("Request must be a JSON object")
             if request_data.get("jsonrpc") != "2.0": raise ValueError("Invalid 'jsonrpc' version")
             if "method" not in request_data or not isinstance(request_data["method"], str): raise ValueError("Missing or invalid 'method'")
             method = request_data["method"]
@@ -257,7 +260,7 @@ def main_loop(backend_url: str):
                  response = handle_list_tools(request_id) # Uses simplified definition now
             elif method == "tools/call":
                  if not isinstance(params, dict): raise ValueError("Invalid 'params' for tools/call")
-                 response = handle_tools_call(cast(ToolCallParams, params), request_id, backend_url)
+                 response = handle_tools_call(cast(ToolCallParams, params), request_id, backend_url)  # pyright: ignore[reportInvalidCast]
             elif method == "shutdown":
                  response = handle_shutdown(request_id)
             elif method == "exit":
@@ -291,11 +294,11 @@ def main_loop(backend_url: str):
 # --- Main execution block ---
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="MCP Server (JSON-RPC 2.0) implementing tools/call for search.")
-    parser.add_argument( # Ensure argument is present
+    _ = parser.add_argument( # Ensure argument is present
         "--backend-url",
         default=DEFAULT_BACKEND_URL,
         help=f"URL of the gem_backend REST API (default: {DEFAULT_BACKEND_URL})"
     )
     args = parser.parse_args()
-    main_loop(args.backend_url)
+    main_loop(args.backend_url)  # pyright: ignore[reportAny]
 # --- END OF FILE mcp_server.py ---
