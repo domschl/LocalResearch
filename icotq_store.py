@@ -4,8 +4,8 @@ import json
 import uuid
 import time
 import numpy as np
-# import aiohttp
-# import aiohttp.web
+import aiohttp
+import aiohttp.web
 import asyncio
 import threading
 import tempfile
@@ -121,13 +121,13 @@ class IcoTqStore:
             self.config_file = config_file_override
             self.log.info(f"Using overridden config file path: {self.config_file}")
         else:
-            config_path = os.path.expanduser("~/IcoTqStore/config")
+            config_path = os.path.expanduser("~/.config/icotq")
             if not os.path.isdir(config_path):
                 try:
                     os.makedirs(config_path)
                 except OSError as e:
                     self.log.error(f"Failed to create default config directory {config_path}: {e}")
-            self.config_file = os.path.join(config_path, "icotq.json")
+            self.config_file = os.path.join(config_path, "icoqt.json")
             self.log.info(f"Using default config file path: {self.config_file}")
 
         # --- Core State ---
@@ -139,7 +139,6 @@ class IcoTqStore:
         self.device: str | None = None # Changed from Optional[...]
         self.embeddings_matrix: torch.Tensor | None = None # Changed from Optional[...]
         self.root_path:str = ""
-        self.config_path:str = ""
         self.embeddings_path: str = ""
         self.pdf_cache_path: str = "" # Added type hint
         self.model_list: list[EmbeddingsModel] = [] # Changed from List[EmbeddingsModel]
@@ -246,9 +245,6 @@ class IcoTqStore:
         self.root_path = os.path.expanduser(self.config['icotq_path'])
         if not self.root_path:
              raise IcotqConfigurationError("`icotq_path` cannot be empty in configuration.")
-        self.config_path = os.path.join(self.root_path, "config")
-        if os.path.isdir(self.config_path) is False:
-            os.makedirs(self.config_path, exist_ok=True)
 
         valid_sources: list[TqSource] = [] # Changed from List
         known_types: list[str] = ['txt', 'md', 'pdf'] # Changed from List
@@ -281,7 +277,7 @@ class IcoTqStore:
 
     def _load_or_init_model_list(self):
         """Loads the list of known embedding models or creates a default."""
-        model_list_path = os.path.join(self.config_path, "model_list.json")
+        model_list_path = os.path.join(self.root_path, "model_list.json")
         if os.path.exists(model_list_path):
             try:
                 with open(model_list_path, 'r') as f:
@@ -913,23 +909,59 @@ class IcoTqStore:
             raise IcotqConfigurationError(f"Model '{name}' is unknown, not found in model_list.json")
 
         hf_name = selected_model['model_hf_name']
-        try:
-            engine = SentenceTransformer(hf_name, trust_remote_code=trust_remote_code)
-            resolved_device = self.resolve_device(device_str)
-            engine = engine.to(torch.device(resolved_device))
+        resolved_device = self.resolve_device(device_str)
+        target_torch_device = torch.device(resolved_device)
 
+        # --- Store reference to old tensor before clearing ---
+        old_tensor = self.embeddings_matrix
+        old_tensor_device = old_tensor.device if old_tensor is not None else None
+
+        try:
+            # --- Load New Engine ---
+            engine = SentenceTransformer(hf_name, trust_remote_code=trust_remote_code)
+            engine = engine.to(target_torch_device)
+
+            # --- Update State (Engine, Device, Current Model) ---
             self.engine = engine
             self.device = resolved_device
             self.current_model = selected_model
+            # --- Clear old tensor reference *after* new engine loaded ---
             self.embeddings_matrix = None
 
             self.log.info(f"Model '{name}' ({hf_name}) loaded successfully onto device '{resolved_device}'.")
-            return selected_model
+
+            # --- START: Explicitly Clear Old Tensor Memory ---
+            if old_tensor is not None:
+                self.log.info(f"Clearing previous model's embedding tensor from memory (Device: {old_tensor_device})...")
+                del old_tensor # Remove reference
+                # Try to clear the cache on the specific device the old tensor was on
+                if old_tensor_device and old_tensor_device.type == 'cuda':
+                    try:
+                        # target specific device if possible, otherwise general
+                        # cuda_device_idx = old_tensor_device.index if old_tensor_device.index is not None else torch.cuda.current_device()
+                        # with torch.cuda.device(cuda_device_idx): # Less reliable if context changes
+                        torch.cuda.empty_cache()
+                        self.log.debug("Cleared CUDA cache.")
+                    except Exception as cache_e:
+                        self.log.warning(f"Failed attempt to clear CUDA cache: {cache_e}")
+                elif old_tensor_device and old_tensor_device.type == 'mps':
+                     try:
+                         torch.mps.empty_cache() # type: ignore # Requires specific torch version/build
+                         self.log.debug("Cleared MPS cache.")
+                     except AttributeError:
+                          self.log.warning("torch.mps.empty_cache() not available in this PyTorch version.")
+                     except Exception as cache_e:
+                          self.log.warning(f"Failed attempt to clear MPS cache: {cache_e}")
+            # --- END: Explicitly Clear Old Tensor Memory ---
+
+            return selected_model # Return successfully loaded model info
 
         except Exception as e:
+            # If loading the new engine fails, restore the old tensor reference if it existed
+            # to maintain previous state as much as possible.
             self.log.error(f"Failed to load or initialize model '{name}' ({hf_name}): {e}", exc_info=True)
+            self.embeddings_matrix = old_tensor # Restore old tensor if load failed (its not unbound!) # pyright: ignore[reportPossiblyUnboundVariable]
             raise IcotqError(f"SentenceTransformer failed for model '{name}'") from e
-
 
     def sync_texts(self, max_imports: int | None = None):
         """
@@ -1240,17 +1272,44 @@ class IcoTqStore:
                         self.log.info("Saving updated library and PDF index after cleanup...")
                         self._write_library_internal()
 
-                    # Reload current tensor if modified
                     if self.current_model and self.current_model['model_name'] in modified_tensors:
-                         self.log.info(f"Reloading current model's ({self.current_model['model_name']}) tensor after cleanup.")
-                         try:
-                             # Check consistency *after* reload
-                             _ = self._load_tensor_internal(self.current_model['model_name'], check_consistency=True)
-                         except (IcotqConsistencyError, IcotqCriticalError) as e:
-                             # This is where the previous crash happened - need to ensure it passes now
-                             self.log.critical(f"CRITICAL: Consistency error *after* cleanup reload for {self.current_model['model_name']}: {e}")
+                        current_model_name = self.current_model['model_name']
+                        self.log.info(f"Updating current model's ({current_model_name}) in-memory tensor after cleanup.")
+
+                        # --- Assign directly instead of reloading ---
+                        self.embeddings_matrix = modified_tensors[current_model_name]
+                        # --- End Assignment ---
+
+                        # Optional: Perform consistency check on the new in-memory matrix
+                        try:
+                            expected_rows = sum(entry['emb_ptrs'][current_model_name][1] for entry in self.lib if current_model_name in entry.get('emb_ptrs', {}))
+                            actual_rows = self.embeddings_matrix.shape[0]
+                            if actual_rows != expected_rows:
+                                # This would be a critical logic error if it happens here
+                                consistency_msg = f"CRITICAL Inconsistency *after* direct assignment! Lib expects {expected_rows}, matrix has {actual_rows}."
+                                self.log.critical(consistency_msg)
+                                self.embeddings_matrix = None # Safety
+                                raise IcotqCriticalError(consistency_msg)
+                            else:
+                                self.log.info(f"In-memory tensor for '{current_model_name}' updated and passed consistency check ({actual_rows} rows).")
+                        except Exception as check_e:
+                             # Handle potential errors during the check itself
+                             self.log.critical(f"CRITICAL Error during post-assignment consistency check for {current_model_name}: {check_e}")
                              self.embeddings_matrix = None # Safety
-                             raise IcotqCriticalError("Consistency check failed immediately after cleanup. Logic error suspected.") from e
+                             # Re-raise as critical? Or just log and clear matrix? Re-raise seems safer.
+                             raise IcotqCriticalError(f"Post-assignment check failed for {current_model_name}") from check_e
+
+                    # Reload current tensor if modified
+                    # if self.current_model and self.current_model['model_name'] in modified_tensors:
+                    #      self.log.info(f"Reloading current model's ({self.current_model['model_name']}) tensor after cleanup.")
+                    #      try:
+                    #          # Check consistency *after* reload
+                    #          _ = self._load_tensor_internal(self.current_model['model_name'], check_consistency=True)
+                    #      except (IcotqConsistencyError, IcotqCriticalError) as e:
+                    #          # This is where the previous crash happened - need to ensure it passes now
+                    #          self.log.critical(f"CRITICAL: Consistency error *after* cleanup reload for {self.current_model['model_name']}: {e}")
+                    #          self.embeddings_matrix = None # Safety
+                    #          raise IcotqCriticalError("Consistency check failed immediately after cleanup. Logic error suspected.") from e
 
                     self.log.info(f"Synchronization and cleanup completed. Library size: {len(self.lib)}")
                 else:
@@ -1843,6 +1902,141 @@ class IcoTqStore:
             except Exception as e: 
                 self.log.critical(f"Unexpected critical error during search: {e}", exc_info=True)
                 return []
+
+
+    # === Server Functionality ===
+
+    async def search_handler(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
+        """Handles incoming search requests via HTTP."""
+        try:
+            data: SearchRequest = await request.json()
+            search_text = data.get('search_text')
+            if not search_text: 
+                return aiohttp.web.json_response({"error": "Missing 'search_text' field"}, status=400)
+            # ... (input validation) ...
+            max_results=data.get('max_results', 10)
+            yellow_liner=data.get('yellow_liner', False)
+            context_length=data.get('context_length', 16)
+            context_steps=data.get('context_steps', 4)
+            compression_mode=data.get('compression_mode', 'none')
+            if max_results <= 0: 
+                max_results = 10
+
+            self.log.info(f"Received search request: text='{search_text[:50]}...', max={max_results}, yellow={yellow_liner}")
+            search_results = self.search(search_text, max_results=max_results, yellow_liner=yellow_liner, context_length=context_length, context_steps=context_steps, compression_mode=compression_mode)
+            self.log.info(f"Responding with {len(search_results)} results.")
+            for result in search_results:
+                if result.get('yellow_liner') is not None: 
+                    result['yellow_liner'] = result['yellow_liner'].tolist()  # pyright: ignore[reportOptionalMemberAccess, reportGeneralTypeIssues]
+            return aiohttp.web.json_response(search_results) # type: ignore
+
+        except json.JSONDecodeError: 
+            return aiohttp.web.json_response({"error": "Invalid JSON format"}, status=400)
+        except Exception as e: 
+            self.log.error(f"Error processing search request: {e}", exc_info=True)
+            return aiohttp.web.json_response({"error": "Internal server error"}, status=500)
+
+
+    def _server_task(self, host: str, port: int, in_thread: bool = False):
+        """The asyncio server task runner."""
+        # ... (logic remains the same, no typing changes needed here) ...
+        self.log.info(f"Starting server task (in_thread={in_thread})...")
+        loop = None
+        try:
+            app = aiohttp.web.Application()
+            _ = app.router.add_post('/search', self.search_handler)
+            runner = aiohttp.web.AppRunner(app)
+            if in_thread: 
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            else:
+                try: 
+                    loop = asyncio.get_event_loop()
+                except RuntimeError: 
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+            self.loop = loop
+
+            async def start_runner():
+                await runner.setup()
+                site = aiohttp.web.TCPSite(runner, host, port)
+                await site.start()
+                self.log.info(f"Server started successfully at http://{host}:{port}")
+                while self.server_running: await asyncio.sleep(0.5)
+                self.log.info("Server shutdown signal received.")
+                await site.stop()
+                self.log.info("Server site stopped.")
+            async def cleanup_runner(): 
+                await runner.cleanup()
+                self.log.info("Server runner cleaned up.")
+
+            loop.run_until_complete(start_runner())
+            loop.run_until_complete(cleanup_runner())
+
+        except OSError as e:
+             if "address already in use" in str(e).lower(): 
+                self.log.critical(f"Server failed: Port {port} on '{host}' in use.")
+             else: 
+                self.log.critical(f"Server failed OS error: {e}", exc_info=True)
+             self.server_running = False
+        except Exception as e: 
+            self.log.critical(f"Server task critical error: {e}", exc_info=True)
+            self.server_running = False
+        finally:
+            if loop and not loop.is_closed():
+                 if in_thread: 
+                    loop.close()
+                 self.log.info("Server asyncio loop closed.")
+            self.loop = None
+            self.log.info("Server task finished.")
+
+
+    def start_server(self, host: str = "0.0.0.0", port: int = 8080, background: bool = False):
+        """Starts the search API server."""
+        if self.server_running: 
+            self.log.warning("Server already running/starting.")
+            return
+        self.server_running = True
+        if background:
+            self.log.info("Starting server in background thread...")
+            self.server_thread = threading.Thread(target=self._server_task, args=(host, port, True), daemon=True)
+            self.server_thread.start()
+            time.sleep(1)
+            if not self.server_running: 
+                self.log.error("Server failed to start in background.")
+                self.server_thread = None
+        else:
+            self.log.info("Starting server in foreground (blocking)...")
+            try: 
+                self._server_task(host, port, False)
+            except KeyboardInterrupt: 
+                self.log.info("Server stopped by user.")
+            finally: 
+                self.server_running = False
+
+
+    def stop_server(self):
+        """Stops the running search API server."""
+        if not self.server_running and self.server_thread is None: 
+            self.log.warning("Server not running.")
+            return
+        self.log.info("Attempting to stop server...")
+        self.server_running = False
+        if self.loop and self.loop.is_running(): 
+            _ = self.loop.call_soon_threadsafe(self.loop.stop)
+            self.log.debug("Requested asyncio loop stop.")
+        if self.server_thread and self.server_thread.is_alive():
+            self.log.info("Waiting for server thread exit...")
+            self.server_thread.join(timeout=10)
+            if self.server_thread.is_alive(): 
+                self.log.warning("Server thread join timed out.")
+            else: 
+                self.log.info("Server thread finished.")
+            self.server_thread = None
+        if self.server_running: 
+            self.log.warning("Server flag still true after stop.")
+            self.server_running = False
+        self.log.info("Server stop sequence completed.")
 
 
     # === Static Utility Methods ===
