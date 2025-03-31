@@ -1149,7 +1149,7 @@ class IcoTqStore:
                             continue
 
                         temp_device = self.resolve_device(self.config['embeddings_device'])
-                        original_tensor: torch.Tensor = torch.load(temp_tensor_path, map_location=torch.device(temp_device))
+                        original_tensor: torch.Tensor = torch.load(temp_tensor_path, map_location=torch.device(temp_device))  # pyright: ignore[reportUnknownMemberType]
                         num_rows = original_tensor.shape[0]
 
                         # --- Calculate Boolean Keep Mask (still needed for offset calculation) ---
