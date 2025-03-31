@@ -4,10 +4,15 @@ import argparse
 from argparse import ArgumentParser
 from rich.console import Console
 from icotq_store import IcoTqStore, SearchResult
-from typing import cast
+from typing import cast, TypedDict
 
 def iq_info(its: IcoTqStore, _logger:logging.Logger) -> None:
     its.list_sources()
+    print()
+    print("Use 'list models' for an overview of available models and their index status")
+    print("Use 'sync' to load new/updated documents from all sources")
+    print("Use 'index' to index using the current model")
+    print("Use 'search <search phrase>' to search using the current model's index")
 
 def iq_index(its: IcoTqStore, _logger:logging.Logger, param:str):
     if param == 'purge':
@@ -120,6 +125,8 @@ def iq_sync(its: IcoTqStore, _logger:logging.Logger, max_imports_str:str|None=No
     else:
         max_imports = None
     its.sync_texts(max_imports=max_imports)
+    print()
+    print("Use 'index' to update the current model's index, use 'list models' for an overview of models and indices available")
 
 def iq_select(its: IcoTqStore, _logger:logging.Logger, model_id:str):
     try:
@@ -129,15 +136,43 @@ def iq_select(its: IcoTqStore, _logger:logging.Logger, model_id:str):
     except ValueError:
         pass
     _ = its.load_model(model_id, its.config["embeddings_device"], its.config["embeddings_model_trust_code"])
+    print()
+    print("Use 'list models' for list of available models (from config/model_list.json), update current model's index with 'index'")
 
 def iq_list(its: IcoTqStore, _logger:logging.Logger, param:str):
+    sub_params = param.split(' ')
     if param == 'models':
+        class ModelInfo(TypedDict):
+            selected: bool
+            indexed: int
+
+        models: dict[str, ModelInfo] = {}
+        doc_cnt: int = len(its.lib)
+        part = False
         for ind, model in enumerate(its.model_list):
             if model['model_name'] == its.config["embeddings_model_name"]:
-                sel:str = "[*]"
+                models[model['model_name']] = ModelInfo({'selected': True, 'indexed': 0})
+                sel:str = '[*]'
             else:
-                sel = "   "
-            print(f"{ind+1}: {sel} {model['model_name']}")
+                models[model['model_name']] = ModelInfo({'selected': False, 'indexed': 0})
+                sel = '   '
+            for entry in its.lib:
+                if model['model_name'] in entry["emb_ptrs"]:
+                    models[model['model_name']]["indexed"] += 1
+            if models[model['model_name']]["indexed"] == 0:
+                index_state:str = "not indexed"
+                part = True
+            elif models[model['model_name']]["indexed"] == doc_cnt:
+                index_state = "fully indexed"
+            else:
+                index_state = "partially indexed"
+                part = True            
+            print(f"{ind+1}: {sel} {model['model_name']}, Index: {models[model['model_name']]["indexed"]}/{doc_cnt}, {index_state} ")
+        print()
+        if part is True:
+            print("To update the index, use 'select <model-number>' to select a model, then use 'index' to update that model's index")
+        print("Use 'sync' to update new or changed documents from document sources ('list sources'), after syncing, the index needs to be updated with 'index'.")
+
     elif param == 'sources':
         for ind, source in enumerate(its.config["tq_sources"]):
             cnt = 0
@@ -145,9 +180,20 @@ def iq_list(its: IcoTqStore, _logger:logging.Logger, param:str):
                 if entry['source_name'] == source['name']:
                     cnt += 1
             print(f"{ind+1}: {source['name']} at {source['path']} ({source['tqtype']}), {cnt} docs")
-    elif param == 'docs':
+        print("\nUse 'list models' for the current index status, use 'sync' to synchronized new or changed documents.")
+    elif sub_params[0] == 'docs':
         for ind, entry in enumerate(its.lib):
-            print(f"{ind+1} {entry['desc_filename']}")
+            found:bool = False
+            if len(sub_params) == 1:
+                found = True
+            else:
+                found = True
+                for sp in sub_params[1:]:
+                    if sp.lower() not in entry["desc_filename"].lower():
+                        found = False
+                        break
+            if found is True:
+                print(f"{ind+1} {entry['desc_filename']}")
     else:
         print("Usage either 'list models', 'list sources', or 'list docs'.")
 
@@ -164,13 +210,16 @@ def iq_help(parser:argparse.ArgumentParser, valid_actions:list[tuple[str, str]])
     print()
     print("Command can either be provided as command-line arguments or at the '> ' prompt.")
     print("Valid commands are: \n" + '\n    '.join([f"{command}: {help}" for command, help in valid_actions]))
-    print("To exit, simply press Enter at the command prompt, or by 'exit' or 'quit'")
+    print()
+    print("Start with 'sync' to synchronize the documents from your sources, select a model ('list models', then 'select <model-number>'), and index your documents with the selected model using 'index'.")
+    print()
+    print("To exit, use ^D, 'exit', or 'quit'")
 
 def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
     valid_actions = [('info', 'Overview of available data and sources'), 
                                             ('sync', "[max_docs] evaluate available sources and cache text information and metadata, optional max_docs limits number of imported docs, sync source repos with cached text for indexing. Use 'index' function afterwards to create the actual index!"), 
                                             ('index', "[purge] Generate embeddings index for currently active model. Option purge starts index from scratch. ('list models', 'select <model-id>' to change current model)"),
-                                            ('list', "models|sources|docs"),
+                                            ('list', "models|sources|docs [keywords]"),
                                             ('select', "model-index as shown by: 'list models', use 'index' to create or update embeddings indices"),
                                             ('search', "Search for keywords given as repl argument or with '-k <keywords>' option. You need to 'sync' and 'index' first"),
                                             ('check', "Verify consistency of data references and indices. Use 'clean' to apply actions."),
@@ -208,7 +257,8 @@ def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
     while quit is False:
         for action in actions:
             if action not in [cmd for cmd, _ in valid_actions]:
-                logger.error(f"Invalid action {action}, valid are: {valid_actions}, 'help' for more information")
+                if (action != ''):
+                    logger.error(f"Invalid action '{action}', 'help' for more information")
         if 'info' in actions:
             iq_info(its, logger)
         if 'sync' in actions:
