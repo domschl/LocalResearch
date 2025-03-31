@@ -121,7 +121,7 @@ class IcoTqStore:
             self.config_file = config_file_override
             self.log.info(f"Using overridden config file path: {self.config_file}")
         else:
-            config_path = os.path.expanduser("~/.config/icotq")
+            config_path = os.path.expanduser("~/IcoTqStore/config")
             if not os.path.isdir(config_path):
                 try:
                     os.makedirs(config_path)
