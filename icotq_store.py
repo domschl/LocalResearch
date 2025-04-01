@@ -101,7 +101,7 @@ class IcotqConfigurationError(IcotqError):
 
 class IcoTqStore:
     # Accept config_file_override: str | None
-    def __init__(self, config_file_override: str | None = None) -> None:
+    def __init__(self, config_file_override: str | None = None, config_path_override: str | None = None) -> None:
         self.log:logging.Logger = logging.getLogger("IcoTqStore")
         # Disable log spam
         tmp = logging.getLogger("transformers_modules")
@@ -116,17 +116,24 @@ class IcoTqStore:
 
         # Determine config file path
         self.config_file: str
+        self.config_path: str
         if config_file_override:
             self.config_file = config_file_override
             self.log.info(f"Using overridden config file path: {self.config_file}")
         else:
-            config_path = os.path.expanduser("~/IcoTqStore/config")
-            if not os.path.isdir(config_path):
+            if config_path_override is None:
+                self.config_path = os.path.expanduser("~/IcoTqStore/config")
+            else:
+                if os.path.isdir(config_path_override) is False:
+                    self.log.error(f"Config path override {config_path_override} doesn't exist!")
+                    raise IcotqConfigurationError(f"`config_path_override` must be an existing directory or None")
+                self.config_path = config_path_override
+            if not os.path.isdir(self.config_path):
                 try:
-                    os.makedirs(config_path)
+                    os.makedirs(self.config_path)
                 except OSError as e:
-                    self.log.error(f"Failed to create default config directory {config_path}: {e}")
-            self.config_file = os.path.join(config_path, "icoqt.json")
+                    self.log.error(f"Failed to create default config directory {self.config_path}: {e}")
+            self.config_file = os.path.join(self.config_path, "icotq.json")
             self.log.info(f"Using default config file path: {self.config_file}")
 
         # --- Core State ---
@@ -245,6 +252,7 @@ class IcoTqStore:
     def _validate_config_paths(self):
         """Validates paths and sources in the configuration."""
         self.root_path = os.path.expanduser(self.config['icotq_path'])
+        self.config_path = os.path.join(self.root_path, "config")
         if not self.root_path:
              raise IcotqConfigurationError("`icotq_path` cannot be empty in configuration.")
 
@@ -279,7 +287,7 @@ class IcoTqStore:
 
     def _load_or_init_model_list(self):
         """Loads the list of known embedding models or creates a default."""
-        model_list_path = os.path.join(self.root_path, "model_list.json")
+        model_list_path = os.path.join(self.config_path, "model_list.json")
         if os.path.exists(model_list_path):
             try:
                 with open(model_list_path, 'r') as f:
@@ -954,7 +962,7 @@ class IcoTqStore:
                 break
 
         if not selected_model:
-            raise IcotqConfigurationError(f"Model '{name}' is unknown, not found in model_list.json")
+            raise IcotqConfigurationError(f"Model '{name}' is unknown, not found in {self.config_path}/model_list.json")
 
         hf_name = selected_model['model_hf_name']
         resolved_device = self.resolve_device(device_str)
@@ -1606,7 +1614,7 @@ class IcoTqStore:
                 self.log.error(f"Error listing PDF cache directory {self.pdf_cache_path}: {e}")
 
             if pdf_cache_file_debris:
-                self.log.warning(f"Found {len(pdf_cache_file_debris)} orphaned or temporary PDF cache files.")
+                self.log.warning(f"Found {len(pdf_cache_file_debris)} orphaned or temporary PDF cache files. Use 'clean' to cleanup")
                 if not issues_found: initial_issues_found = True
                 issues_found = True
             if not dry_run and pdf_cache_file_debris:
