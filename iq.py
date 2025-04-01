@@ -21,6 +21,14 @@ def iq_index(its: IcoTqStore, _logger:logging.Logger, param:str):
         purge = False
     its.generate_embeddings(purge=purge)
 
+def iq_project(its: IcoTqStore, logger:logging.Logger, param:str):
+    if param == 'purge':
+        logger.error("'purge' not yet implemented for 'project'")
+        _purge = True
+    else:
+        _purge = False
+    its.update_pca_coordinates()
+
 def iq_search(its: IcoTqStore, logger:logging.Logger, search_spec: str):
     max_results = 8
     context_length = 32
@@ -219,6 +227,7 @@ def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
     valid_actions = [('info', 'Overview of available data and sources'), 
                                             ('sync', "[max_docs] evaluate available sources and cache text information and metadata, optional max_docs limits number of imported docs, sync source repos with cached text for indexing. Use 'index' function afterwards to create the actual index!"), 
                                             ('index', "[purge] Generate embeddings index for currently active model. Option purge starts index from scratch. ('list models', 'select <model-id>' to change current model)"),
+                                            ('project', "Generate 3D projections of high dimensional embeddings for visualizations. Needs to be used after 'index'."),
                                             ('list', "models|sources|docs [keywords]"),
                                             ('select', "model-index as shown by: 'list models', use 'index' to create or update embeddings indices"),
                                             ('search', "Search for keywords given as repl argument or with '-k <keywords>' option. You need to 'sync' and 'index' first"),
@@ -267,6 +276,8 @@ def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
             iq_help(parser, valid_actions)
         if 'index' in actions:
             iq_index(its, logger, param)
+        if 'project' in actions:
+            iq_project(its, logger, param)
         if 'search' in actions:
             iq_search(its, logger, param)
         if 'list' in actions:

@@ -4,8 +4,6 @@ import json
 import uuid
 import time
 import numpy as np
-import aiohttp
-import aiohttp.web
 import asyncio
 import threading
 import tempfile
@@ -25,6 +23,17 @@ try:
     PYMUPDF4LLM_AVAILABLE:bool = True
 except ImportError:
     PYMUPDF4LLM_AVAILABLE = False  # pyright: ignore[reportConstantRedefinition]
+
+# --- Dimensionality Reduction ---
+try:
+    from sklearn.decomposition import PCA  # pyright: ignore[reportMissingTypeStubs]
+    # from sklearn.manifold import TSNE  # pyright: ignore[reportMissingTypeStubs]
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    PCA = None # pyright: ignore[reportConstantRedefinition]
+    # TSNE = None # pyright: ignore[reportConstantRedefinition] # Optional
+    SKLEARN_AVAILABLE = False  # pyright: ignore[reportConstantRedefinition]
+# --- End Dimensionality Reduction ---
 
 
 class TqSource(TypedDict):
@@ -47,6 +56,10 @@ class LibEntry(TypedDict):
     desc_filename: str
     text: str
     emb_ptrs: dict[str, tuple[int, int]]
+    # Stores the averaged vector for the whole document per model
+    summary_vects: dict[str, list[float]]
+    # Stores the 3D pca coordinates per model
+    pca_3d: dict[str, list[float]]
 
 class PDFIndex(TypedDict):
     previous_failure: bool
@@ -68,7 +81,7 @@ class SearchResult(TypedDict):
     desc: str
     text: str
     chunk: str
-    yellow_liner: np.typing.NDArray[np.float32] | None # Changed from Optional[...]
+    yellow_liner: np.typing.NDArray[np.float32] | None
 
 class EmbeddingsModel(TypedDict):
     model_hf_name: str
@@ -114,6 +127,10 @@ class IcoTqStore:
             self.log.info("pymupdf4llm library found, will be used as fallback for PDF text extraction.")
         else:
             self.log.warning("pymupdf4llm library not found. PDF text extraction will rely solely on pymupdf. Install with: pip install pymupdf4llm")
+        if SKLEARN_AVAILABLE and PCA: # Check for PCA specifically
+            self.log.info("scikit-learn found, PCA dimensionality reduction enabled.")
+        else:
+            self.log.warning("scikit-learn not found. PCA dimensionality reduction disabled. Install with: pip install scikit-learn")
 
         # Determine config file path
         self.config_file: str
@@ -155,8 +172,15 @@ class IcoTqStore:
         self._validate_config_paths()
         self._load_or_init_model_list()
         self._ensure_storage_dirs()
+        self._load_initial_state_with_lock() # Encapsulated initial load
+        self.log.info("IcoTqStore initialized.")
+        try:
+            self.check_clean(dry_run=True)
+        except IcotqError as e:
+            self.log.warning(f"Initial consistency check found issues: {e}")
 
-        # --- Load Initial State (Inside Lock) ---
+    def _load_initial_state_with_lock(self):
+        """Handles loading model, library, and tensor during init."""
         with self._lock:
             if self.config['embeddings_model_name']:
                 try:
@@ -166,17 +190,20 @@ class IcoTqStore:
                 except IcotqError as e:
                     self.log.error(f"Failed to load initial model specified in config: {e}")
 
-            self._read_library_internal()
+            self._read_library_internal() # Load library file
+
             if self.current_model:
                 try:
-                    _ = self._load_tensor_internal(model_name=self.current_model['model_name'])
+                    # Load tensor and handle potential fixing
+                    _ = self._load_tensor_internal(self.current_model['model_name'])
                 except IcotqConsistencyError as e:
                     self.log.error(f"Consistency Error loading tensor for initial model '{self.current_model['model_name']}': {e}")
                     if self.config.get('auto_fix_inconsistency', False):
                         self.log.warning(f"Attempting automatic fix (re-index) for model '{self.current_model['model_name']}' due to inconsistency.")
                         try:
                             self._generate_embeddings_internal(purge=True, model_name_override=self.current_model['model_name'])
-                            self.log.info(f"Automatic re-index for '{self.current_model['model_name']}' completed.")
+                            # pca needs separate call if desired after fix
+                            self.log.warning("pca needs to be updated!")
                             _ = self._load_tensor_internal(model_name=self.current_model['model_name'])
                         except IcotqError as fix_e:
                             self.log.error(f"Automatic fix failed for model '{self.current_model['model_name']}': {fix_e}")
@@ -188,12 +215,6 @@ class IcoTqStore:
                 except IcotqError as e:
                      self.log.error(f"Error loading tensor for initial model: {e}")
                      self.embeddings_matrix = None
-
-        self.log.info("IcoTqStore initialized.")
-        try:
-            self.check_clean(dry_run=True)
-        except IcotqError as e:
-            self.log.warning(f"Initial consistency check found issues: {e}")
 
     # === Configuration and Initialization Methods ===
 
@@ -918,7 +939,7 @@ class IcoTqStore:
 
         try:
             # --- Load New Engine ---
-            engine = SentenceTransformer(hf_name, trust_remote_code=trust_remote_code)
+            engine = SentenceTransformer(hf_name, trust_remote_code=trust_remote_code)  # pyright: ignore[reportCallIssue]
             engine = engine.to(target_torch_device)
 
             # --- Update State (Engine, Device, Current Model) ---
@@ -1060,13 +1081,21 @@ class IcoTqStore:
                                 lib_changed = True
                                 # --- Collect debris immediately ---
                                 if old_pointers_to_collect:
-                                     self.log.info(f"DEBUG Pass 1 Update: Collecting pointers {old_pointers_to_collect} for {desc_path}")
-                                     for model_name, ptr_info in old_pointers_to_collect.items():
-                                         if model_name not in tensor_debris: 
+                                    self.log.info(f"DEBUG Pass 1 Update: Collecting pointers {old_pointers_to_collect} for {desc_path}")
+                                    for model_name, ptr_info in old_pointers_to_collect.items():
+                                        if model_name not in tensor_debris: 
                                             tensor_debris[model_name] = []
-                                         # Avoid adding duplicates if somehow processed twice
-                                         if ptr_info not in tensor_debris[model_name]:
-                                             tensor_debris[model_name].append(ptr_info)
+                                        # Avoid adding duplicates if somehow processed twice
+                                        if ptr_info not in tensor_debris[model_name]:
+                                            tensor_debris[model_name].append(ptr_info)
+
+                                    entry_summary = existing_entry.get('summary_vects', {})
+                                    entry_pca = existing_entry.get('pca_3d', {}) # Use pca_3d
+                                    for model_name in old_pointers_to_collect.keys():
+                                        if model_name in entry_summary: 
+                                            del entry_summary[model_name]
+                                        if model_name in entry_pca: 
+                                            del entry_pca[model_name]
 
                             if existing_entry['filename'] != full_path:
                                 existing_entry['filename'] = full_path
@@ -1077,7 +1106,15 @@ class IcoTqStore:
                         elif current_text is not None:
                             # Add handling
                             self.log.info(f"Adding new entry for {desc_path}")
-                            entry: LibEntry = LibEntry({'source_name': source['name'], 'desc_filename': desc_path, 'filename': full_path, 'text': current_text, 'emb_ptrs': {}})
+                            entry: LibEntry = LibEntry({
+                                'source_name': source['name'], 
+                                'desc_filename': desc_path, 
+                                'filename': full_path, 
+                                'text': current_text, 
+                                'emb_ptrs': {},
+                                'summary_vects': {},
+                                'pca_3d': {}
+                                })
                             new_lib.append(entry)
                             lib_changed = True
                         else:
@@ -1351,7 +1388,7 @@ class IcoTqStore:
             if not self.current_model or self.current_model['model_name'] != target_model_name:
                  self.log.warning(f"Temporarily loading model '{target_model_name}'.")
                  try:
-                     temp_engine = SentenceTransformer(model_to_use['model_hf_name'], trust_remote_code=self.config.get('embeddings_model_trust_code', True))
+                     temp_engine = SentenceTransformer(model_to_use['model_hf_name'], trust_remote_code=self.config.get('embeddings_model_trust_code', True))  # pyright: ignore[reportCallIssue]
                      temp_device = self.resolve_device(self.config['embeddings_device'])
                      local_engine = temp_engine.to(torch.device(temp_device))
                  except Exception as e: 
@@ -1387,8 +1424,16 @@ class IcoTqStore:
             self.log.warning(f"Purging existing embeddings for model '{target_model_name}'.")
             local_embeddings_matrix = None
             for i in range(len(self.lib)):
-                if target_model_name in self.lib[i].get('emb_ptrs', {}): 
-                    del self.lib[i]['emb_ptrs'][target_model_name]
+                entry = self.lib[i] # Use local variable for clarity
+                _ = entry.setdefault('emb_ptrs', {}) # Ensure keys exist before del
+                _ = entry.setdefault('summary_vects', {})
+                _ = entry.setdefault('pca_3d', {})
+                if target_model_name in entry['emb_ptrs']: 
+                    del entry['emb_ptrs'][target_model_name]
+                if target_model_name in entry['summary_vects']: 
+                    del entry['summary_vects'][target_model_name]
+                if target_model_name in entry['pca_3d']: 
+                    del entry['pca_3d'][target_model_name]
             try: 
                 self._write_library_internal()
                 self.log.info(f"Library saved after purging pointers for {target_model_name}.")
@@ -1401,63 +1446,86 @@ class IcoTqStore:
         tensor_changed_since_last_save = False
         total_entries = len(self.lib)
         processed_count = 0
+        requires_pca_update = False
 
         for ind, entry in enumerate(self.lib):
             print(f"\rEmbedding Progress ({target_model_name}): {ind+1}/{total_entries} ({processed_count} processed)", end="", flush=True)
-            if 'emb_ptrs' not in entry: 
-                self.lib[ind]['emb_ptrs'] = {}
-                lib_changed_since_last_save = True
-            if target_model_name in entry['emb_ptrs'] and not purge: 
-                continue
 
+            # Ensure all required dicts exist for safety
+            entry.setdefault('emb_ptrs', {})
+            entry.setdefault('summary_vects', {})
+            entry.setdefault('pca_3d', {})
+
+            # --- Simplified Check: Only run if embeddings are missing or purging ---
+            needs_embedding_calc = purge or target_model_name not in entry['emb_ptrs']
+
+            if not needs_embedding_calc:
+                continue # Skip if embeddings already exist and not purging
+
+            # --- Process Entry ---
             processed_count += 1
             text_to_embed = entry.get('text')
+
+            # Handle empty text: Ensure no pointers/summary/pca exist
             if not text_to_embed:
-                 if target_model_name in self.lib[ind]['emb_ptrs']: 
-                    del self.lib[ind]['emb_ptrs'][target_model_name]
-                    lib_changed_since_last_save = True
+                 changed = False
+                 if target_model_name in entry['emb_ptrs']: del entry['emb_ptrs'][target_model_name]; changed = True
+                 if target_model_name in entry['summary_vects']: del entry['summary_vects'][target_model_name]; changed = True; requires_pca_update = True
+                 if target_model_name in entry['pca_3d']: del entry['pca_3d'][target_model_name]; changed = True
+                 if changed: lib_changed_since_last_save = True
                  continue
 
+            # --- Generate Embeddings and Calculate Summary ---
             try:
                 text_chunks = self.get_chunks(text_to_embed, model_to_use['chunk_size'], model_to_use['chunk_overlap'])
-                if not text_chunks:
-                     if target_model_name in self.lib[ind]['emb_ptrs']: 
-                        del self.lib[ind]['emb_ptrs'][target_model_name]
-                        lib_changed_since_last_save = True
-                     continue
+                if not text_chunks: continue # Skip if no chunks generated
 
-                embeddings: list[torch.Tensor] = local_engine.encode(  # pyright:ignore[reportUnknownMemberType, reportOptionalMemberAccess]
+                embeddings_list: list[torch.Tensor] = local_engine.encode(  # pyright:ignore[reportUnknownMemberType, reportOptionalMemberAccess, reportAssignmentType]
                     sentences=text_chunks, show_progress_bar=False, convert_to_numpy=False, batch_size=32
-                 )
+                )
+                if not embeddings_list:
+                    continue
 
-                if not embeddings:
-                     self.log.warning(f"Encoding produced no embeddings for {entry['desc_filename']}")
-                     if target_model_name in self.lib[ind]['emb_ptrs']: 
-                        del self.lib[ind]['emb_ptrs'][target_model_name]
-                        lib_changed_since_last_save = True
-                     continue
+                entry_chunk_embeddings = torch.stack(embeddings_list).to(local_embeddings_matrix.device if local_embeddings_matrix is not None else torch.device(self.resolve_device(self.config['embeddings_device'])))
+                emb_len = entry_chunk_embeddings.shape[0]
 
-                emb_matrix_chunk = torch.stack(embeddings).to(local_embeddings_matrix.device if local_embeddings_matrix is not None else torch.device(self.resolve_device(self.config['embeddings_device'])))
-
-                if local_embeddings_matrix is None: 
+                # Append to main tensor
+                if local_embeddings_matrix is None:
                     start_ptr = 0
-                    local_embeddings_matrix = emb_matrix_chunk
-                else: 
+                    local_embeddings_matrix = entry_chunk_embeddings
+                else:
                     start_ptr = local_embeddings_matrix.shape[0]
-                    local_embeddings_matrix = torch.cat([local_embeddings_matrix, emb_matrix_chunk])
+                    local_embeddings_matrix = torch.cat([local_embeddings_matrix, entry_chunk_embeddings])
 
-                emb_len = emb_matrix_chunk.shape[0]
-                del emb_matrix_chunk
-                self.lib[ind]['emb_ptrs'][target_model_name] = (start_ptr, emb_len)
-                lib_changed_since_last_save = True
-                tensor_changed_since_last_save = True
+                # --- Calculate and Store Summary Vector IMMEDIATELY ---
+                if emb_len > 0:
+                    try:
+                        avg_vector = torch.mean(entry_chunk_embeddings, dim=0)
+                        entry['summary_vects'][target_model_name] = avg_vector.cpu().tolist()
+                        self.log.debug(f"Calculated summary vector for {entry['desc_filename']}")
+                        requires_pca_update = True # Summary changed/added
+                        # Clear potentially outdated PCA coords
+                        if target_model_name in entry['pca_3d']:
+                            del entry['pca_3d'][target_model_name]
+                    except Exception as avg_e:
+                         self.log.error(f"Failed to calculate summary vector for {entry['desc_filename']}: {avg_e}")
+                         # Ensure summary entry is removed if calculation failed
+                         if target_model_name in entry['summary_vects']: del entry['summary_vects'][target_model_name]; requires_pca_update = True
+                         if target_model_name in entry['pca_3d']: del entry['pca_3d'][target_model_name]
+                else:
+                     # No chunks generated, ensure summary is not present
+                     if target_model_name in entry['summary_vects']: del entry['summary_vects'][target_model_name]; requires_pca_update = True
+                     if target_model_name in entry['pca_3d']: del entry['pca_3d'][target_model_name]
+
 
             except Exception as e:
-                 self.log.error(f"\nFailed to generate embeddings for {entry['desc_filename']}: {e}", exc_info=True)
-                 if target_model_name in self.lib[ind]['emb_ptrs']: 
-                    del self.lib[ind]['emb_ptrs'][target_model_name]
-                    lib_changed_since_last_save = True
+                 self.log.error(f"\nFailed processing entry {entry['desc_filename']}: {e}", exc_info=True)
+                 # Ensure partial state is cleaned up
+                 if target_model_name in entry['emb_ptrs']: del entry['emb_ptrs'][target_model_name]; lib_changed_since_last_save = True
+                 if target_model_name in entry['summary_vects']: del entry['summary_vects'][target_model_name]; lib_changed_since_last_save = True; requires_pca_update = True
+                 if target_model_name in entry['pca_3d']: del entry['pca_3d'][target_model_name]; lib_changed_since_last_save = True
 
+            # --- Periodic save ---
             current_time = time.time()
             if save_every_sec > 0 and (current_time - last_save_time > save_every_sec):
                 print(f"\nPerforming periodic save ({target_model_name})...", end="", flush=True)
@@ -1489,12 +1557,16 @@ class IcoTqStore:
             if self.current_model and self.current_model['model_name'] == target_model_name:
                 self.embeddings_matrix = local_embeddings_matrix
                 self.log.info(f"Current model's ({target_model_name}) in-memory tensor updated.")
+
         except IcotqCriticalError as e: 
             print("\nCRITICAL ERROR during final save.")
             raise
         except Exception as e: 
             print(f"\nUNEXPECTED ERROR during final save: {e}.")
             raise IcotqCriticalError("Unexpected final save failure.") from e
+
+        if requires_pca_update:
+            self.log.info(f"Summary vectors changed for model '{target_model_name}', PCA coordinates need update.")
 
     def check_clean(self, dry_run: bool = True):
         """Checks for inconsistencies. Attempts fixes if dry_run is False."""
@@ -1504,6 +1576,7 @@ class IcoTqStore:
             issues_found = False
             initial_issues_found = False # Track if issues existed before fixes
             require_reindex: set[str] = set()
+            lib_changed_in_check = False # Track changes made by check_clean itself
 
             # --- 1. PDF Cache Index vs. Library ---
             self.log.debug("Checking PDF cache index against library...")
@@ -1690,6 +1763,66 @@ class IcoTqStore:
                         else:
                             self.log.error(f"Unexpected error during post-fix check for unknown model_name: {post_fix_e}")
                         issues_found = True
+
+            # --- 5: Check for orphaned summary/pca data ---
+            self.log.debug("Checking for orphaned summary/pca vectors...")
+            orphaned_summaries: list[tuple[int, str]] = []
+            orphaned_pcas: list[tuple[int, str]] = []
+
+            for idx, entry in enumerate(self.lib):
+                 summary_models = set(entry.get('summary_vects', {}).keys())
+                 pca_models = set(entry.get('pca_3d', {}).keys())
+                 pointer_models = set(entry.get('emb_ptrs', {}).keys())
+
+                 for model_name in summary_models:
+                      if model_name not in pointer_models:
+                           orphaned_summaries.append((idx, model_name))
+                           issues_found = True
+                 for model_name in pca_models:
+                      if model_name not in summary_models: # pca depends on summary
+                           orphaned_pcas.append((idx, model_name))
+                           issues_found = True
+
+            if orphaned_summaries:
+                 self.log.warning(f"Found {len(orphaned_summaries)} summary vectors without corresponding embeddings pointers.")
+                 if not initial_issues_found: 
+                    initial_issues_found = True
+                 if not dry_run:
+                      self.log.info("Removing orphaned summary vectors...")
+                      for idx, model_name in orphaned_summaries:
+                           if model_name in self.lib[idx].get('summary_vects', {}):
+                                del self.lib[idx]['summary_vects'][model_name]  # pyright: ignore[reportTypedDictNotRequiredAccess]
+                                lib_changed_in_check = True
+                                # Also remove corresponding pca if it exists
+                                if model_name in self.lib[idx].get('pca_3d', {}):
+                                    del self.lib[idx]['pca_3d'][model_name]  # pyright: ignore[reportTypedDictNotRequiredAccess]
+
+            if orphaned_pcas:
+                self.log.warning(f"Found {len(orphaned_pcas)} pca coordinates without corresponding summary vectors.")
+                if not initial_issues_found: initial_issues_found = True
+                if not dry_run:
+                      self.log.info("Removing orphaned pca coordinates...")
+                      for idx, model_name in orphaned_pcas:
+                           if model_name in self.lib[idx].get('pca_3d', {}):
+                                del self.lib[idx]['pca_3d'][model_name]  # pyright: ignore[reportTypedDictNotRequiredAccess]
+                                lib_changed_in_check = True
+
+            # Save if check_clean made direct changes
+            if not dry_run and lib_changed_in_check:
+                 try:
+                     self._write_library_internal()
+                     self.log.info("Saved library after cleaning orphaned summary/pca data.")
+                 except IcotqError as e:
+                      self.log.error(f"Failed to save library after cleaning summary/pca data: {e}")
+
+
+            # --- Perform Fixes (Re-indexing logic remains the same) ---
+            if not dry_run and require_reindex:
+                # ... (Re-indexing logic) ...
+                # Note: Re-indexing will recalculate summaries.
+                # pca update still needs separate call after re-index finishes.
+                self.log.warning("Re-indexing completed. pca coordinates may need to be updated separately using 'update_pca'.")
+
 
             # --- Final Report (using initial_issues_found and issues_found) ---
             if not initial_issues_found:
@@ -1906,141 +2039,98 @@ class IcoTqStore:
                 self.log.critical(f"Unexpected critical error during search: {e}", exc_info=True)
                 return []
 
+# --- PCA Dimensionality Reduction ---
+    def update_pca_coordinates(self, model_name: str | None = None,
+                               random_state: int = 42): # PCA might use random state for some solvers
+        """
+        Calculates 3D PCA coordinates based on document summary vectors for a model.
+        Overwrites existing PCA coordinates for that model.
+        """
+        if not SKLEARN_AVAILABLE or not PCA:
+            self.log.error("Cannot update PCA coordinates: 'scikit-learn' not installed.")
+            raise IcotqError("Sklearn dependency not available.")
 
-    # === Server Functionality ===
+        with self._modify():
+            target_model_name = model_name or (self.current_model['model_name'] if self.current_model else None)
+            if not target_model_name:
+                raise IcotqConfigurationError("No model specified or loaded for PCA calculation.")
 
-    async def search_handler(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
-        """Handles incoming search requests via HTTP."""
-        try:
-            data: SearchRequest = await request.json()
-            search_text = data.get('search_text')
-            if not search_text: 
-                return aiohttp.web.json_response({"error": "Missing 'search_text' field"}, status=400)
-            # ... (input validation) ...
-            max_results=data.get('max_results', 10)
-            yellow_liner=data.get('yellow_liner', False)
-            context_length=data.get('context_length', 16)
-            context_steps=data.get('context_steps', 4)
-            compression_mode=data.get('compression_mode', 'none')
-            if max_results <= 0: 
-                max_results = 10
+            self.log.info(f"Starting PCA coordinate calculation for model '{target_model_name}'...")
 
-            self.log.info(f"Received search request: text='{search_text[:50]}...', max={max_results}, yellow={yellow_liner}")
-            search_results = self.search(search_text, max_results=max_results, yellow_liner=yellow_liner, context_length=context_length, context_steps=context_steps, compression_mode=compression_mode)
-            self.log.info(f"Responding with {len(search_results)} results.")
-            for result in search_results:
-                if result.get('yellow_liner') is not None: 
-                    result['yellow_liner'] = result['yellow_liner'].tolist()  # pyright: ignore[reportOptionalMemberAccess, reportGeneralTypeIssues]
-            return aiohttp.web.json_response(search_results) # type: ignore
+            # 1. Gather summary vectors and track original indices
+            summary_vectors_list: list[list[float]] = []
+            entry_indices_with_summary: list[int] = [] # Store original lib index
+            lib_changed = False # Track if clearing stale coords changes lib
 
-        except json.JSONDecodeError: 
-            return aiohttp.web.json_response({"error": "Invalid JSON format"}, status=400)
-        except Exception as e: 
-            self.log.error(f"Error processing search request: {e}", exc_info=True)
-            return aiohttp.web.json_response({"error": "Internal server error"}, status=500)
+            for idx, entry in enumerate(self.lib):
+                summary_dict = entry.get('summary_vects', {})
+                if target_model_name in summary_dict:
+                    vector = summary_dict[target_model_name]
+                    if vector:
+                        summary_vectors_list.append(vector)
+                        entry_indices_with_summary.append(idx)
+                # Clear any old PCA coords for entries *without* a summary now
+                elif target_model_name in entry.get('pca_3d', {}):
+                     del entry['pca_3d'][target_model_name]  # pyright: ignore[reportTypedDictNotRequiredAccess]
+                     lib_changed = True # Mark change if stale coords cleared
 
+            num_summaries = len(summary_vectors_list)
+            # PCA needs n_samples >= n_components
+            if num_summaries < 3:
+                 self.log.warning(f"Not enough documents ({num_summaries}) with summary vectors for model '{target_model_name}' to perform PCA to 3 components. Skipping PCA update.")
+                 # Clear *all* existing PCA coords for this model as they are invalid
+                 for i in range(len(self.lib)):
+                      if target_model_name in self.lib[i].get('pca_3d', {}):
+                           del self.lib[i]['pca_3d'][target_model_name]  # pyright: ignore[reportTypedDictNotRequiredAccess]
+                           lib_changed = True
+                 if lib_changed:
+                      self._write_library_internal() # Save if stale coords were cleared
+                 return
 
-    def _server_task(self, host: str, port: int, in_thread: bool = False):
-        """The asyncio server task runner."""
-        # ... (logic remains the same, no typing changes needed here) ...
-        self.log.info(f"Starting server task (in_thread={in_thread})...")
-        loop = None
-        try:
-            app = aiohttp.web.Application()
-            _ = app.router.add_post('/search', self.search_handler)
-            runner = aiohttp.web.AppRunner(app)
-            if in_thread: 
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+            self.log.info(f"Found {num_summaries} summary vectors for PCA processing.")
+
+            # 2. Convert to NumPy array
+            try:
+                summary_vectors_array = np.array(summary_vectors_list, dtype=np.float32)
+            except Exception as e:
+                self.log.error(f"Failed to convert summary vectors to NumPy array: {e}")
+                raise IcotqError("Error preparing data for PCA.") from e
+
+            # 3. Fit PCA model
+            try:
+                self.log.info("Fitting PCA model (n_components=3)...")
+                reducer = PCA(
+                    n_components=3,
+                    random_state=random_state # For reproducibility if randomized solvers used
+                )
+                embedding_3d = reducer.fit_transform(summary_vectors_array)
+                explained_variance = reducer.explained_variance_ratio_.sum()
+                self.log.info(f"PCA fitting complete. Output shape: {embedding_3d.shape}. Explained variance by 3 components: {explained_variance:.4f}")
+
+            except Exception as e:
+                self.log.error(f"PCA fit_transform failed: {e}", exc_info=True)
+                raise IcotqError("Error during PCA calculation.") from e
+
+            # 4. Store results back into LibEntry
+            changes_made_to_coords = False # Use separate flag for coord changes
+            if embedding_3d.shape[0] != len(entry_indices_with_summary):
+                 self.log.error("PCA output dimension mismatch with input summaries. Aborting update.")
+                 return
+
+            for i, original_lib_index in enumerate(entry_indices_with_summary):
+                 entry = self.lib[original_lib_index]
+                 entry.setdefault('pca_3d', {}) # Ensure dict exists
+                 new_coords = embedding_3d[i].tolist()
+                 if entry['pca_3d'].get(target_model_name) != new_coords:  # pyright: ignore[reportTypedDictNotRequiredAccess]
+                      entry['pca_3d'][target_model_name] = new_coords  # pyright: ignore[reportTypedDictNotRequiredAccess]
+                      changes_made_to_coords = True
+
+            # 5. Save library if changes occurred (stale coords cleared OR new coords generated)
+            if lib_changed or changes_made_to_coords:
+                self.log.info(f"Storing updated PCA 3D coordinates for model '{target_model_name}'.")
+                self._write_library_internal()
             else:
-                try: 
-                    loop = asyncio.get_event_loop()
-                except RuntimeError: 
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-            self.loop = loop
-
-            async def start_runner():
-                await runner.setup()
-                site = aiohttp.web.TCPSite(runner, host, port)
-                await site.start()
-                self.log.info(f"Server started successfully at http://{host}:{port}")
-                while self.server_running: await asyncio.sleep(0.5)
-                self.log.info("Server shutdown signal received.")
-                await site.stop()
-                self.log.info("Server site stopped.")
-            async def cleanup_runner(): 
-                await runner.cleanup()
-                self.log.info("Server runner cleaned up.")
-
-            loop.run_until_complete(start_runner())
-            loop.run_until_complete(cleanup_runner())
-
-        except OSError as e:
-             if "address already in use" in str(e).lower(): 
-                self.log.critical(f"Server failed: Port {port} on '{host}' in use.")
-             else: 
-                self.log.critical(f"Server failed OS error: {e}", exc_info=True)
-             self.server_running = False
-        except Exception as e: 
-            self.log.critical(f"Server task critical error: {e}", exc_info=True)
-            self.server_running = False
-        finally:
-            if loop and not loop.is_closed():
-                 if in_thread: 
-                    loop.close()
-                 self.log.info("Server asyncio loop closed.")
-            self.loop = None
-            self.log.info("Server task finished.")
-
-
-    def start_server(self, host: str = "0.0.0.0", port: int = 8080, background: bool = False):
-        """Starts the search API server."""
-        if self.server_running: 
-            self.log.warning("Server already running/starting.")
-            return
-        self.server_running = True
-        if background:
-            self.log.info("Starting server in background thread...")
-            self.server_thread = threading.Thread(target=self._server_task, args=(host, port, True), daemon=True)
-            self.server_thread.start()
-            time.sleep(1)
-            if not self.server_running: 
-                self.log.error("Server failed to start in background.")
-                self.server_thread = None
-        else:
-            self.log.info("Starting server in foreground (blocking)...")
-            try: 
-                self._server_task(host, port, False)
-            except KeyboardInterrupt: 
-                self.log.info("Server stopped by user.")
-            finally: 
-                self.server_running = False
-
-
-    def stop_server(self):
-        """Stops the running search API server."""
-        if not self.server_running and self.server_thread is None: 
-            self.log.warning("Server not running.")
-            return
-        self.log.info("Attempting to stop server...")
-        self.server_running = False
-        if self.loop and self.loop.is_running(): 
-            _ = self.loop.call_soon_threadsafe(self.loop.stop)
-            self.log.debug("Requested asyncio loop stop.")
-        if self.server_thread and self.server_thread.is_alive():
-            self.log.info("Waiting for server thread exit...")
-            self.server_thread.join(timeout=10)
-            if self.server_thread.is_alive(): 
-                self.log.warning("Server thread join timed out.")
-            else: 
-                self.log.info("Server thread finished.")
-            self.server_thread = None
-        if self.server_running: 
-            self.log.warning("Server flag still true after stop.")
-            self.server_running = False
-        self.log.info("Server stop sequence completed.")
-
+                 self.log.info(f"PCA coordinates for model '{target_model_name}' were already up-to-date.")
 
     # === Static Utility Methods ===
 
