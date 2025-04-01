@@ -4,9 +4,6 @@ import json
 import uuid
 import time
 import numpy as np
-import aiohttp
-import aiohttp.web
-import asyncio
 import threading
 import tempfile
 import traceback
@@ -16,7 +13,7 @@ import torch
 from sentence_transformers import SentenceTransformer
 
 # Keep TypedDict, cast, NotRequired, Any, Generator for now
-from typing import TypedDict, NotRequired, Any
+from typing import TypedDict, NotRequired, Any, cast
 from collections.abc import Generator
 import pymupdf  # pyright: ignore[reportMissingTypeStubs]
 
@@ -25,6 +22,8 @@ try:
     PYMUPDF4LLM_AVAILABLE:bool = True
 except ImportError:
     PYMUPDF4LLM_AVAILABLE = False  # pyright: ignore[reportConstantRedefinition]
+
+from sklearn.decomposition import PCA  # pyright: ignore[reportMissingTypeStubs]
 
 
 class TqSource(TypedDict):
@@ -68,7 +67,7 @@ class SearchResult(TypedDict):
     desc: str
     text: str
     chunk: str
-    yellow_liner: np.typing.NDArray[np.float32] | None # Changed from Optional[...]
+    yellow_liner: np.typing.NDArray[np.float32] | None
 
 class EmbeddingsModel(TypedDict):
     model_hf_name: str
@@ -134,10 +133,12 @@ class IcoTqStore:
         self.lib: list[LibEntry] = [] # Changed from List[LibEntry]
         self.pdf_index:dict[str, PDFIndex] = {}
         self.config:IcotqConfig
-        self.current_model: EmbeddingsModel | None = None # Changed from Optional[...]
-        self.engine: SentenceTransformer | None = None # Changed from Optional[...]
-        self.device: str | None = None # Changed from Optional[...]
-        self.embeddings_matrix: torch.Tensor | None = None # Changed from Optional[...]
+        self.current_model: EmbeddingsModel | None = None
+        self.engine: SentenceTransformer | None = None
+        self.device: str | None = None
+        self.embeddings_matrix: torch.Tensor | None = None
+        self.doc_embeddings_matrix: torch.Tensor | None = None
+        self.pca_matrix: torch.Tensor | None = None # Changed Optional
         self.root_path:str = ""
         self.embeddings_path: str = ""
         self.pdf_cache_path: str = "" # Added type hint
@@ -145,11 +146,6 @@ class IcoTqStore:
 
         # --- Concurrency Control ---
         self._lock: threading.Lock = threading.Lock()
-
-        # --- Server State ---
-        self.server_running:bool = False
-        self.loop:asyncio.AbstractEventLoop | None = None # Changed from Optional[...]
-        self.server_thread:threading.Thread | None = None # Changed from Optional[...]
 
         self._load_or_init_config()
         self._validate_config_paths()
@@ -163,13 +159,18 @@ class IcoTqStore:
                     _ = self._load_model_internal(self.config['embeddings_model_name'],
                                             self.config['embeddings_device'],
                                             self.config['embeddings_model_trust_code'])
+                    # _ = self._calculate_doc_embeddings_internal(model_name=self.config['embeddings_model_name'], calc_3d=True)
                 except IcotqError as e:
                     self.log.error(f"Failed to load initial model specified in config: {e}")
+
+            if self.current_model is None:
+                self.log.warning("No model loaded. Please use 'load_model' to load a model.")
 
             self._read_library_internal()
             if self.current_model:
                 try:
                     _ = self._load_tensor_internal(model_name=self.current_model['model_name'])
+                    _ = self._calculate_doc_embeddings_internal(model_name=self.current_model['model_name'], calc_3d=True)
                 except IcotqConsistencyError as e:
                     self.log.error(f"Consistency Error loading tensor for initial model '{self.current_model['model_name']}': {e}")
                     if self.config.get('auto_fix_inconsistency', False):
@@ -178,6 +179,7 @@ class IcoTqStore:
                             self._generate_embeddings_internal(purge=True, model_name_override=self.current_model['model_name'])
                             self.log.info(f"Automatic re-index for '{self.current_model['model_name']}' completed.")
                             _ = self._load_tensor_internal(model_name=self.current_model['model_name'])
+                            _ = self._calculate_doc_embeddings_internal(model_name=self.current_model['model_name'], calc_3d=True)
                         except IcotqError as fix_e:
                             self.log.error(f"Automatic fix failed for model '{self.current_model['model_name']}': {fix_e}")
                             self.embeddings_matrix = None
@@ -567,6 +569,49 @@ class IcoTqStore:
 
         return loaded_tensor is not None
 
+    def _calculate_doc_embeddings_internal(self, model_name: str | None = None, calc_3d:bool = False) -> bool:
+        if self.doc_embeddings_matrix is not None:
+            del self.doc_embeddings_matrix
+            self.doc_embeddings_matrix = None
+
+        if self.embeddings_matrix is None:
+            self.log.error(f"Cannot calculate document embeddings: No embeddings matrix loaded for model '{model_name}'.")
+            return False
+
+        if model_name is None and self.current_model is not None:
+            model_name = self.current_model['model_name']
+
+        if self.current_model is None or model_name != self.current_model['model_name']:
+            self.log.error(f"Cannot calculate document embeddings: Model '{model_name}' is not currently loaded.")
+
+        self.log.info(f"Calculating document embeddings for model '{model_name}'")
+        for entry in self.lib:
+            if model_name in entry['emb_ptrs']:
+                # Get the tensor-slice from emb_ptrs:
+                emb_ptrs = entry['emb_ptrs'][model_name]
+                start, length = emb_ptrs[0], emb_ptrs[1]
+                doc_embeddings: torch.Tensor = self.embeddings_matrix[start:start + length, :]
+                # Calculate the mean of the embeddings
+                doc_mean = torch.mean(doc_embeddings, dim=0).reshape(1, -1)
+                if self.doc_embeddings_matrix is None:
+                    self.doc_embeddings_matrix = doc_mean
+                else:
+                    self.doc_embeddings_matrix = torch.cat([self.doc_embeddings_matrix, doc_mean], dim=0)  # pyright:ignore[reportUnknownMemberType]
+                # self.log.info(f"Document embeddings for '{entry['desc_filename']}' calculated, shape {self.doc_embeddings_matrix.shape}.")
+
+        if self.doc_embeddings_matrix is None:  # pyright:ignore[reportUnknownMemberType]
+            self.log.error(f"Failed to calculate document embeddings for model '{model_name}'. No entries found.")
+            return False
+
+        if calc_3d is True:
+            # Calculate PCA for 3D visualization
+            self.log.info("Calculating PCA for 3D visualization of document embeddings.")
+            pca = PCA(n_components=3)
+            local_doc_emb: np.typing.NDArray[np.float32]= self.doc_embeddings_matrix.cpu().numpy()  # pyright:ignore[reportUnknownVariableType, reportUnknownMemberType]
+            pca_result: np.typing.NDArray[np.float32] = cast(np.typing.NDArray[np.float32], pca.fit_transform(local_doc_emb))  # pyright:ignore[reportUnknownMemberType]
+            self.log.info(f"PCA result shape: {pca_result.shape}")
+            self.pca_matrix = torch.tensor(pca_result)
+        return True
 
     def _save_config_internal(self):
         """Saves config atomically. Assumes lock is held."""
@@ -847,36 +892,39 @@ class IcoTqStore:
             try:
                 loaded_model_def = self._load_model_internal(name, device, trust_remote_code)
                 if loaded_model_def:
-                     try:
-                         _ = self._load_tensor_internal(loaded_model_def['model_name'])
-                     except IcotqConsistencyError as e:
-                         self.log.error(f"Consistency Error loading tensor for new model '{name}': {e}")
-                         if self.config.get('auto_fix_inconsistency', False):
-                             self.log.warning(f"Attempting automatic fix (re-index) for model '{name}'.")
-                             try:
-                                 self._generate_embeddings_internal(purge=True, model_name_override=name)
-                                 self.log.info(f"Automatic re-index for '{name}' completed.")
-                                 _ = self._load_tensor_internal(name)
-                             except IcotqError as fix_e:
-                                 self.log.error(f"Automatic fix failed for model '{name}': {fix_e}")
-                                 self.embeddings_matrix = None
-                                 self.log.critical(f"Model '{name}' loaded, but embeddings are inconsistent and could not be fixed automatically. Manual 'index purge' required.")
-                         else:
-                             self.log.warning("Automatic fixing is disabled. Embeddings for this model are inconsistent. Manual 'index purge' may be required.")
-                             self.embeddings_matrix = None
-                     except IcotqCriticalError as e:
-                          self.log.error(f"Critical Error loading tensor for model '{name}': {e}")
-                          self.embeddings_matrix = None
-                          self.log.critical(f"Model '{name}' loaded, but its embeddings tensor is corrupt or unreadable. Indexing needed.")
-                     except IcotqError as e:
-                          self.log.error(f"Error loading tensor for model '{name}': {e}")
-                          self.embeddings_matrix = None
+                    try:
+                        _ = self._load_tensor_internal(loaded_model_def['model_name'])
+                    except IcotqConsistencyError as e:
+                        self.log.error(f"Consistency Error loading tensor for new model '{name}': {e}")
+                        if self.config.get('auto_fix_inconsistency', False):
+                            self.log.warning(f"Attempting automatic fix (re-index) for model '{name}'.")
+                            try:
+                                self._generate_embeddings_internal(purge=True, model_name_override=name)
+                                self.log.info(f"Automatic re-index for '{name}' completed.")
+                                _ = self._load_tensor_internal(name)
+                            except IcotqError as fix_e:
+                                self.log.error(f"Automatic fix failed for model '{name}': {fix_e}")
+                                self.embeddings_matrix = None
+                                self.log.critical(f"Model '{name}' loaded, but embeddings are inconsistent and could not be fixed automatically. Manual 'index purge' required.")
+                        else:
+                            self.log.warning("Automatic fixing is disabled. Embeddings for this model are inconsistent. Manual 'index purge' may be required.")
+                            self.embeddings_matrix = None
+                    except IcotqCriticalError as e:
+                        self.log.error(f"Critical Error loading tensor for model '{name}': {e}")
+                        self.embeddings_matrix = None
+                        self.log.critical(f"Model '{name}' loaded, but its embeddings tensor is corrupt or unreadable. Indexing needed.")
+                    except IcotqError as e:
+                        self.log.error(f"Error loading tensor for model '{name}': {e}")
+                        self.embeddings_matrix = None
 
-                     self.config['embeddings_model_name'] = name
-                     self.config['embeddings_device'] = device
-                     self.config['embeddings_model_trust_code'] = trust_remote_code
-                     self._save_config_internal()
-                     return True
+                    # calculate doc embeddings if requested
+                    _ = self._calculate_doc_embeddings_internal(name, calc_3d=True)
+
+                    self.config['embeddings_model_name'] = name
+                    self.config['embeddings_device'] = device
+                    self.config['embeddings_model_trust_code'] = trust_remote_code
+                    self._save_config_internal()
+                    return True
                 else:
                     return False
 
@@ -918,7 +966,7 @@ class IcoTqStore:
 
         try:
             # --- Load New Engine ---
-            engine = SentenceTransformer(hf_name, trust_remote_code=trust_remote_code)
+            engine = SentenceTransformer(hf_name, trust_remote_code=trust_remote_code)  # pyright:ignore[reportCallIssue]
             engine = engine.to(target_torch_device)
 
             # --- Update State (Engine, Device, Current Model) ---
@@ -1148,8 +1196,8 @@ class IcoTqStore:
                             # ... (handling for missing tensor remains the same) ...
                             continue
 
-                        temp_device = self.resolve_device(self.config['embeddings_device'])
-                        original_tensor: torch.Tensor = torch.load(temp_tensor_path, map_location=torch.device(temp_device))  # pyright: ignore[reportUnknownMemberType]
+                        # temp_device = self.resolve_device(self.config['embeddings_device'])
+                        original_tensor: torch.Tensor = torch.load(temp_tensor_path, map_location="cpu") # map_location=torch.device(temp_device))  # pyright: ignore[reportUnknownMemberType]
                         num_rows = original_tensor.shape[0]
 
                         # --- Calculate Boolean Keep Mask (still needed for offset calculation) ---
@@ -1351,7 +1399,7 @@ class IcoTqStore:
             if not self.current_model or self.current_model['model_name'] != target_model_name:
                  self.log.warning(f"Temporarily loading model '{target_model_name}'.")
                  try:
-                     temp_engine = SentenceTransformer(model_to_use['model_hf_name'], trust_remote_code=self.config.get('embeddings_model_trust_code', True))
+                     temp_engine = SentenceTransformer(model_to_use['model_hf_name'], trust_remote_code=self.config.get('embeddings_model_trust_code', True))  # pyright:ignore[reportCallIssue]
                      temp_device = self.resolve_device(self.config['embeddings_device'])
                      local_engine = temp_engine.to(torch.device(temp_device))
                  except Exception as e: 
@@ -1489,6 +1537,7 @@ class IcoTqStore:
             if self.current_model and self.current_model['model_name'] == target_model_name:
                 self.embeddings_matrix = local_embeddings_matrix
                 self.log.info(f"Current model's ({target_model_name}) in-memory tensor updated.")
+                _ = self._calculate_doc_embeddings_internal(self.current_model['model_name'], calc_3d=True)
         except IcotqCriticalError as e: 
             print("\nCRITICAL ERROR during final save.")
             raise
@@ -1905,141 +1954,6 @@ class IcoTqStore:
             except Exception as e: 
                 self.log.critical(f"Unexpected critical error during search: {e}", exc_info=True)
                 return []
-
-
-    # === Server Functionality ===
-
-    async def search_handler(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
-        """Handles incoming search requests via HTTP."""
-        try:
-            data: SearchRequest = await request.json()
-            search_text = data.get('search_text')
-            if not search_text: 
-                return aiohttp.web.json_response({"error": "Missing 'search_text' field"}, status=400)
-            # ... (input validation) ...
-            max_results=data.get('max_results', 10)
-            yellow_liner=data.get('yellow_liner', False)
-            context_length=data.get('context_length', 16)
-            context_steps=data.get('context_steps', 4)
-            compression_mode=data.get('compression_mode', 'none')
-            if max_results <= 0: 
-                max_results = 10
-
-            self.log.info(f"Received search request: text='{search_text[:50]}...', max={max_results}, yellow={yellow_liner}")
-            search_results = self.search(search_text, max_results=max_results, yellow_liner=yellow_liner, context_length=context_length, context_steps=context_steps, compression_mode=compression_mode)
-            self.log.info(f"Responding with {len(search_results)} results.")
-            for result in search_results:
-                if result.get('yellow_liner') is not None: 
-                    result['yellow_liner'] = result['yellow_liner'].tolist()  # pyright: ignore[reportOptionalMemberAccess, reportGeneralTypeIssues]
-            return aiohttp.web.json_response(search_results) # type: ignore
-
-        except json.JSONDecodeError: 
-            return aiohttp.web.json_response({"error": "Invalid JSON format"}, status=400)
-        except Exception as e: 
-            self.log.error(f"Error processing search request: {e}", exc_info=True)
-            return aiohttp.web.json_response({"error": "Internal server error"}, status=500)
-
-
-    def _server_task(self, host: str, port: int, in_thread: bool = False):
-        """The asyncio server task runner."""
-        # ... (logic remains the same, no typing changes needed here) ...
-        self.log.info(f"Starting server task (in_thread={in_thread})...")
-        loop = None
-        try:
-            app = aiohttp.web.Application()
-            _ = app.router.add_post('/search', self.search_handler)
-            runner = aiohttp.web.AppRunner(app)
-            if in_thread: 
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            else:
-                try: 
-                    loop = asyncio.get_event_loop()
-                except RuntimeError: 
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-            self.loop = loop
-
-            async def start_runner():
-                await runner.setup()
-                site = aiohttp.web.TCPSite(runner, host, port)
-                await site.start()
-                self.log.info(f"Server started successfully at http://{host}:{port}")
-                while self.server_running: await asyncio.sleep(0.5)
-                self.log.info("Server shutdown signal received.")
-                await site.stop()
-                self.log.info("Server site stopped.")
-            async def cleanup_runner(): 
-                await runner.cleanup()
-                self.log.info("Server runner cleaned up.")
-
-            loop.run_until_complete(start_runner())
-            loop.run_until_complete(cleanup_runner())
-
-        except OSError as e:
-             if "address already in use" in str(e).lower(): 
-                self.log.critical(f"Server failed: Port {port} on '{host}' in use.")
-             else: 
-                self.log.critical(f"Server failed OS error: {e}", exc_info=True)
-             self.server_running = False
-        except Exception as e: 
-            self.log.critical(f"Server task critical error: {e}", exc_info=True)
-            self.server_running = False
-        finally:
-            if loop and not loop.is_closed():
-                 if in_thread: 
-                    loop.close()
-                 self.log.info("Server asyncio loop closed.")
-            self.loop = None
-            self.log.info("Server task finished.")
-
-
-    def start_server(self, host: str = "0.0.0.0", port: int = 8080, background: bool = False):
-        """Starts the search API server."""
-        if self.server_running: 
-            self.log.warning("Server already running/starting.")
-            return
-        self.server_running = True
-        if background:
-            self.log.info("Starting server in background thread...")
-            self.server_thread = threading.Thread(target=self._server_task, args=(host, port, True), daemon=True)
-            self.server_thread.start()
-            time.sleep(1)
-            if not self.server_running: 
-                self.log.error("Server failed to start in background.")
-                self.server_thread = None
-        else:
-            self.log.info("Starting server in foreground (blocking)...")
-            try: 
-                self._server_task(host, port, False)
-            except KeyboardInterrupt: 
-                self.log.info("Server stopped by user.")
-            finally: 
-                self.server_running = False
-
-
-    def stop_server(self):
-        """Stops the running search API server."""
-        if not self.server_running and self.server_thread is None: 
-            self.log.warning("Server not running.")
-            return
-        self.log.info("Attempting to stop server...")
-        self.server_running = False
-        if self.loop and self.loop.is_running(): 
-            _ = self.loop.call_soon_threadsafe(self.loop.stop)
-            self.log.debug("Requested asyncio loop stop.")
-        if self.server_thread and self.server_thread.is_alive():
-            self.log.info("Waiting for server thread exit...")
-            self.server_thread.join(timeout=10)
-            if self.server_thread.is_alive(): 
-                self.log.warning("Server thread join timed out.")
-            else: 
-                self.log.info("Server thread finished.")
-            self.server_thread = None
-        if self.server_running: 
-            self.log.warning("Server flag still true after stop.")
-            self.server_running = False
-        self.log.info("Server stop sequence completed.")
 
 
     # === Static Utility Methods ===

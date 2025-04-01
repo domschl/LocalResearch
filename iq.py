@@ -5,6 +5,7 @@ from argparse import ArgumentParser
 from rich.console import Console
 from icotq_store import IcoTqStore, SearchResult
 from typing import cast, TypedDict
+import matplotlib.pyplot as plt
 
 def iq_info(its: IcoTqStore, _logger:logging.Logger) -> None:
     its.list_sources()
@@ -205,6 +206,27 @@ def iq_clean(its: IcoTqStore, _logger:logging.Logger, param:str=""):
     if param == "" or "pdf" in param:
         its.check_clean(dry_run=False)
 
+def iq_plot(its: IcoTqStore, _logger:logging.Logger, param:str=""):
+    if its.pca_matrix is None:
+        print("No PCA data available, please index first")
+        return
+    pca_data = its.pca_matrix.numpy()
+    labels = []
+    for entry in its.lib:
+        label = entry['desc_filename'].split('/')[-1]
+        labels.append(label)
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    # Create scatter, label each point with labels[index]:
+    ax.scatter(pca_data[:, 0], pca_data[:, 1], pca_data[:, 2], c='b', marker='o')
+
+    for index, (x, y, z) in enumerate(pca_data):
+        ax.text(x, y, z, labels[index], fontsize=8)
+
+    plt.show()
+    
+
 def iq_help(parser:argparse.ArgumentParser, valid_actions:list[tuple[str, str]]):
     parser.print_help()
     print()
@@ -224,6 +246,7 @@ def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
                                             ('search', "Search for keywords given as repl argument or with '-k <keywords>' option. You need to 'sync' and 'index' first"),
                                             ('check', "Verify consistency of data references and indices. Use 'clean' to apply actions."),
                                             ('clean', "Repair consistency of data references and indices. Remove debris. Use 'check' first for dry-run."),
+                                            ('plot', "Plot the 3d pca data"),
                                             ('help', 'Display usage information')]
     parser: ArgumentParser = argparse.ArgumentParser(description="IcoTq")
     _ = parser.add_argument(
@@ -277,6 +300,8 @@ def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
             iq_check(its, logger, param)
         if 'clean' in actions:
             iq_clean(its, logger, param)
+        if 'plot' in actions:
+            iq_plot(its, logger, param)
         if cast(bool, args.non_interactive) is True:
             break
         if first is True:
