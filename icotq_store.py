@@ -1117,7 +1117,14 @@ class IcoTqStore:
                         existing_entry = lib_map.get(desc_path)
                         needs_update = False
                         create_icon:bool = False
-                        if existing_entry is not None and existing_entry['icon'] != icon and existing_entry['icon'] != "":
+                        if existing_entry is not None and 'icon' not in existing_entry:
+                            existing_entry['icon'] = ""
+                            needs_update = True
+                            create_icon = True
+                        if existing_entry is not None and icon=="" and existing_entry['icon'] == "":
+                            create_icon = True
+                            needs_update = True
+                        if existing_entry is None and icon == "":
                             create_icon = True
                             needs_update = True
 
@@ -1138,17 +1145,21 @@ class IcoTqStore:
 
                             if icon != existing_entry.get('icon'):
                                 self.log.info(f"Updating icon for {desc_path}")
-                                needs_update = True
+                                # needs_update = True
                                 existing_entry['icon'] = icon
+                                lib_changed = True
+                                # old_pointers_to_collect = existing_entry.get('emb_ptrs', {}).copy()
                             if current_text is not None and existing_entry.get('text') != current_text:
                                 self.log.info(f"Updating text for {desc_path}")
                                 needs_update = True
-                                old_pointers_to_collect = existing_entry.get('emb_ptrs', {}).copy()
+                                if old_pointers_to_collect == {}:
+                                    old_pointers_to_collect = existing_entry.get('emb_ptrs', {}).copy()
                                 existing_entry['text'] = current_text
                             elif current_text is None: #  and existing_entry.get('text') is not None:
                                 self.log.warning(f"Text unreadable for {desc_path}. Clearing.")
                                 needs_update = True
-                                old_pointers_to_collect = existing_entry.get('emb_ptrs', {}).copy()
+                                if old_pointers_to_collect == {}:
+                                    old_pointers_to_collect = existing_entry.get('emb_ptrs', {}).copy()
                                 existing_entry['text'] = ""
 
                             if needs_update:
