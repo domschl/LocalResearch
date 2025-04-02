@@ -10,6 +10,7 @@ dependencies = [
     "einops>=0.8.1",
     "matplotlib>=3.10.1",
     "mcp[cli]>=1.4.1",
+    "pillow>=11.1.0",
     "pymupdf>=1.25.3",
     "pymupdf4llm>=0.0.17",
     "rich>=13.9.4",

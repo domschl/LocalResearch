@@ -8,12 +8,16 @@ import threading
 import tempfile
 import traceback
 from contextlib import contextmanager
+import base64
+import io
+from PIL import Image, ImageDraw, ImageFont
+import re
 
 import torch
 from sentence_transformers import SentenceTransformer
 
 # Keep TypedDict, cast, NotRequired, Any, Generator for now
-from typing import TypedDict, NotRequired, Any, cast
+from typing import TypedDict, NotRequired, Any, cast, Literal
 from collections.abc import Generator
 import pymupdf  # pyright: ignore[reportMissingTypeStubs]
 
@@ -44,6 +48,7 @@ class LibEntry(TypedDict):
     source_name: str
     filename: str
     desc_filename: str
+    icon: str
     text: str
     emb_ptrs: dict[str, tuple[int, int]]
 
@@ -54,6 +59,7 @@ class PDFIndex(TypedDict):
 
 class SearchRequest(TypedDict):
     search_text: str
+    search_type: str  # "doc" or "chunk"
     max_results: NotRequired[int]
     yellow_liner: NotRequired[bool]
     context_length: NotRequired[int]
@@ -65,6 +71,7 @@ class SearchResult(TypedDict):
     index: int
     offset: int
     desc: str
+    icon: str
     text: str
     chunk: str
     yellow_liner: np.typing.NDArray[np.float32] | None
@@ -150,6 +157,8 @@ class IcoTqStore:
         self.embeddings_path: str = ""
         self.pdf_cache_path: str = "" # Added type hint
         self.model_list: list[EmbeddingsModel] = [] # Changed from List[EmbeddingsModel]
+        self.icon_width:int = 240
+        self.icon_height:int = 320
 
         # --- Concurrency Control ---
         self._lock: threading.Lock = threading.Lock()
@@ -1050,6 +1059,9 @@ class IcoTqStore:
                     break
                 source_path = source['path']
                 self.log.info(f"Scanning source '{source['name']}' at '{source_path}'...")
+                is_calibre: bool = False
+                if source['tqtype'] == 'calibre_library':
+                    is_calibre = True
 
                 for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: self.log.warning(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
                     if abort_scan: 
@@ -1094,12 +1106,40 @@ class IcoTqStore:
                             self.log.error(f"Error reading {full_path}: {e}.")
                             continue
 
+                        icon:str = ""
+                        if is_calibre is True:
+                            calibre_icon_path = os.path.join(root, 'cover.jpg')
+                            if os.path.exists(calibre_icon_path):
+                                icon = IcoTqStore._encode_image_to_base64(calibre_icon_path, self.icon_width, self.icon_height)
+                            else:
+                                self.log.warning(f"Calibre icon file {calibre_icon_path} not found.")
+
                         existing_entry = lib_map.get(desc_path)
+                        needs_update = False
+                        create_icon:bool = False
+                        if existing_entry is not None and existing_entry['icon'] != icon and existing_entry['icon'] != "":
+                            create_icon = True
+                            needs_update = True
+
+                        if create_icon is True and icon == "" and current_text is not None:
+                            is_markdown = ext == 'md'
+                            icon = IcoTqStore._generate_icon_from_text(current_text, is_markdown, self.icon_width, self.icon_height)
+                            needs_update = True
+                        else:
+                            if existing_entry is not None and existing_entry['icon'] != "" and icon == "":
+                                icon = existing_entry['icon']
+                                
+                        if icon == "":
+                            self.log.warning(f"Icon for {desc_path} Not created!")
+
                         if existing_entry:
                             # Update handling
-                            needs_update = False
                             old_pointers_to_collect: dict[str, tuple[int, int]] = {}
 
+                            if icon != existing_entry.get('icon'):
+                                self.log.info(f"Updating icon for {desc_path}")
+                                needs_update = True
+                                existing_entry['icon'] = icon
                             if current_text is not None and existing_entry.get('text') != current_text:
                                 self.log.info(f"Updating text for {desc_path}")
                                 needs_update = True
@@ -1133,7 +1173,7 @@ class IcoTqStore:
                         elif current_text is not None:
                             # Add handling
                             self.log.info(f"Adding new entry for {desc_path}")
-                            entry: LibEntry = LibEntry({'source_name': source['name'], 'desc_filename': desc_path, 'filename': full_path, 'text': current_text, 'emb_ptrs': {}})
+                            entry: LibEntry = LibEntry({'source_name': source['name'], 'desc_filename': desc_path, 'filename': full_path, 'text': current_text, 'emb_ptrs': {}, 'icon': icon})
                             new_lib.append(entry)
                             lib_changed = True
                         else:
@@ -1952,7 +1992,7 @@ class IcoTqStore:
                          except IcotqError as yl_e:
                              self.log.error(f"Failed to generate yellow-liner for '{desc}': {yl_e}")
 
-                    sres: SearchResult = {'cosine': cosine, 'index': start_tensor_idx, 'offset': offset_in_entry, 'desc': desc, 'chunk': chunk_text, 'text': entry['text'], 'yellow_liner': yellow_liner_weights}
+                    sres: SearchResult = {'cosine': cosine, 'index': start_tensor_idx, 'offset': offset_in_entry, 'desc': desc, 'chunk': chunk_text, 'text': entry['text'], 'yellow_liner': yellow_liner_weights, 'icon': entry['icon']}
                     search_results_final.append(sres)
                 return search_results_final
 
@@ -1965,6 +2005,210 @@ class IcoTqStore:
 
 
     # === Static Utility Methods ===
+
+    @staticmethod
+    def _encode_image_to_base64(image_path: str, width: int | None = None, height: int | None = None) -> str:
+        """
+        Encode an image file to a base64 string for JSON serialization,
+        with optional resizing.
+        
+        Args:
+            image_path: Path to the image file (JPG or PNG)
+            width: Optional target width to resize the image
+            height: Optional target height to resize the image
+            
+        Returns:
+            Base64 encoded string representation of the image
+        """
+        from PIL import Image
+        import io
+        import base64
+        
+        # Open the image with PIL
+        with Image.open(image_path) as img:
+            # Resize if width and/or height is specified
+            if width is not None or height is not None:
+                # Calculate new dimensions while maintaining aspect ratio if only one dimension is specified
+                if width is None:
+                    # Maintain aspect ratio based on height
+                    aspect_ratio = img.width / img.height
+                    if height is not None:
+                        width = int(height * aspect_ratio)
+                    else:
+                        raise ValueError("Both width and height cannot be None")
+                elif height is None:
+                    # Maintain aspect ratio based on width
+                    aspect_ratio = img.height / img.width
+                    height = int(width * aspect_ratio)
+                
+                # Resize the image
+                img = img.resize((width, height), Image.LANCZOS)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
+            
+            # Save to BytesIO buffer in the original format
+            buffer = io.BytesIO()
+            img_format = img.format if img.format else 'PNG'
+            img.save(buffer, format=img_format)
+            _ = buffer.seek(0)
+            
+            # Encode to base64
+            # encoded_string = base64.b64encode(buffer.getvalue()).decode('utf-8')
+            encoded_string = base64.standard_b64encode(buffer.getvalue()).decode('ascii')
+
+        return encoded_string
+
+    @staticmethod
+    def decode_base64_to_image(
+        base64_string: str, 
+        output_format: Literal["jpg", "png"] = "png",
+        output_path: str | None = None
+    ) -> bytes | str:
+        """
+        Decode a base64 string to an image.
+        
+        Args:
+            base64_string: Base64 encoded image string
+            output_format: Desired output format ("jpg" or "png")
+            output_path: Optional path to save the image. If not provided, returns bytes.
+            
+        Returns:
+            If output_path is provided, returns the path. Otherwise, returns image bytes.
+        """
+        image_data = base64.standard_b64decode(base64_string)
+        image = Image.open(io.BytesIO(image_data))
+        
+        if output_format.lower() not in ["jpg", "png"]:
+            raise ValueError("Output format must be 'jpg' or 'png'")
+        
+        output_format_pil = "JPEG" if output_format.lower() == "jpg" else "PNG"
+        
+        if output_path:
+            image.save(output_path, format=output_format_pil)
+            return output_path
+        
+        # Return bytes if no output path
+        img_byte_arr = io.BytesIO()
+        image.save(img_byte_arr, format=output_format_pil)
+        return img_byte_arr.getvalue()
+
+    @staticmethod
+    def decode_base64_for_terminal(base64_string: str, output_format: str = "png") -> str:
+        """
+        Process a base64 image string for terminal display protocols (like Kitty)
+        
+        Args:
+            base64_string: The base64 encoded image
+            output_format: The desired output format
+            
+        Returns:
+            A properly formatted base64 string ready for terminal graphics protocols
+        """
+        # For Kitty graphics protocol we can just use the base64 string directly
+        # Optionally convert format if needed using PIL and re-encoding
+        if output_format.lower() not in ["jpg", "png"]:
+            # For format conversion, decode and re-encode
+            image_data = base64.standard_b64decode(base64_string)
+            image = Image.open(io.BytesIO(image_data))
+            
+            output_format_pil = "JPEG" if output_format.lower() == "jpg" else "PNG"
+            img_byte_arr = io.BytesIO()
+            image.save(img_byte_arr, format=output_format_pil)
+            
+            return base64.standard_b64encode(img_byte_arr.getvalue()).decode('ascii')
+            #return base64.b64encode(img_byte_arr.getvalue()).decode('ascii')
+        
+        return base64_string
+
+    @staticmethod
+    def _generate_icon_from_text(text: str, is_markdown: bool = False, width: int = 200, height: int = 200) -> str:
+        """
+        Generate an icon image from text or markdown content, encoded as base64.
+        
+        Args:
+            text: The text or markdown content to render
+            is_markdown: Whether the input is markdown (default: False)
+            size: Size of the generated square icon in pixels (default: 200)
+            
+        Returns:
+            Base64 encoded string of the generated icon image
+        """
+        
+        # Extract the first few lines for the icon
+        lines = text.split('\n')
+        preview_text = '\n'.join(lines[:10])  # Take first 10 lines
+        
+        # For markdown, do some basic cleanup
+        if is_markdown:
+            # Remove markdown formatting for simplicity
+            preview_text = re.sub(r'#+ ', '', preview_text)  # Remove headers
+            preview_text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', preview_text)  # Remove links
+            preview_text = re.sub(r'[*_]{1,2}([^*_]+)[*_]{1,2}', r'\1', preview_text)  # Remove formatting
+            preview_text = re.sub(r'`([^`]+)`', r'\1', preview_text)  # Remove code blocks
+        
+        # Create a new image with light background
+        background_color = (245, 245, 250)  # Light blue-gray
+        image = Image.new('RGB', (width, height), color=background_color)
+        draw = ImageDraw.Draw(image)
+        
+        # Add a document border
+        border_color = (100, 120, 180)  # Blue-gray border
+        draw.rectangle([(5, 5), (width-6, height-6)], outline=border_color, width=2)
+        
+        # Try to get a nice font
+        font_size = max(10, int(width/20))
+        try:
+            # Try system fonts in order of preference
+            for font_name in ["Arial", "Helvetica", "DejaVuSans", "FreeSans", "Liberation Sans"]:
+                try:
+                    font = ImageFont.truetype(font_name, font_size)
+                    break
+                except IOError:
+                    continue
+            else:
+                font = ImageFont.load_default()
+        except Exception:
+            font = ImageFont.load_default()
+        
+        # Add text to the image
+        margin = int(width * 0.1)
+        y_position = margin
+        text_color = (20, 20, 60)  # Dark blue-gray text
+        
+        # Process each line
+        for line in preview_text.split('\n')[:int(height/20)]:
+            # Truncate long lines
+            max_chars = int(height / (font_size * 0.6))
+            if len(line) > max_chars:
+                line = line[:max_chars-3] + "..."
+            
+            # Draw text with compatible method for all PIL versions
+            draw.text((margin, y_position), line, fill=text_color, font=font)
+            
+            # Move to next line position
+            try:
+                # For newer PIL versions
+                _, text_height = draw.textbbox((0, 0), line, font=font)[2:]
+                y_position += text_height + int(font_size * 0.3)
+            except AttributeError:
+                # Fallback for older PIL versions
+                y_position += int(font_size * 1.2)
+            
+            # Stop if we're running out of space
+            if y_position > height - margin:
+                break
+        
+        # Save image to a temporary file
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
+            temp_path = tmp_file.name
+            image.save(temp_path, format='PNG')
+        
+        try:
+            # Use the existing encode method from IcoTqStore
+            encoded_string = IcoTqStore._encode_image_to_base64(temp_path, width, height)
+            return encoded_string
+        finally:
+            # Clean up temporary file
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
 
     @staticmethod
     def get_chunk_ptr(index: int, chunk_size: int, chunk_overlap: int) -> int:
