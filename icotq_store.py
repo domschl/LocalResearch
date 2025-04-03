@@ -344,14 +344,6 @@ class IcoTqStore:
                 'chunk_size': 2048,
                 'chunk_overlap': 2048 // 3
             },
-            { # nomic-v1.5
-                'model_hf_name': 'nomic-ai/nomic-embed-text-v1.5',
-                'model_name': 'nomic-embed-text-v1.5',
-                'emb_dim': 768, 
-                'max_input_token': 2048,
-                'chunk_size': 4096, 
-                'chunk_overlap': 4096 // 3
-            },
             { # all-MiniLM-L6-v2 (Added for testing)
                 'model_hf_name': 'sentence-transformers/all-MiniLM-L6-v2',
                 'model_name': 'all-MiniLM-L6-v2',
