@@ -1,10 +1,13 @@
 import logging
 import os
+import sys
 import argparse
 from argparse import ArgumentParser
 from rich.console import Console
 from icotq_store import IcoTqStore, SearchResult
-from typing import cast, TypedDict
+from typing import cast, TypedDict, Any
+import matplotlib.pyplot as plt
+import numpy as np
 
 def iq_info(its: IcoTqStore, _logger:logging.Logger) -> None:
     its.list_sources()
@@ -139,6 +142,28 @@ def iq_select(its: IcoTqStore, _logger:logging.Logger, model_id:str):
     print()
     print("Use 'list models' for list of available models (from config/model_list.json), update current model's index with 'index'")
 
+def serialize_gr_command(**cmd: Any):  # pyright: ignore[reportExplicitAny, reportAny]
+    payload: bytes = cast(bytes, cmd.pop('payload', None))
+    cmd_str: str = ','.join(f'{k}={v}' for k, v in cmd.items())  # pyright: ignore[reportAny]
+    ans: list[bytes] = []
+    w = ans.append
+    w(b'\033_G')
+    w(cmd_str.encode('ascii'))
+    if payload:
+        w(b';')
+        w(payload)
+    w(b'\033\\')
+    return b''.join(ans)
+
+def write_chunked(**cmd: Any):  # pyright: ignore[reportExplicitAny, reportAny]
+    data: bytes = cmd.pop('data')
+    while data:
+        chunk, data = data[:4096], data[4096:]
+        m = 1 if data else 0
+        _ = sys.stdout.buffer.write(serialize_gr_command(payload=chunk, m=m, **cmd))
+        _ = sys.stdout.flush()
+        cmd.clear()
+
 def iq_list(its: IcoTqStore, _logger:logging.Logger, param:str):
     sub_params = param.split(' ')
     if param == 'models':
@@ -181,7 +206,7 @@ def iq_list(its: IcoTqStore, _logger:logging.Logger, param:str):
                     cnt += 1
             print(f"{ind+1}: {source['name']} at {source['path']} ({source['tqtype']}), {cnt} docs")
         print("\nUse 'list models' for the current index status, use 'sync' to synchronized new or changed documents.")
-    elif sub_params[0] == 'docs':
+    elif sub_params[0] == 'docs':            
         for ind, entry in enumerate(its.lib):
             found:bool = False
             if len(sub_params) == 1:
@@ -193,6 +218,13 @@ def iq_list(its: IcoTqStore, _logger:logging.Logger, param:str):
                         found = False
                         break
             if found is True:
+                if entry['icon'] != '':
+                    if os.environ.get('TERM', '').startswith('xterm-kitty'):
+                        write_chunked(a='T', f=100, data=entry['icon'].encode('utf-8'))
+                    else:
+                        print("Terminal has no graphics support")
+                else:
+                    print("<no icon>")
                 print(f"{ind+1} {entry['desc_filename']}")
     else:
         print("Usage either 'list models', 'list sources', or 'list docs'.")
@@ -204,6 +236,27 @@ def iq_check(its: IcoTqStore, _logger:logging.Logger, param:str=""):
 def iq_clean(its: IcoTqStore, _logger:logging.Logger, param:str=""):
     if param == "" or "pdf" in param:
         its.check_clean(dry_run=False)
+
+def iq_plot(its: IcoTqStore, _logger:logging.Logger, _param:str=""):
+    if its.pca_matrix is None:
+        print("No PCA data available, please index first")
+        return
+    pca_data: np.typing.NDArray[np.float32] = its.pca_matrix.numpy()  # pyright: ignore[reportUnknownMemberType]
+    labels: list[str] = []
+    for entry in its.lib:
+        label = entry['desc_filename'].split('/')[-1]
+        labels.append(label)
+
+    fig = plt.figure()  # pyright:ignore[reportUnknownMemberType]
+    ax = fig.add_subplot(111, projection='3d')  # pyright:ignore[reportUnknownMemberType]
+    # Create scatter, label each point with labels[index]:
+    _ = ax.scatter(pca_data[:, 0], pca_data[:, 1], pca_data[:, 2], c='b', marker='o')  # pyright:ignore[reportUnknownMemberType]
+
+    for index, (x, y, z) in enumerate(pca_data):  # pyright:ignore[reportAny]
+        ax.text(x, y, z, s=labels[index], fontsize=8)  # pyright:ignore[reportCallIssue, reportUnknownMemberType]
+
+    plt.show()  # pyright:ignore[reportUnknownMemberType]
+    
 
 def iq_help(parser:argparse.ArgumentParser, valid_actions:list[tuple[str, str]]):
     parser.print_help()
@@ -224,6 +277,7 @@ def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
                                             ('search', "Search for keywords given as repl argument or with '-k <keywords>' option. You need to 'sync' and 'index' first"),
                                             ('check', "Verify consistency of data references and indices. Use 'clean' to apply actions."),
                                             ('clean', "Repair consistency of data references and indices. Remove debris. Use 'check' first for dry-run."),
+                                            ('plot', "Plot the 3d pca data"),
                                             ('help', 'Display usage information')]
     parser: ArgumentParser = argparse.ArgumentParser(description="IcoTq")
     _ = parser.add_argument(
@@ -277,6 +331,8 @@ def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
             iq_check(its, logger, param)
         if 'clean' in actions:
             iq_clean(its, logger, param)
+        if 'plot' in actions:
+            iq_plot(its, logger, param)
         if cast(bool, args.non_interactive) is True:
             break
         if first is True:

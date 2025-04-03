@@ -4,19 +4,20 @@ import json
 import uuid
 import time
 import numpy as np
-import aiohttp
-import aiohttp.web
-import asyncio
 import threading
 import tempfile
 import traceback
 from contextlib import contextmanager
+import base64
+import io
+from PIL import Image, ImageDraw, ImageFont
+import re
 
 import torch
 from sentence_transformers import SentenceTransformer
 
 # Keep TypedDict, cast, NotRequired, Any, Generator for now
-from typing import TypedDict, NotRequired, Any
+from typing import TypedDict, NotRequired, Any, cast, Literal
 from collections.abc import Generator
 import pymupdf  # pyright: ignore[reportMissingTypeStubs]
 
@@ -25,6 +26,8 @@ try:
     PYMUPDF4LLM_AVAILABLE:bool = True
 except ImportError:
     PYMUPDF4LLM_AVAILABLE = False  # pyright: ignore[reportConstantRedefinition]
+
+from sklearn.decomposition import PCA  # pyright: ignore[reportMissingTypeStubs]
 
 
 class TqSource(TypedDict):
@@ -45,6 +48,7 @@ class LibEntry(TypedDict):
     source_name: str
     filename: str
     desc_filename: str
+    icon: str
     text: str
     emb_ptrs: dict[str, tuple[int, int]]
 
@@ -55,6 +59,7 @@ class PDFIndex(TypedDict):
 
 class SearchRequest(TypedDict):
     search_text: str
+    search_type: str  # "doc" or "chunk"
     max_results: NotRequired[int]
     yellow_liner: NotRequired[bool]
     context_length: NotRequired[int]
@@ -66,9 +71,10 @@ class SearchResult(TypedDict):
     index: int
     offset: int
     desc: str
+    icon: str
     text: str
     chunk: str
-    yellow_liner: np.typing.NDArray[np.float32] | None # Changed from Optional[...]
+    yellow_liner: np.typing.NDArray[np.float32] | None
 
 class EmbeddingsModel(TypedDict):
     model_hf_name: str
@@ -102,7 +108,7 @@ class IcotqConfigurationError(IcotqError):
 
 class IcoTqStore:
     # Accept config_file_override: str | None
-    def __init__(self, config_file_override: str | None = None) -> None:
+    def __init__(self, config_file_override: str | None = None, config_path_override: str | None = None) -> None:
         self.log:logging.Logger = logging.getLogger("IcoTqStore")
         # Disable log spam
         tmp = logging.getLogger("transformers_modules")
@@ -117,39 +123,45 @@ class IcoTqStore:
 
         # Determine config file path
         self.config_file: str
+        self.config_path: str
         if config_file_override:
             self.config_file = config_file_override
             self.log.info(f"Using overridden config file path: {self.config_file}")
         else:
-            config_path = os.path.expanduser("~/IcoTqStore/config")
-            if not os.path.isdir(config_path):
+            if config_path_override is None:
+                self.config_path = os.path.expanduser("~/IcoTqStore/config")
+            else:
+                if os.path.isdir(config_path_override) is False:
+                    self.log.error(f"Config path override {config_path_override} doesn't exist!")
+                    raise IcotqConfigurationError(f"`config_path_override` must be an existing directory or None")
+                self.config_path = config_path_override
+            if not os.path.isdir(self.config_path):
                 try:
-                    os.makedirs(config_path)
+                    os.makedirs(self.config_path)
                 except OSError as e:
-                    self.log.error(f"Failed to create default config directory {config_path}: {e}")
-            self.config_file = os.path.join(config_path, "icoqt.json")
+                    self.log.error(f"Failed to create default config directory {self.config_path}: {e}")
+            self.config_file = os.path.join(self.config_path, "icotq.json")
             self.log.info(f"Using default config file path: {self.config_file}")
 
         # --- Core State ---
         self.lib: list[LibEntry] = [] # Changed from List[LibEntry]
         self.pdf_index:dict[str, PDFIndex] = {}
         self.config:IcotqConfig
-        self.current_model: EmbeddingsModel | None = None # Changed from Optional[...]
-        self.engine: SentenceTransformer | None = None # Changed from Optional[...]
-        self.device: str | None = None # Changed from Optional[...]
-        self.embeddings_matrix: torch.Tensor | None = None # Changed from Optional[...]
+        self.current_model: EmbeddingsModel | None = None
+        self.engine: SentenceTransformer | None = None
+        self.device: str | None = None
+        self.embeddings_matrix: torch.Tensor | None = None
+        self.doc_embeddings_matrix: torch.Tensor | None = None
+        self.pca_matrix: torch.Tensor | None = None # Changed Optional
         self.root_path:str = ""
         self.embeddings_path: str = ""
         self.pdf_cache_path: str = "" # Added type hint
         self.model_list: list[EmbeddingsModel] = [] # Changed from List[EmbeddingsModel]
+        self.icon_width:int = 240
+        self.icon_height:int = 320
 
         # --- Concurrency Control ---
         self._lock: threading.Lock = threading.Lock()
-
-        # --- Server State ---
-        self.server_running:bool = False
-        self.loop:asyncio.AbstractEventLoop | None = None # Changed from Optional[...]
-        self.server_thread:threading.Thread | None = None # Changed from Optional[...]
 
         self._load_or_init_config()
         self._validate_config_paths()
@@ -163,13 +175,18 @@ class IcoTqStore:
                     _ = self._load_model_internal(self.config['embeddings_model_name'],
                                             self.config['embeddings_device'],
                                             self.config['embeddings_model_trust_code'])
+                    # _ = self._calculate_doc_embeddings_internal(model_name=self.config['embeddings_model_name'], calc_3d=True)
                 except IcotqError as e:
                     self.log.error(f"Failed to load initial model specified in config: {e}")
+
+            if self.current_model is None:
+                self.log.warning("No model loaded. Please use 'load_model' to load a model.")
 
             self._read_library_internal()
             if self.current_model:
                 try:
                     _ = self._load_tensor_internal(model_name=self.current_model['model_name'])
+                    _ = self._calculate_doc_embeddings_internal(model_name=self.current_model['model_name'], calc_3d=True)
                 except IcotqConsistencyError as e:
                     self.log.error(f"Consistency Error loading tensor for initial model '{self.current_model['model_name']}': {e}")
                     if self.config.get('auto_fix_inconsistency', False):
@@ -178,6 +195,7 @@ class IcoTqStore:
                             self._generate_embeddings_internal(purge=True, model_name_override=self.current_model['model_name'])
                             self.log.info(f"Automatic re-index for '{self.current_model['model_name']}' completed.")
                             _ = self._load_tensor_internal(model_name=self.current_model['model_name'])
+                            _ = self._calculate_doc_embeddings_internal(model_name=self.current_model['model_name'], calc_3d=True)
                         except IcotqError as fix_e:
                             self.log.error(f"Automatic fix failed for model '{self.current_model['model_name']}': {fix_e}")
                             self.embeddings_matrix = None
@@ -243,6 +261,7 @@ class IcoTqStore:
     def _validate_config_paths(self):
         """Validates paths and sources in the configuration."""
         self.root_path = os.path.expanduser(self.config['icotq_path'])
+        self.config_path = os.path.join(self.root_path, "config")
         if not self.root_path:
              raise IcotqConfigurationError("`icotq_path` cannot be empty in configuration.")
 
@@ -277,7 +296,7 @@ class IcoTqStore:
 
     def _load_or_init_model_list(self):
         """Loads the list of known embedding models or creates a default."""
-        model_list_path = os.path.join(self.root_path, "model_list.json")
+        model_list_path = os.path.join(self.config_path, "model_list.json")
         if os.path.exists(model_list_path):
             try:
                 with open(model_list_path, 'r') as f:
@@ -324,14 +343,6 @@ class IcoTqStore:
                 'max_input_token': 512,
                 'chunk_size': 2048,
                 'chunk_overlap': 2048 // 3
-            },
-            { # nomic-v1.5
-                'model_hf_name': 'nomic-ai/nomic-embed-text-v1.5',
-                'model_name': 'nomic-embed-text-v1.5',
-                'emb_dim': 768, 
-                'max_input_token': 2048,
-                'chunk_size': 4096, 
-                'chunk_overlap': 4096 // 3
             },
             { # all-MiniLM-L6-v2 (Added for testing)
                 'model_hf_name': 'sentence-transformers/all-MiniLM-L6-v2',
@@ -567,6 +578,49 @@ class IcoTqStore:
 
         return loaded_tensor is not None
 
+    def _calculate_doc_embeddings_internal(self, model_name: str | None = None, calc_3d:bool = False) -> bool:
+        if self.doc_embeddings_matrix is not None:
+            del self.doc_embeddings_matrix
+            self.doc_embeddings_matrix = None
+
+        if self.embeddings_matrix is None:
+            self.log.error(f"Cannot calculate document embeddings: No embeddings matrix loaded for model '{model_name}'.")
+            return False
+
+        if model_name is None and self.current_model is not None:
+            model_name = self.current_model['model_name']
+
+        if self.current_model is None or model_name != self.current_model['model_name']:
+            self.log.error(f"Cannot calculate document embeddings: Model '{model_name}' is not currently loaded.")
+
+        self.log.info(f"Calculating document embeddings for model '{model_name}'")
+        for entry in self.lib:
+            if model_name in entry['emb_ptrs']:
+                # Get the tensor-slice from emb_ptrs:
+                emb_ptrs = entry['emb_ptrs'][model_name]
+                start, length = emb_ptrs[0], emb_ptrs[1]
+                doc_embeddings: torch.Tensor = self.embeddings_matrix[start:start + length, :]
+                # Calculate the mean of the embeddings
+                doc_mean = torch.mean(doc_embeddings, dim=0).reshape(1, -1)
+                if self.doc_embeddings_matrix is None:
+                    self.doc_embeddings_matrix = doc_mean
+                else:
+                    self.doc_embeddings_matrix = torch.cat([self.doc_embeddings_matrix, doc_mean], dim=0)  # pyright:ignore[reportUnknownMemberType]
+                # self.log.info(f"Document embeddings for '{entry['desc_filename']}' calculated, shape {self.doc_embeddings_matrix.shape}.")
+
+        if self.doc_embeddings_matrix is None:  # pyright:ignore[reportUnknownMemberType]
+            self.log.error(f"Failed to calculate document embeddings for model '{model_name}'. No entries found.")
+            return False
+
+        if calc_3d is True:
+            # Calculate PCA for 3D visualization
+            self.log.info("Calculating PCA for 3D visualization of document embeddings.")
+            pca = PCA(n_components=3)
+            local_doc_emb: np.typing.NDArray[np.float32]= self.doc_embeddings_matrix.cpu().numpy()  # pyright:ignore[reportUnknownVariableType, reportUnknownMemberType]
+            pca_result: np.typing.NDArray[np.float32] = cast(np.typing.NDArray[np.float32], pca.fit_transform(local_doc_emb))  # pyright:ignore[reportUnknownMemberType]
+            self.log.info(f"PCA result shape: {pca_result.shape}")
+            self.pca_matrix = torch.tensor(pca_result)
+        return True
 
     def _save_config_internal(self):
         """Saves config atomically. Assumes lock is held."""
@@ -847,36 +901,39 @@ class IcoTqStore:
             try:
                 loaded_model_def = self._load_model_internal(name, device, trust_remote_code)
                 if loaded_model_def:
-                     try:
-                         _ = self._load_tensor_internal(loaded_model_def['model_name'])
-                     except IcotqConsistencyError as e:
-                         self.log.error(f"Consistency Error loading tensor for new model '{name}': {e}")
-                         if self.config.get('auto_fix_inconsistency', False):
-                             self.log.warning(f"Attempting automatic fix (re-index) for model '{name}'.")
-                             try:
-                                 self._generate_embeddings_internal(purge=True, model_name_override=name)
-                                 self.log.info(f"Automatic re-index for '{name}' completed.")
-                                 _ = self._load_tensor_internal(name)
-                             except IcotqError as fix_e:
-                                 self.log.error(f"Automatic fix failed for model '{name}': {fix_e}")
-                                 self.embeddings_matrix = None
-                                 self.log.critical(f"Model '{name}' loaded, but embeddings are inconsistent and could not be fixed automatically. Manual 'index purge' required.")
-                         else:
-                             self.log.warning("Automatic fixing is disabled. Embeddings for this model are inconsistent. Manual 'index purge' may be required.")
-                             self.embeddings_matrix = None
-                     except IcotqCriticalError as e:
-                          self.log.error(f"Critical Error loading tensor for model '{name}': {e}")
-                          self.embeddings_matrix = None
-                          self.log.critical(f"Model '{name}' loaded, but its embeddings tensor is corrupt or unreadable. Indexing needed.")
-                     except IcotqError as e:
-                          self.log.error(f"Error loading tensor for model '{name}': {e}")
-                          self.embeddings_matrix = None
+                    try:
+                        _ = self._load_tensor_internal(loaded_model_def['model_name'])
+                    except IcotqConsistencyError as e:
+                        self.log.error(f"Consistency Error loading tensor for new model '{name}': {e}")
+                        if self.config.get('auto_fix_inconsistency', False):
+                            self.log.warning(f"Attempting automatic fix (re-index) for model '{name}'.")
+                            try:
+                                self._generate_embeddings_internal(purge=True, model_name_override=name)
+                                self.log.info(f"Automatic re-index for '{name}' completed.")
+                                _ = self._load_tensor_internal(name)
+                            except IcotqError as fix_e:
+                                self.log.error(f"Automatic fix failed for model '{name}': {fix_e}")
+                                self.embeddings_matrix = None
+                                self.log.critical(f"Model '{name}' loaded, but embeddings are inconsistent and could not be fixed automatically. Manual 'index purge' required.")
+                        else:
+                            self.log.warning("Automatic fixing is disabled. Embeddings for this model are inconsistent. Manual 'index purge' may be required.")
+                            self.embeddings_matrix = None
+                    except IcotqCriticalError as e:
+                        self.log.error(f"Critical Error loading tensor for model '{name}': {e}")
+                        self.embeddings_matrix = None
+                        self.log.critical(f"Model '{name}' loaded, but its embeddings tensor is corrupt or unreadable. Indexing needed.")
+                    except IcotqError as e:
+                        self.log.error(f"Error loading tensor for model '{name}': {e}")
+                        self.embeddings_matrix = None
 
-                     self.config['embeddings_model_name'] = name
-                     self.config['embeddings_device'] = device
-                     self.config['embeddings_model_trust_code'] = trust_remote_code
-                     self._save_config_internal()
-                     return True
+                    # calculate doc embeddings if requested
+                    _ = self._calculate_doc_embeddings_internal(name, calc_3d=True)
+
+                    self.config['embeddings_model_name'] = name
+                    self.config['embeddings_device'] = device
+                    self.config['embeddings_model_trust_code'] = trust_remote_code
+                    self._save_config_internal()
+                    return True
                 else:
                     return False
 
@@ -906,7 +963,7 @@ class IcoTqStore:
                 break
 
         if not selected_model:
-            raise IcotqConfigurationError(f"Model '{name}' is unknown, not found in model_list.json")
+            raise IcotqConfigurationError(f"Model '{name}' is unknown, not found in {self.config_path}/model_list.json")
 
         hf_name = selected_model['model_hf_name']
         resolved_device = self.resolve_device(device_str)
@@ -918,7 +975,7 @@ class IcoTqStore:
 
         try:
             # --- Load New Engine ---
-            engine = SentenceTransformer(hf_name, trust_remote_code=trust_remote_code)
+            engine = SentenceTransformer(hf_name, trust_remote_code=trust_remote_code)  # pyright:ignore[reportCallIssue]
             engine = engine.to(target_torch_device)
 
             # --- Update State (Engine, Device, Current Model) ---
@@ -994,6 +1051,9 @@ class IcoTqStore:
                     break
                 source_path = source['path']
                 self.log.info(f"Scanning source '{source['name']}' at '{source_path}'...")
+                is_calibre: bool = False
+                if source['tqtype'] == 'calibre_library':
+                    is_calibre = True
 
                 for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: self.log.warning(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
                     if abort_scan: 
@@ -1038,21 +1098,60 @@ class IcoTqStore:
                             self.log.error(f"Error reading {full_path}: {e}.")
                             continue
 
+                        icon:str = ""
+                        if is_calibre is True:
+                            calibre_icon_path = os.path.join(root, 'cover.jpg')
+                            if os.path.exists(calibre_icon_path):
+                                icon = IcoTqStore._encode_image_to_base64(calibre_icon_path, self.icon_width, self.icon_height)
+                            else:
+                                self.log.warning(f"Calibre icon file {calibre_icon_path} not found.")
+
                         existing_entry = lib_map.get(desc_path)
+                        needs_update = False
+                        create_icon:bool = False
+                        if existing_entry is not None and 'icon' not in existing_entry:
+                            existing_entry['icon'] = ""
+                            needs_update = True
+                            create_icon = True
+                        if existing_entry is not None and icon=="" and existing_entry['icon'] == "":
+                            create_icon = True
+                            needs_update = True
+                        if existing_entry is None and icon == "":
+                            create_icon = True
+                            needs_update = True
+
+                        if create_icon is True and icon == "" and current_text is not None:
+                            is_markdown = ext == 'md'
+                            icon = IcoTqStore._generate_icon_from_text(current_text, is_markdown, self.icon_width, self.icon_height)
+                            needs_update = True
+                        else:
+                            if existing_entry is not None and existing_entry['icon'] != "" and icon == "":
+                                icon = existing_entry['icon']
+                                
+                        if icon == "":
+                            self.log.warning(f"Icon for {desc_path} Not created!")
+
                         if existing_entry:
                             # Update handling
-                            needs_update = False
                             old_pointers_to_collect: dict[str, tuple[int, int]] = {}
 
+                            if icon != existing_entry.get('icon'):
+                                self.log.info(f"Updating icon for {desc_path}")
+                                # needs_update = True
+                                existing_entry['icon'] = icon
+                                lib_changed = True
+                                # old_pointers_to_collect = existing_entry.get('emb_ptrs', {}).copy()
                             if current_text is not None and existing_entry.get('text') != current_text:
                                 self.log.info(f"Updating text for {desc_path}")
                                 needs_update = True
-                                old_pointers_to_collect = existing_entry.get('emb_ptrs', {}).copy()
+                                if old_pointers_to_collect == {}:
+                                    old_pointers_to_collect = existing_entry.get('emb_ptrs', {}).copy()
                                 existing_entry['text'] = current_text
                             elif current_text is None: #  and existing_entry.get('text') is not None:
                                 self.log.warning(f"Text unreadable for {desc_path}. Clearing.")
                                 needs_update = True
-                                old_pointers_to_collect = existing_entry.get('emb_ptrs', {}).copy()
+                                if old_pointers_to_collect == {}:
+                                    old_pointers_to_collect = existing_entry.get('emb_ptrs', {}).copy()
                                 existing_entry['text'] = ""
 
                             if needs_update:
@@ -1077,7 +1176,7 @@ class IcoTqStore:
                         elif current_text is not None:
                             # Add handling
                             self.log.info(f"Adding new entry for {desc_path}")
-                            entry: LibEntry = LibEntry({'source_name': source['name'], 'desc_filename': desc_path, 'filename': full_path, 'text': current_text, 'emb_ptrs': {}})
+                            entry: LibEntry = LibEntry({'source_name': source['name'], 'desc_filename': desc_path, 'filename': full_path, 'text': current_text, 'emb_ptrs': {}, 'icon': icon})
                             new_lib.append(entry)
                             lib_changed = True
                         else:
@@ -1148,8 +1247,8 @@ class IcoTqStore:
                             # ... (handling for missing tensor remains the same) ...
                             continue
 
-                        temp_device = self.resolve_device(self.config['embeddings_device'])
-                        original_tensor: torch.Tensor = torch.load(temp_tensor_path, map_location=torch.device(temp_device))  # pyright: ignore[reportUnknownMemberType]
+                        # temp_device = self.resolve_device(self.config['embeddings_device'])
+                        original_tensor: torch.Tensor = torch.load(temp_tensor_path, map_location="cpu") # map_location=torch.device(temp_device))  # pyright: ignore[reportUnknownMemberType]
                         num_rows = original_tensor.shape[0]
 
                         # --- Calculate Boolean Keep Mask (still needed for offset calculation) ---
@@ -1351,7 +1450,7 @@ class IcoTqStore:
             if not self.current_model or self.current_model['model_name'] != target_model_name:
                  self.log.warning(f"Temporarily loading model '{target_model_name}'.")
                  try:
-                     temp_engine = SentenceTransformer(model_to_use['model_hf_name'], trust_remote_code=self.config.get('embeddings_model_trust_code', True))
+                     temp_engine = SentenceTransformer(model_to_use['model_hf_name'], trust_remote_code=self.config.get('embeddings_model_trust_code', True))  # pyright:ignore[reportCallIssue]
                      temp_device = self.resolve_device(self.config['embeddings_device'])
                      local_engine = temp_engine.to(torch.device(temp_device))
                  except Exception as e: 
@@ -1489,6 +1588,7 @@ class IcoTqStore:
             if self.current_model and self.current_model['model_name'] == target_model_name:
                 self.embeddings_matrix = local_embeddings_matrix
                 self.log.info(f"Current model's ({target_model_name}) in-memory tensor updated.")
+                _ = self._calculate_doc_embeddings_internal(self.current_model['model_name'], calc_3d=True)
         except IcotqCriticalError as e: 
             print("\nCRITICAL ERROR during final save.")
             raise
@@ -1557,7 +1657,7 @@ class IcoTqStore:
                 self.log.error(f"Error listing PDF cache directory {self.pdf_cache_path}: {e}")
 
             if pdf_cache_file_debris:
-                self.log.warning(f"Found {len(pdf_cache_file_debris)} orphaned or temporary PDF cache files.")
+                self.log.warning(f"Found {len(pdf_cache_file_debris)} orphaned or temporary PDF cache files. Use 'clean' to cleanup")
                 if not issues_found: initial_issues_found = True
                 issues_found = True
             if not dry_run and pdf_cache_file_debris:
@@ -1895,7 +1995,7 @@ class IcoTqStore:
                          except IcotqError as yl_e:
                              self.log.error(f"Failed to generate yellow-liner for '{desc}': {yl_e}")
 
-                    sres: SearchResult = {'cosine': cosine, 'index': start_tensor_idx, 'offset': offset_in_entry, 'desc': desc, 'chunk': chunk_text, 'text': entry['text'], 'yellow_liner': yellow_liner_weights}
+                    sres: SearchResult = {'cosine': cosine, 'index': start_tensor_idx, 'offset': offset_in_entry, 'desc': desc, 'chunk': chunk_text, 'text': entry['text'], 'yellow_liner': yellow_liner_weights, 'icon': entry['icon']}
                     search_results_final.append(sres)
                 return search_results_final
 
@@ -1907,142 +2007,211 @@ class IcoTqStore:
                 return []
 
 
-    # === Server Functionality ===
-
-    async def search_handler(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
-        """Handles incoming search requests via HTTP."""
-        try:
-            data: SearchRequest = await request.json()
-            search_text = data.get('search_text')
-            if not search_text: 
-                return aiohttp.web.json_response({"error": "Missing 'search_text' field"}, status=400)
-            # ... (input validation) ...
-            max_results=data.get('max_results', 10)
-            yellow_liner=data.get('yellow_liner', False)
-            context_length=data.get('context_length', 16)
-            context_steps=data.get('context_steps', 4)
-            compression_mode=data.get('compression_mode', 'none')
-            if max_results <= 0: 
-                max_results = 10
-
-            self.log.info(f"Received search request: text='{search_text[:50]}...', max={max_results}, yellow={yellow_liner}")
-            search_results = self.search(search_text, max_results=max_results, yellow_liner=yellow_liner, context_length=context_length, context_steps=context_steps, compression_mode=compression_mode)
-            self.log.info(f"Responding with {len(search_results)} results.")
-            for result in search_results:
-                if result.get('yellow_liner') is not None: 
-                    result['yellow_liner'] = result['yellow_liner'].tolist()  # pyright: ignore[reportOptionalMemberAccess, reportGeneralTypeIssues]
-            return aiohttp.web.json_response(search_results) # type: ignore
-
-        except json.JSONDecodeError: 
-            return aiohttp.web.json_response({"error": "Invalid JSON format"}, status=400)
-        except Exception as e: 
-            self.log.error(f"Error processing search request: {e}", exc_info=True)
-            return aiohttp.web.json_response({"error": "Internal server error"}, status=500)
-
-
-    def _server_task(self, host: str, port: int, in_thread: bool = False):
-        """The asyncio server task runner."""
-        # ... (logic remains the same, no typing changes needed here) ...
-        self.log.info(f"Starting server task (in_thread={in_thread})...")
-        loop = None
-        try:
-            app = aiohttp.web.Application()
-            _ = app.router.add_post('/search', self.search_handler)
-            runner = aiohttp.web.AppRunner(app)
-            if in_thread: 
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            else:
-                try: 
-                    loop = asyncio.get_event_loop()
-                except RuntimeError: 
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-            self.loop = loop
-
-            async def start_runner():
-                await runner.setup()
-                site = aiohttp.web.TCPSite(runner, host, port)
-                await site.start()
-                self.log.info(f"Server started successfully at http://{host}:{port}")
-                while self.server_running: await asyncio.sleep(0.5)
-                self.log.info("Server shutdown signal received.")
-                await site.stop()
-                self.log.info("Server site stopped.")
-            async def cleanup_runner(): 
-                await runner.cleanup()
-                self.log.info("Server runner cleaned up.")
-
-            loop.run_until_complete(start_runner())
-            loop.run_until_complete(cleanup_runner())
-
-        except OSError as e:
-             if "address already in use" in str(e).lower(): 
-                self.log.critical(f"Server failed: Port {port} on '{host}' in use.")
-             else: 
-                self.log.critical(f"Server failed OS error: {e}", exc_info=True)
-             self.server_running = False
-        except Exception as e: 
-            self.log.critical(f"Server task critical error: {e}", exc_info=True)
-            self.server_running = False
-        finally:
-            if loop and not loop.is_closed():
-                 if in_thread: 
-                    loop.close()
-                 self.log.info("Server asyncio loop closed.")
-            self.loop = None
-            self.log.info("Server task finished.")
-
-
-    def start_server(self, host: str = "0.0.0.0", port: int = 8080, background: bool = False):
-        """Starts the search API server."""
-        if self.server_running: 
-            self.log.warning("Server already running/starting.")
-            return
-        self.server_running = True
-        if background:
-            self.log.info("Starting server in background thread...")
-            self.server_thread = threading.Thread(target=self._server_task, args=(host, port, True), daemon=True)
-            self.server_thread.start()
-            time.sleep(1)
-            if not self.server_running: 
-                self.log.error("Server failed to start in background.")
-                self.server_thread = None
-        else:
-            self.log.info("Starting server in foreground (blocking)...")
-            try: 
-                self._server_task(host, port, False)
-            except KeyboardInterrupt: 
-                self.log.info("Server stopped by user.")
-            finally: 
-                self.server_running = False
-
-
-    def stop_server(self):
-        """Stops the running search API server."""
-        if not self.server_running and self.server_thread is None: 
-            self.log.warning("Server not running.")
-            return
-        self.log.info("Attempting to stop server...")
-        self.server_running = False
-        if self.loop and self.loop.is_running(): 
-            _ = self.loop.call_soon_threadsafe(self.loop.stop)
-            self.log.debug("Requested asyncio loop stop.")
-        if self.server_thread and self.server_thread.is_alive():
-            self.log.info("Waiting for server thread exit...")
-            self.server_thread.join(timeout=10)
-            if self.server_thread.is_alive(): 
-                self.log.warning("Server thread join timed out.")
-            else: 
-                self.log.info("Server thread finished.")
-            self.server_thread = None
-        if self.server_running: 
-            self.log.warning("Server flag still true after stop.")
-            self.server_running = False
-        self.log.info("Server stop sequence completed.")
-
-
     # === Static Utility Methods ===
+
+    @staticmethod
+    def _encode_image_to_base64(image_path: str, width: int | None = None, height: int | None = None) -> str:
+        """
+        Encode an image file to a base64 string for JSON serialization,
+        with optional resizing.
+        
+        Args:
+            image_path: Path to the image file (JPG or PNG)
+            width: Optional target width to resize the image
+            height: Optional target height to resize the image
+            
+        Returns:
+            Base64 encoded string representation of the image
+        """
+        from PIL import Image
+        import io
+        import base64
+        
+        # Open the image with PIL
+        with Image.open(image_path) as img:
+            # Resize if width and/or height is specified
+            if width is not None or height is not None:
+                # Calculate new dimensions while maintaining aspect ratio if only one dimension is specified
+                if width is None:
+                    # Maintain aspect ratio based on height
+                    aspect_ratio = img.width / img.height
+                    if height is not None:
+                        width = int(height * aspect_ratio)
+                    else:
+                        raise ValueError("Both width and height cannot be None")
+                elif height is None:
+                    # Maintain aspect ratio based on width
+                    aspect_ratio = img.height / img.width
+                    height = int(width * aspect_ratio)
+                
+                # Resize the image
+                img = img.resize((width, height), Image.LANCZOS)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
+            
+            # Save to BytesIO buffer in the original format
+            buffer = io.BytesIO()
+            img_format = img.format if img.format else 'PNG'
+            img.save(buffer, format=img_format)
+            _ = buffer.seek(0)
+            
+            # Encode to base64
+            # encoded_string = base64.b64encode(buffer.getvalue()).decode('utf-8')
+            encoded_string = base64.standard_b64encode(buffer.getvalue()).decode('ascii')
+
+        return encoded_string
+
+    @staticmethod
+    def decode_base64_to_image(
+        base64_string: str, 
+        output_format: Literal["jpg", "png"] = "png",
+        output_path: str | None = None
+    ) -> bytes | str:
+        """
+        Decode a base64 string to an image.
+        
+        Args:
+            base64_string: Base64 encoded image string
+            output_format: Desired output format ("jpg" or "png")
+            output_path: Optional path to save the image. If not provided, returns bytes.
+            
+        Returns:
+            If output_path is provided, returns the path. Otherwise, returns image bytes.
+        """
+        image_data = base64.standard_b64decode(base64_string)
+        image = Image.open(io.BytesIO(image_data))
+        
+        if output_format.lower() not in ["jpg", "png"]:
+            raise ValueError("Output format must be 'jpg' or 'png'")
+        
+        output_format_pil = "JPEG" if output_format.lower() == "jpg" else "PNG"
+        
+        if output_path:
+            image.save(output_path, format=output_format_pil)
+            return output_path
+        
+        # Return bytes if no output path
+        img_byte_arr = io.BytesIO()
+        image.save(img_byte_arr, format=output_format_pil)
+        return img_byte_arr.getvalue()
+
+    @staticmethod
+    def decode_base64_for_terminal(base64_string: str, output_format: str = "png") -> str:
+        """
+        Process a base64 image string for terminal display protocols (like Kitty)
+        
+        Args:
+            base64_string: The base64 encoded image
+            output_format: The desired output format
+            
+        Returns:
+            A properly formatted base64 string ready for terminal graphics protocols
+        """
+        # For Kitty graphics protocol we can just use the base64 string directly
+        # Optionally convert format if needed using PIL and re-encoding
+        if output_format.lower() not in ["jpg", "png"]:
+            # For format conversion, decode and re-encode
+            image_data = base64.standard_b64decode(base64_string)
+            image = Image.open(io.BytesIO(image_data))
+            
+            output_format_pil = "JPEG" if output_format.lower() == "jpg" else "PNG"
+            img_byte_arr = io.BytesIO()
+            image.save(img_byte_arr, format=output_format_pil)
+            
+            return base64.standard_b64encode(img_byte_arr.getvalue()).decode('ascii')
+            #return base64.b64encode(img_byte_arr.getvalue()).decode('ascii')
+        
+        return base64_string
+
+    @staticmethod
+    def _generate_icon_from_text(text: str, is_markdown: bool = False, width: int = 200, height: int = 200) -> str:
+        """
+        Generate an icon image from text or markdown content, encoded as base64.
+        
+        Args:
+            text: The text or markdown content to render
+            is_markdown: Whether the input is markdown (default: False)
+            size: Size of the generated square icon in pixels (default: 200)
+            
+        Returns:
+            Base64 encoded string of the generated icon image
+        """
+        
+        # Extract the first few lines for the icon
+        lines = text.split('\n')
+        preview_text = '\n'.join(lines[:10])  # Take first 10 lines
+        
+        # For markdown, do some basic cleanup
+        if is_markdown:
+            # Remove markdown formatting for simplicity
+            preview_text = re.sub(r'#+ ', '', preview_text)  # Remove headers
+            preview_text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', preview_text)  # Remove links
+            preview_text = re.sub(r'[*_]{1,2}([^*_]+)[*_]{1,2}', r'\1', preview_text)  # Remove formatting
+            preview_text = re.sub(r'`([^`]+)`', r'\1', preview_text)  # Remove code blocks
+        
+        # Create a new image with light background
+        background_color = (245, 245, 250)  # Light blue-gray
+        image = Image.new('RGB', (width, height), color=background_color)
+        draw = ImageDraw.Draw(image)
+        
+        # Add a document border
+        border_color = (100, 120, 180)  # Blue-gray border
+        draw.rectangle([(5, 5), (width-6, height-6)], outline=border_color, width=2)
+        
+        # Try to get a nice font
+        font_size = max(10, int(width/20))
+        try:
+            # Try system fonts in order of preference
+            for font_name in ["Arial", "Helvetica", "DejaVuSans", "FreeSans", "Liberation Sans"]:
+                try:
+                    font = ImageFont.truetype(font_name, font_size)
+                    break
+                except IOError:
+                    continue
+            else:
+                font = ImageFont.load_default()
+        except Exception:
+            font = ImageFont.load_default()
+        
+        # Add text to the image
+        margin = int(width * 0.1)
+        y_position = margin
+        text_color = (20, 20, 60)  # Dark blue-gray text
+        
+        # Process each line
+        for line in preview_text.split('\n')[:int(height/20)]:
+            # Truncate long lines
+            max_chars = int(height / (font_size * 0.6))
+            if len(line) > max_chars:
+                line = line[:max_chars-3] + "..."
+            
+            # Draw text with compatible method for all PIL versions
+            draw.text((margin, y_position), line, fill=text_color, font=font)
+            
+            # Move to next line position
+            try:
+                # For newer PIL versions
+                _, text_height = draw.textbbox((0, 0), line, font=font)[2:]
+                y_position += text_height + int(font_size * 0.3)
+            except AttributeError:
+                # Fallback for older PIL versions
+                y_position += int(font_size * 1.2)
+            
+            # Stop if we're running out of space
+            if y_position > height - margin:
+                break
+        
+        # Save image to a temporary file
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
+            temp_path = tmp_file.name
+            image.save(temp_path, format='PNG')
+        
+        try:
+            # Use the existing encode method from IcoTqStore
+            encoded_string = IcoTqStore._encode_image_to_base64(temp_path, width, height)
+            return encoded_string
+        finally:
+            # Clean up temporary file
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
 
     @staticmethod
     def get_chunk_ptr(index: int, chunk_size: int, chunk_overlap: int) -> int:
