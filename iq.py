@@ -14,7 +14,7 @@ def iq_info(its: IcoTqStore, _logger:logging.Logger) -> None:
     print()
     print("Use 'list models' for an overview of available models and their index status")
     print("Use 'sync' to load new/updated documents from all sources")
-    print("Use 'index' to index using the current model")
+    print("Use 'index' to index using the current model (Use 'sync' first to load new/updated documents)")
     print("Use 'search <search phrase>' to search using the current model's index")
 
 def iq_index(its: IcoTqStore, _logger:logging.Logger, param:str):
