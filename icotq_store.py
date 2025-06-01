@@ -583,9 +583,9 @@ class IcoTqStore:
             del self.doc_embeddings_matrix
             self.doc_embeddings_matrix = None
 
-        if self.embeddings_matrix is None:
-            self.log.error(f"Cannot calculate document embeddings: No embeddings matrix loaded for model '{model_name}'.")
-            return False
+        # if self.embeddings_matrix is None:
+        #     self.log.error(f"Cannot calculate document embeddings: No embeddings matrix loaded for model '{model_name}'.")
+        #     return False
 
         if model_name is None and self.current_model is not None:
             model_name = self.current_model['model_name']

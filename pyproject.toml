@@ -10,6 +10,7 @@ dependencies = [
     "aiohttp-cors>=0.8.0",
     "einops>=0.8.1",
     "flet>=0.27.6",
+    "huggingface-hub[hf-xet]>=0.30.1",
     "matplotlib>=3.10.1",
     "mcp[cli]>=1.4.1",
     "pillow>=11.1.0",
