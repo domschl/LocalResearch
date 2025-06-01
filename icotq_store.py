@@ -108,7 +108,7 @@ class IcotqConfigurationError(IcotqError):
 
 class IcoTqStore:
     # Accept config_file_override: str | None
-    def __init__(self, config_file_override: str | None = None, config_path_override: str | None = None) -> None:
+    def __init__(self, config_file_override: str | None = None, config_path_override: str | None = None, calc_3d:bool=False) -> None:
         self.log:logging.Logger = logging.getLogger("IcoTqStore")
         # Disable log spam
         tmp = logging.getLogger("transformers_modules")
@@ -116,6 +116,7 @@ class IcoTqStore:
         tmp_st = logging.getLogger("sentence_transformers")
         tmp_st.setLevel(logging.WARNING)
 
+        self.calc_3d:bool = calc_3d
         if PYMUPDF4LLM_AVAILABLE:
             self.log.info("pymupdf4llm library found, will be used as fallback for PDF text extraction.")
         else:
@@ -175,7 +176,7 @@ class IcoTqStore:
                     _ = self._load_model_internal(self.config['embeddings_model_name'],
                                             self.config['embeddings_device'],
                                             self.config['embeddings_model_trust_code'])
-                    # _ = self._calculate_doc_embeddings_internal(model_name=self.config['embeddings_model_name'], calc_3d=True)
+                    # _ = self._calculate_doc_embeddings_internal(model_name=self.config['embeddings_model_name'], calc_3d=self.calc_3d)
                 except IcotqError as e:
                     self.log.error(f"Failed to load initial model specified in config: {e}")
 
@@ -186,7 +187,7 @@ class IcoTqStore:
             if self.current_model:
                 try:
                     _ = self._load_tensor_internal(model_name=self.current_model['model_name'])
-                    _ = self._calculate_doc_embeddings_internal(model_name=self.current_model['model_name'], calc_3d=True)
+                    _ = self._calculate_doc_embeddings_internal(model_name=self.current_model['model_name'], calc_3d=self.calc_3d)
                 except IcotqConsistencyError as e:
                     self.log.error(f"Consistency Error loading tensor for initial model '{self.current_model['model_name']}': {e}")
                     if self.config.get('auto_fix_inconsistency', False):
@@ -195,7 +196,7 @@ class IcoTqStore:
                             self._generate_embeddings_internal(purge=True, model_name_override=self.current_model['model_name'])
                             self.log.info(f"Automatic re-index for '{self.current_model['model_name']}' completed.")
                             _ = self._load_tensor_internal(model_name=self.current_model['model_name'])
-                            _ = self._calculate_doc_embeddings_internal(model_name=self.current_model['model_name'], calc_3d=True)
+                            _ = self._calculate_doc_embeddings_internal(model_name=self.current_model['model_name'], calc_3d=self.calc_3d)
                         except IcotqError as fix_e:
                             self.log.error(f"Automatic fix failed for model '{self.current_model['model_name']}': {fix_e}")
                             self.embeddings_matrix = None
@@ -927,7 +928,7 @@ class IcoTqStore:
                         self.embeddings_matrix = None
 
                     # calculate doc embeddings if requested
-                    _ = self._calculate_doc_embeddings_internal(name, calc_3d=True)
+                    _ = self._calculate_doc_embeddings_internal(name, calc_3d=self.calc_3d)
 
                     self.config['embeddings_model_name'] = name
                     self.config['embeddings_device'] = device
@@ -1588,7 +1589,7 @@ class IcoTqStore:
             if self.current_model and self.current_model['model_name'] == target_model_name:
                 self.embeddings_matrix = local_embeddings_matrix
                 self.log.info(f"Current model's ({target_model_name}) in-memory tensor updated.")
-                _ = self._calculate_doc_embeddings_internal(self.current_model['model_name'], calc_3d=True)
+                _ = self._calculate_doc_embeddings_internal(self.current_model['model_name'], calc_3d=self.calc_3d)
         except IcotqCriticalError as e: 
             print("\nCRITICAL ERROR during final save.")
             raise
