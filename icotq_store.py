@@ -604,6 +604,11 @@ class IcoTqStore:
             del self.doc_embeddings_matrix
             self.doc_embeddings_matrix = None
 
+        if calc_3d is False:
+            if self.pca_matrix is not None:
+                del self.pca_matrix
+                self.pca_matrix = None
+            return
         # if self.embeddings_matrix is None:
         #     self.log.error(f"Cannot calculate document embeddings: No embeddings matrix loaded for model '{model_name}'.")
         #     return False
