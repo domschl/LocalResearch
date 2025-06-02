@@ -232,6 +232,26 @@ class IcoTqStore:
                     self._save_config_internal()
                 except IcotqError as save_e:
                      self.log.error(f"Failed to save default config: {save_e}")
+            # Make paths relative to avoid /Users vs. /home issues
+            home_path = os.path.expanduser('~')
+            if home_path.startswith('/Users/'):
+                bad_home = "/home/"
+            elif home_path.startswith('/home/'):
+                bad_home = "/Users/"
+            else:
+                bad_home = None
+            changed = False
+            if bad_home:
+                for source in self.config['tq_sources']:
+                    if source['path'].startswith(bad_home):
+                        self.log.info(f"Replacing bad home path {bad_home} with {home_path} in source path {source['path']}")
+                        source['path'] = "~/" + source['path'][len(bad_home):]
+                        changed = True
+            if changed:
+                try:
+                    self._save_config_internal()
+                except IcotqError as save_e:
+                    self.log.error(f"Failed to save config after path correction: {save_e}")
         else:
             self._create_default_config()
             self.log.warning(f"Created default configuration at {self.config_file}, please review!")
@@ -242,22 +262,22 @@ class IcoTqStore:
 
     def _create_default_config(self):
         """Sets the default configuration."""
-        self.config = IcotqConfig({
-            'icotq_path': '~/IcoTqStore',
-            'tq_sources': [
-                TqSource({
-                    'name': 'Calibre', 'tqtype': 'calibre_library',
-                    'path': '~/ReferenceLibrary/Calibre Library', 'file_types': ['txt', 'pdf']
-                }),
-                TqSource({
-                    'name': 'Notes', 'tqtype': 'folder',
-                    'path': '~/Notes', 'file_types': ['md']
-                })],
-            'embeddings_model_name': 'ibm-granite/granite-embedding-107m-multilingual',
-            'embeddings_device': 'auto',
-            'embeddings_model_trust_code': True,
-            'auto_fix_inconsistency': False
-        })
+        self.config = IcotqConfig(
+            '~/IcoTqStore',
+            [
+                TqSource(
+                    'Calibre', 'calibre_library',
+                    '~/ReferenceLibrary/Calibre Library', ['txt', 'pdf']
+                ),
+                TqSource(
+                    'Notes', 'folder',
+                    '~/Notes', ['md']
+                )],
+            'ibm-granite/granite-embedding-107m-multilingual',
+            'auto',
+            True,
+            False
+        )
 
     def _validate_config_paths(self):
         """Validates paths and sources in the configuration."""
@@ -593,6 +613,7 @@ class IcoTqStore:
 
         if self.current_model is None or model_name != self.current_model['model_name']:
             self.log.error(f"Cannot calculate document embeddings: Model '{model_name}' is not currently loaded.")
+            return False
 
         self.log.info(f"Calculating document embeddings for model '{model_name}'")
         for entry in self.lib:
@@ -600,7 +621,8 @@ class IcoTqStore:
                 # Get the tensor-slice from emb_ptrs:
                 emb_ptrs = entry['emb_ptrs'][model_name]
                 start, length = emb_ptrs[0], emb_ptrs[1]
-                doc_embeddings: torch.Tensor = self.embeddings_matrix[start:start + length, :]
+                if self.embeddings_matrix is not None:
+                    doc_embeddings: torch.Tensor = self.embeddings_matrix[start:start + length, :]
                 # Calculate the mean of the embeddings
                 doc_mean = torch.mean(doc_embeddings, dim=0).reshape(1, -1)
                 if self.doc_embeddings_matrix is None:
@@ -625,6 +647,19 @@ class IcoTqStore:
 
     def _save_config_internal(self):
         """Saves config atomically. Assumes lock is held."""
+        home_path = os.path.expanduser('~')
+        if home_path.startswith('/Users/'):
+            bad_home = "/home/"
+        elif home_path.startswith('/home/'):
+            bad_home = "/Users/"
+        else:
+            bad_home = None
+
+        if bad_home is not None:
+            for source in self.config['tq_sources']:
+                if source['path'].startswith(bad_home):
+                    self.log.info(f"Replacing bad home path {bad_home} with {home_path} in source path {source['path']}")
+                    source['path'] = "~/" + source['path'][len(bad_home):]
         try:
             self._atomic_save_json(self.config, self.config_file)
             self.log.info(f"Configuration changes saved to {self.config_file}")
