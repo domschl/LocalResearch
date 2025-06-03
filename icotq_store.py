@@ -27,9 +27,6 @@ try:
 except ImportError:
     PYMUPDF4LLM_AVAILABLE = False  # pyright: ignore[reportConstantRedefinition]
 
-from sklearn.decomposition import PCA  # pyright: ignore[reportMissingTypeStubs]
-
-
 class TqSource(TypedDict):
     name: str
     tqtype: str
@@ -217,7 +214,7 @@ class IcoTqStore:
         if os.path.exists(self.config_file):
             try:
                 with open(self.config_file, 'r') as f:
-                    iqc: IcotqConfig = json.load(f)
+                    iqc: IcotqConfig = cast(IcotqConfig, json.load(f))
                     _ = iqc.setdefault('auto_fix_inconsistency', False)
                     self.config = iqc
                 self.log.info(f"Loaded configuration from {self.config_file}")
@@ -448,7 +445,7 @@ class IcoTqStore:
             (temp_fd, temp_path) = tempfile.mkstemp(dir=os.path.dirname(final_path), prefix=os.path.basename(final_path) + '.tmp')
             os.close(temp_fd)
             temp_fd = None
-            torch.save(tensor_data, temp_path)  # pyright:ignore[reportUnknownMemberType]
+            torch.save(tensor_data, temp_path)
             os.replace(temp_path, final_path)
             temp_path = None # Prevent removal
         except (IOError, OSError, RuntimeError) as e:
@@ -570,10 +567,10 @@ class IcoTqStore:
 
         if os.path.exists(embeddings_tensor_file):
             try:
-                loaded_tensor = torch.load(embeddings_tensor_file, map_location=map_location)  # pyright:ignore[reportUnknownMemberType]
-                self.log.info(f"Loaded tensor for model '{model_name}' onto device '{target_device}'. Shape: {loaded_tensor.shape if loaded_tensor is not None else 'N/A'}")
+                loaded_tensor = cast(torch.Tensor, torch.load(embeddings_tensor_file, map_location=map_location)) 
+                self.log.info(f"Loaded tensor for model '{model_name}' onto device '{target_device}'. Shape: {loaded_tensor.shape}")
 
-                if check_consistency and loaded_tensor is not None:
+                if check_consistency:
                     expected_rows = sum(entry['emb_ptrs'][model_name][1] for entry in self.lib if model_name in entry.get('emb_ptrs', {}))
                     actual_rows = loaded_tensor.shape[0]
                     self.log.info(f"Consistency check for '{model_name}': Tensor rows={actual_rows}, Library expected rows={expected_rows}")
@@ -964,7 +961,7 @@ class IcoTqStore:
 
         try:
             # --- Load New Engine ---
-            engine = SentenceTransformer(hf_name, trust_remote_code=trust_remote_code)  # pyright:ignore[reportCallIssue]
+            engine = SentenceTransformer(hf_name, trust_remote_code=trust_remote_code)
             engine = engine.to(target_torch_device)
 
             # --- Update State (Engine, Device, Current Model) ---
@@ -1237,7 +1234,7 @@ class IcoTqStore:
                             continue
 
                         # temp_device = self.resolve_device(self.config['embeddings_device'])
-                        original_tensor: torch.Tensor = torch.load(temp_tensor_path, map_location="cpu") # map_location=torch.device(temp_device))  # pyright: ignore[reportUnknownMemberType]
+                        original_tensor: torch.Tensor = cast(torch.Tensor, torch.load(temp_tensor_path, map_location="cpu")) 
                         num_rows = original_tensor.shape[0]
 
                         # --- Calculate Boolean Keep Mask (still needed for offset calculation) ---
@@ -1439,7 +1436,7 @@ class IcoTqStore:
             if not self.current_model or self.current_model['model_name'] != target_model_name:
                  self.log.warning(f"Temporarily loading model '{target_model_name}'.")
                  try:
-                     temp_engine = SentenceTransformer(model_to_use['model_hf_name'], trust_remote_code=self.config.get('embeddings_model_trust_code', True))  # pyright:ignore[reportCallIssue]
+                     temp_engine = SentenceTransformer(model_to_use['model_hf_name'], trust_remote_code=self.config.get('embeddings_model_trust_code', True)) 
                      temp_device = self.resolve_device(self.config['embeddings_device'])
                      local_engine = temp_engine.to(torch.device(temp_device))
                  except Exception as e: 
@@ -1455,7 +1452,7 @@ class IcoTqStore:
                     temp_tensor_path = self._get_tensor_path(target_model_name)
                     if os.path.exists(temp_tensor_path):
                         temp_device = self.resolve_device(self.config['embeddings_device'])
-                        local_embeddings_matrix = torch.load(temp_tensor_path, map_location=torch.device(temp_device))  # pyright:ignore[reportUnknownMemberType]
+                        local_embeddings_matrix = cast(torch.Tensor, torch.load(temp_tensor_path, map_location=torch.device(temp_device)))
                     else: 
                         local_embeddings_matrix = None
             except IcotqError as e: 
@@ -1660,8 +1657,8 @@ class IcoTqStore:
 
             # --- 3. Library Pointers and Tensor Consistency ---
             self.log.debug("Checking library pointers and tensor consistency...")
-            all_known_models = {model['model_name'] for model in self.model_list}
-            models_with_pointers: set[str] = set().union(*(entry.get('emb_ptrs', {}).keys() for entry in self.lib))
+            all_known_models: set[str] = {model['model_name'] for model in self.model_list}
+            models_with_pointers: set[str] = cast(set[str], set().union(*(entry.get('emb_ptrs', {}).keys() for entry in self.lib)))
             models_to_check = all_known_models.intersection(models_with_pointers)
             if self.current_model and self.current_model['model_name'] not in models_to_check: 
                 models_to_check.add(self.current_model['model_name'])
@@ -1711,7 +1708,7 @@ class IcoTqStore:
                 actual_rows = -1
                 if tensor_exists:
                     try:
-                        temp_tensor: torch.Tensor = torch.load(tensor_path, map_location='cpu')  # pyright:ignore[reportUnknownMemberType]
+                        temp_tensor: torch.Tensor = cast(torch.Tensor, torch.load(tensor_path, map_location='cpu'))
                         actual_rows = temp_tensor.shape[0]
                         del temp_tensor
                     except Exception as e: 
@@ -1819,7 +1816,7 @@ class IcoTqStore:
         try:
             search_vect = search_vect.to(self.embeddings_matrix.device)
             similarities = torch.matmul(self.embeddings_matrix, search_vect)
-            simil_list: list[float] = similarities.cpu().numpy().tolist()  # pyright: ignore[reportAssignmentType, reportUnknownMemberType]
+            simil_list: list[float] = cast(list[float], cast(np.typing.NDArray[np.float32], similarities.cpu().numpy()).tolist())  # pyright: ignore[reportUnknownMemberType]
         except Exception as e: 
             raise IcotqError(f"Error during similarity calculation: {e}") from e
 
@@ -1859,11 +1856,10 @@ class IcoTqStore:
 
             emb_matrix = torch.stack(snippet_embeddings)
             search_embeddings = search_embeddings_cpu.to(emb_matrix.device)
-            yellow_vect: np.typing.NDArray[np.float32] = torch.matmul(emb_matrix, search_embeddings).cpu().numpy()  # pyright:ignore[reportUnknownMemberType]
+            yellow_vect: np.typing.NDArray[np.float32] = torch.matmul(emb_matrix, search_embeddings).cpu().numpy()  # pyright:ignore[reportUnknownMemberType, reportUnknownVariableType]
 
-            min_score: float
-            max_score: float
-            (min_score, max_score) = yellow_vect.min(), yellow_vect.max()
+            min_score: float = cast(float, yellow_vect.min())
+            max_score: float = cast(float, yellow_vect.max())
             if max_score > min_score: 
                 yellow_vect = (yellow_vect - min_score) / (max_score - min_score)
             elif max_score > 0 : 

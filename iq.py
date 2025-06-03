@@ -6,7 +6,6 @@ from argparse import ArgumentParser
 from rich.console import Console
 from icotq_store import IcoTqStore, SearchResult
 from typing import cast, TypedDict, Any
-import matplotlib.pyplot as plt
 import numpy as np
 
 def iq_info(its: IcoTqStore, _logger:logging.Logger) -> None:
@@ -30,11 +29,11 @@ def iq_search(its: IcoTqStore, logger:logging.Logger, search_spec: str):
     context_steps = 4
     yellow = True
     cols, _ = os.get_terminal_size()
-    results: list[SearchResult] | None = its.search(search_text=search_spec, yellow_liner=yellow, context_length=context_length, context_steps=context_steps, max_results=max_results, compression_mode="full")
+    results: list[SearchResult] = its.search(search_text=search_spec, yellow_liner=yellow, context_length=context_length, context_steps=context_steps, max_results=max_results, compression_mode="full")
     print()
     print()
     console = Console()
-    if results is not None and len(results) > 0:
+    if len(results) > 0:
         for i in range(len(results)):
             result = results[i]
             y_min: float | None = None
@@ -44,8 +43,7 @@ def iq_search(its: IcoTqStore, logger:logging.Logger, search_spec: str):
             yels: list[float] = []
             if ryel is not None:
                 if len(ryel.shape) == 1:
-                    lyel = ryel.tolist()
-                    yels = cast(list[float], lyel)
+                    yels = cast(list[float], ryel.tolist())
                     for y in yels:
                             if y_min is None or y<y_min:
                                 y_min = y
@@ -109,16 +107,6 @@ def iq_search(its: IcoTqStore, logger:logging.Logger, search_spec: str):
     else:
         print("No search result available!")
     
-def iq_export(its: IcoTqStore, logger:logging.Logger) -> None:
-    if 'ebook_mirror' not in its.config:
-        logger.error(f"Cannot export, destination 'ebook_mirror' not defined in config")
-        return
-    ebook_mirror_path: str = os.path.expanduser(its.config['ebook_mirror'])
-    if os.path.isdir(ebook_mirror_path) is False:
-        logger.error(f"Destination directory {ebook_mirror_path} does not exist, aborting export!")
-        return
-    print(f"Export to {ebook_mirror_path}")
-
 def iq_sync(its: IcoTqStore, _logger:logging.Logger, max_imports_str:str|None=None):
     if max_imports_str is not None:
         try:
@@ -156,7 +144,7 @@ def serialize_gr_command(**cmd: Any):  # pyright: ignore[reportExplicitAny, repo
     return b''.join(ans)
 
 def write_chunked(**cmd: Any):  # pyright: ignore[reportExplicitAny, reportAny]
-    data: bytes = cmd.pop('data')
+    data: bytes = cast(bytes, cmd.pop('data'))
     while data:
         chunk, data = data[:4096], data[4096:]
         m = 1 if data else 0
@@ -237,27 +225,6 @@ def iq_clean(its: IcoTqStore, _logger:logging.Logger, param:str=""):
     if param == "" or "pdf" in param:
         its.check_clean(dry_run=False)
 
-def iq_plot(its: IcoTqStore, _logger:logging.Logger, _param:str=""):
-    if its.pca_matrix is None:
-        print("No PCA data available, please index first")
-        return
-    pca_data: np.typing.NDArray[np.float32] = its.pca_matrix.numpy()  # pyright: ignore[reportUnknownMemberType]
-    labels: list[str] = []
-    for entry in its.lib:
-        label = entry['desc_filename'].split('/')[-1]
-        labels.append(label)
-
-    fig = plt.figure()  # pyright:ignore[reportUnknownMemberType]
-    ax = fig.add_subplot(111, projection='3d')  # pyright:ignore[reportUnknownMemberType]
-    # Create scatter, label each point with labels[index]:
-    _ = ax.scatter(pca_data[:, 0], pca_data[:, 1], pca_data[:, 2], c='b', marker='o')  # pyright:ignore[reportUnknownMemberType]
-
-    for index, (x, y, z) in enumerate(pca_data):  # pyright:ignore[reportAny]
-        ax.text(x, y, z, s=labels[index], fontsize=8)  # pyright:ignore[reportCallIssue, reportUnknownMemberType]
-
-    plt.show()  # pyright:ignore[reportUnknownMemberType]
-    
-
 def iq_help(parser:argparse.ArgumentParser, valid_actions:list[tuple[str, str]]):
     parser.print_help()
     print()
@@ -277,7 +244,6 @@ def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
                                             ('search', "Search for keywords given as repl argument or with '-k <keywords>' option. You need to 'sync' and 'index' first"),
                                             ('check', "Verify consistency of data references and indices. Use 'clean' to apply actions."),
                                             ('clean', "Repair consistency of data references and indices. Remove debris. Use 'check' first for dry-run."),
-                                            ('plot', "Plot the 3d pca data"),
                                             ('help', 'Display usage information')]
     parser: ArgumentParser = argparse.ArgumentParser(description="IcoTq")
     _ = parser.add_argument(
@@ -331,8 +297,6 @@ def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
             iq_check(its, logger, param)
         if 'clean' in actions:
             iq_clean(its, logger, param)
-        if 'plot' in actions:
-            iq_plot(its, logger, param)
         if cast(bool, args.non_interactive) is True:
             break
         if first is True:
