@@ -227,52 +227,74 @@ def iq_clean(its: IcoTqStore, _logger:logging.Logger, param:str=""):
 
 def iq_plot(its: IcoTqStore, _logger:logging.Logger, param:str=""):
     pari = param.split(' ')
-    if pari[0] not in ["plotly", "pyvista", "threejs"]:
-        print("Usage: 'plot plotly|pyvista|threejs' to visualize embeddings in 3D")
-        return
     
-    mode = pari[0]
     max_points = None
-    if len(pari)==2:
+    if len(pari) > 0:
         try:
-            max_points = int(pari[1])
+            max_points = int(pari[0])
+            print(f"Limiting visualization to {max_points} points")
         except ValueError:
-            print(f"Warning: Invalid number '{pari[1]}' for max_points, using default")
+            print(f"Warning: Invalid number '{pari[0]}' for max_points, using default")
     
     out_path = os.path.join(its.root_path, "plots")
     if not os.path.exists(out_path):
         os.makedirs(out_path)
     
-    result = its.visualize_embeddings_3d(output_dir=out_path, method=mode, max_points=max_points)
-    
-    if mode == "threejs":
-        port = 8000
-        print(f"\n[Starting local web server on port {port}]")
-        print(f"Opening visualization in browser: http://localhost:{port}/embedding_visualization.html")
+    try:
+        # Generate the visualization files
+        json_file, html_file = its.visualize_embeddings_3d(output_dir=out_path, max_points=max_points)
         
-        # Import server modules only when needed
-        import subprocess
+        # Start a local web server to serve the files
+        import http.server
+        import socketserver
         import threading
         import webbrowser
+        import time
         
-        # Function to run server in a separate thread
+        # Find an available port
+        port = 8000
+        for test_port in range(8000, 8100):
+            try:
+                with socketserver.TCPServer(("", test_port), None) as s:
+                    pass
+                port = test_port
+                break
+            except OSError:
+                continue
+        
+        print(f"\n[Starting local web server on port {port}]")
+        
+        # Change to the output directory to serve files from there
+        original_dir = os.getcwd()
+        os.chdir(out_path)
+        
+        # Custom request handler to handle CORS
+        class CORSRequestHandler(http.server.SimpleHTTPRequestHandler):
+            def end_headers(self):
+                self.send_header('Access-Control-Allow-Origin', '*')
+                super().end_headers()
+            
+            def log_message(self, format, *args):
+                # Suppress logging to keep output clean
+                pass
+        
+        # Start the server in a separate thread
         def run_server():
-            # Change to the output directory
-            os.chdir(out_path)
-            # Start Python's built-in HTTP server
-            subprocess.run(["python", "-m", "http.server", str(port)])
+            with socketserver.TCPServer(("", port), CORSRequestHandler) as httpd:
+                print(f"Server running at http://localhost:{port}/")
+                httpd.serve_forever()
         
-        # Start server in background thread
         server_thread = threading.Thread(target=run_server)
-        server_thread.daemon = True  # Allow the program to exit even if thread is running
+        server_thread.daemon = True  # Allow program to exit even if thread is running
         server_thread.start()
         
-        # Give the server a moment to start
-        import time
-        time.sleep(1)
+        # Wait a moment for the server to start
+        time.sleep(0.5)
         
-        # Open browser to the visualization
-        webbrowser.open(f"http://localhost:{port}/embedding_visualization.html")
+        # Open the visualization in the default browser
+        vis_url = f"http://localhost:{port}/{os.path.basename(html_file)}"
+        print(f"Opening visualization in browser: {vis_url}")
+        webbrowser.open(vis_url)
         
         print("\nVisualization server running. Press Ctrl+C to stop and return to the prompt.")
         print("(Keep this terminal window open while viewing the visualization)")
@@ -283,8 +305,19 @@ def iq_plot(its: IcoTqStore, _logger:logging.Logger, param:str=""):
                 time.sleep(1)
         except KeyboardInterrupt:
             print("\nStopping visualization server...")
-    
-    return result
+        finally:
+            # Change back to the original directory
+            os.chdir(original_dir)
+        
+        return html_file
+    except Exception as e:
+        import traceback
+        _logger.error(f"Error in visualization: {str(e)}")
+        _logger.error(traceback.format_exc())
+        print(f"Error creating visualization: {str(e)}")
+        print("Check if you have loaded a model and generated embeddings first.")
+        print("Also ensure you have umap-learn and scikit-learn installed:")
+        print("  pip install umap-learn scikit-learn")
 
 def iq_help(parser:argparse.ArgumentParser, valid_actions:list[tuple[str, str]]):
     parser.print_help()
@@ -305,7 +338,7 @@ def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
                                             ('search', "Search for keywords given as repl argument or with '-k <keywords>' option. You need to 'sync' and 'index' first"),
                                             ('check', "Verify consistency of data references and indices. Use 'clean' to apply actions."),
                                             ('clean', "Repair consistency of data references and indices. Remove debris. Use 'check' first for dry-run."),
-                                            ('plot', "Visualize embeddings in 3D, using plotly|pyvista|threejs"),
+                                            ('plot', "[max_points] Visualize embeddings in 3D"),
                                             ('help', 'Display usage information')]
     parser: ArgumentParser = argparse.ArgumentParser(description="IcoTq")
     _ = parser.add_argument(

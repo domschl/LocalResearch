@@ -1,4 +1,5 @@
 import logging
+import warnings
 import os
 import json
 import uuid
@@ -782,7 +783,7 @@ class IcoTqStore:
                     with os.fdopen(temp_fd_pdf, 'w', encoding='utf-8') as f:
                         _ = f.write(extracted_text)
                     os.replace(temp_pdf_path, cache_file_path)
-                    temp_pdf_path = None # Prevent removal in finally
+                    temp_pdf_path = None # Prevent removal
                     self.log.info(f"Added/Updated {desc} in PDF cache ({cache_filename}) using {extraction_method}.")
                     text = extracted_text # Set return text
                 except (IOError, OSError) as e:
@@ -2270,35 +2271,627 @@ class IcoTqStore:
             self.log.warning(f"Unsupported device '{dev}', fallback 'auto'.")
             return self.resolve_device('auto')
 
-
-    def visualize_embeddings_3d(self, output_dir=None, max_points=None, method="web"):
+    def visualize_embeddings_3d(self, output_dir=None, max_points=None, method="threejs"):
         """
-        Visualize embeddings as a 3D point cloud.
+        Visualize embeddings as a 3D point cloud using Three.js with a web server approach.
         
         Args:
             output_dir: Directory to save visualization files
             max_points: Limit number of points to render (None for all)
-            method: Visualization method ("web", "plotly", "pyvista")
         
         Returns:
-            Path to visualization file or figure object
+            Tuple of (json_path, html_path) for the visualization files
         """
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=".*'force_all_finite'.*")
+           
         if self.embeddings_matrix is None:
             raise IcotqError("No embeddings available. Load a model and generate embeddings first.")
         
-        if method == "threejs":
-            from icotq_viz import prepare_embedding_visualization
-            return prepare_embedding_visualization(self, output_dir, max_points)
-        elif method == "plotly":
-            # Import here to avoid dependency if not used
-            import sys
-            sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-            from icotq_viz import visualize_embeddings
-            return visualize_embeddings(self)
-        elif method == "pyvista":
-            import sys
-            sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-            from icotq_viz import visualize_embeddings_pyvista
-            return visualize_embeddings_pyvista(self)
+        # Define output directory
+        if output_dir is None:
+            output_dir = os.path.join(self.root_path, "Visualizations")
+        
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Prepare the data
+        print("Preparing embedding visualization data...")
+        
+        # Extract embeddings
+        start_time = time.time()
+        embeddings = self.embeddings_matrix.cpu().numpy()
+        num_embeddings = embeddings.shape[0]
+        print(f"Extracted {num_embeddings} embeddings in {time.time() - start_time:.2f}s")
+        
+        # Limit points if needed
+        if max_points and num_embeddings > max_points:
+            print(f"Limiting to {max_points} points")
+            indices = np.random.choice(num_embeddings, max_points, replace=False)
+            indices.sort()  # Keep order for better document correlation
+            embeddings = embeddings[indices]
+        
+        # Build document mapping
+        start_time = time.time()
+        doc_mapping = []
+        doc_ids = []
+        chunk_texts = []
+        unique_docs = set()
+        
+        for entry in self.lib:
+            if self.current_model['model_name'] in entry.get('emb_ptrs', {}):
+                start, length = entry['emb_ptrs'][self.current_model['model_name']]
+                doc_id = entry['desc_filename']
+                unique_docs.add(doc_id)
+                
+                # Only process chunks within our embedding limits
+                actual_length = min(length, embeddings.shape[0] - start)
+                for i in range(actual_length):
+                    idx = start + i
+                    if idx >= embeddings.shape[0]:
+                        break
+                    
+                    doc_mapping.append((idx, doc_id))
+                    doc_ids.append(doc_id)
+                    chunk_text = self.get_chunk(
+                        entry['text'], i, 
+                        self.current_model['chunk_size'], 
+                        self.current_model['chunk_overlap']
+                    )
+                    chunk_texts.append(chunk_text[:200])  # Limit text size
+        
+        print(f"Processed {len(doc_mapping)} document mappings in {time.time() - start_time:.2f}s")
+        
+        # Dimensionality reduction
+        start_time = time.time()
+        print("Performing dimensionality reduction...")
+        
+        from sklearn.decomposition import PCA
+        import umap
+        
+        # Always use PCA first for large dimensions
+        if embeddings.shape[1] > 50:
+            pca = PCA(n_components=50)
+            embeddings_reduced = pca.fit_transform(embeddings)
+            print(f"PCA reduction completed in {time.time() - start_time:.2f}s")
+            start_time = time.time()
         else:
-            raise ValueError(f"Unknown visualization method: {method}")
+            embeddings_reduced = embeddings
+        
+        # Use UMAP with parallelization
+        print("Using parallel UMAP with all CPU cores")
+        reducer = umap.UMAP(
+            n_components=3, 
+            metric='cosine', 
+            n_neighbors=15, 
+            min_dist=0.1,
+            n_jobs=-1,  # Use all available cores
+            verbose=True,  # Show progress
+            low_memory=True  # Faster but more memory-intensive or slower, less memory-intensive
+        )
+        embeddings_3d = reducer.fit_transform(embeddings_reduced)
+        print(f"UMAP reduction completed in {time.time() - start_time:.2f}s")
+        
+        # Assign colors
+        start_time = time.time()
+        unique_doc_list = list(unique_docs)
+        doc_color_map = {}
+        
+        import colorsys
+        for i, doc in enumerate(unique_doc_list):
+            # Generate a color from HSV for better distribution
+            hue = i / len(unique_doc_list)
+            rgb = colorsys.hsv_to_rgb(hue, 0.8, 0.9)
+            doc_color_map[doc] = [float(c) for c in rgb]
+        
+        colors = [doc_color_map[doc_id] for doc_id in doc_ids]
+        print(f"Color assignment completed in {time.time() - start_time:.2f}s")
+        
+        # Prepare output data
+        start_time = time.time()
+        output_data = {
+            "points": embeddings_3d.tolist(),
+            "colors": colors,
+            "docs": doc_ids,
+            "texts": chunk_texts,
+            "doc_map": {doc: i for i, doc in enumerate(unique_doc_list)},
+            "model_name": self.current_model['model_name'],
+            "total_points": len(embeddings_3d)
+        }
+        
+        # Generate output files
+        import json
+        
+        # 1. Save the JSON data
+        json_file = os.path.join(output_dir, f"embedding_viz_{self.current_model['model_name']}.json")
+        with open(json_file, 'w') as f:
+            json.dump(output_data, f)
+        
+        # 2. Create the HTML visualization file that loads data from the server
+        html_file = os.path.join(output_dir, "embedding_visualization.html")
+        
+        html_template = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <title>Embedding Visualization</title>
+            <script type="importmap">
+            {
+            "imports": {
+                "three": "https://unpkg.com/three@0.150.0/build/three.module.js",
+                "three/examples/jsm/controls/OrbitControls.js": "https://unpkg.com/three@0.150.0/examples/jsm/controls/OrbitControls.js"
+            }
+            }
+            </script>
+            <style>
+                body { 
+                    margin: 0; 
+                    overflow: hidden; 
+                    font-family: Arial, sans-serif;
+                }
+                #info {
+                    position: absolute; 
+                    top: 10px; 
+                    left: 10px; 
+                    background: rgba(255,255,255,0.8);
+                    padding: 10px;
+                    border-radius: 5px;
+                    max-width: 300px;
+                    max-height: 300px;
+                    overflow: auto;
+                    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+                }
+                #stats {
+                    position: absolute;
+                    bottom: 10px;
+                    left: 10px;
+                    background: rgba(255,255,255,0.8);
+                    padding: 10px;
+                    border-radius: 5px;
+                    font-size: 12px;
+                }
+                #loading {
+                    position: absolute;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%, -50%);
+                    font-size: 24px;
+                    background: white;
+                    padding: 20px;
+                    border-radius: 10px;
+                    box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+                    text-align: center;
+                }
+                #loading .progress {
+                    margin-top: 10px;
+                    width: 100%;
+                    height: 10px;
+                    background-color: #f3f3f3;
+                    border-radius: 5px;
+                    overflow: hidden;
+                }
+                #loading .progress-bar {
+                    height: 100%;
+                    width: 0%;
+                    background-color: #4CAF50;
+                    transition: width 0.3s;
+                }
+                .controls {
+                    position: absolute;
+                    top: 10px;
+                    right: 10px;
+                    background: rgba(255,255,255,0.8);
+                    padding: 10px;
+                    border-radius: 5px;
+                    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+                }
+                .controls button {
+                    margin: 5px;
+                    padding: 5px 10px;
+                    cursor: pointer;
+                }
+                .controls label {
+                    display: block;
+                    margin-top: 10px;
+                }
+                .error {
+                    color: red;
+                    font-weight: bold;
+                }
+            </style>
+        </head>
+        <body>
+            <div id="info">Click a point to see document info</div>
+            <div id="stats"></div>
+            <div id="loading">
+                <div>Loading visualization data...</div>
+                <div class="progress"><div class="progress-bar"></div></div>
+            </div>
+            <div class="controls">
+                <button id="resetView">Reset View</button>
+                <label>
+                    Point Size:
+                    <input type="range" id="pointSize" min="0.01" max="0.2" step="0.01" value="0.05">
+                </label>
+                <label>
+                    Show Connections:
+                    <input type="checkbox" id="showConnections" checked>
+                </label>
+            </div>
+            
+            <script type="module">
+                import * as THREE from 'three';
+                import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+                
+                // Global variables
+                let scene, camera, renderer, controls;
+                let pointsObject, connectionLines = [];
+                let raycaster, mouse;
+                let selectedPoint = null;
+                let originalColors = [];
+                let statsElement;
+                let docData;
+                
+                // Initialize the scene
+                init();
+                
+                function init() {
+                    // Setup renderer
+                    renderer = new THREE.WebGLRenderer({ antialias: true });
+                    renderer.setSize(window.innerWidth, window.innerHeight);
+                    renderer.setPixelRatio(window.devicePixelRatio);
+                    document.body.appendChild(renderer.domElement);
+                    
+                    // Setup scene
+                    scene = new THREE.Scene();
+                    scene.background = new THREE.Color(0xf0f0f0);
+                    
+                    // Setup camera
+                    camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+                    camera.position.z = 5;
+                    
+                    // Setup controls
+                    controls = new OrbitControls(camera, renderer.domElement);
+                    controls.enableDamping = true;
+                    controls.dampingFactor = 0.05;
+                    
+                    // Lighting
+                    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+                    scene.add(ambientLight);
+                    
+                    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+                    directionalLight.position.set(0, 1, 0);
+                    scene.add(directionalLight);
+                    
+                    // Raycaster for point selection
+                    raycaster = new THREE.Raycaster();
+                    raycaster.params.Points.threshold = 0.1;
+                    mouse = new THREE.Vector2();
+                    
+                    // Stats display
+                    statsElement = document.getElementById('stats');
+                    
+                    // Initialize UI controls
+                    document.getElementById('resetView').addEventListener('click', resetView);
+                    document.getElementById('pointSize').addEventListener('input', updatePointSize);
+                    document.getElementById('showConnections').addEventListener('change', toggleConnections);
+                    
+                    // Load data from the server
+                    loadData();
+                }
+                
+                function loadData() {
+                    const loadingElement = document.getElementById('loading');
+                    const progressBar = document.querySelector('.progress-bar');
+                    
+                    const dataFile = './embedding_viz_{model_name}.json';
+                    
+                    fetch(dataFile)
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error(`HTTP error! status: ${response.status}`);
+                            }
+                            
+                            // Check if content is large and show progress
+                            const contentLength = response.headers.get('Content-Length');
+                            if (contentLength && parseInt(contentLength) > 10000000) {
+                                const reader = response.body.getReader();
+                                const totalLength = parseInt(contentLength);
+                                let receivedLength = 0;
+                                
+                                loadingElement.querySelector('div').textContent = 'Loading large dataset...';
+                                
+                                return new ReadableStream({
+                                    start(controller) {
+                                        const push = () => {
+                                            reader.read().then(({ done, value }) => {
+                                                if (done) {
+                                                    controller.close();
+                                                    return;
+                                                }
+                                                
+                                                receivedLength += value.length;
+                                                const percentage = (receivedLength / totalLength * 100).toFixed(0);
+                                                progressBar.style.width = percentage + '%';
+                                                loadingElement.querySelector('div').textContent = 
+                                                    `Loading large dataset... ${percentage}%`;
+                                                
+                                                controller.enqueue(value);
+                                                push();
+                                            });
+                                        }
+                                        push();
+                                    }
+                                });
+                            }
+                            return response.body;
+                        })
+                        .then(body => {
+                            if (body instanceof ReadableStream) {
+                                return new Response(body).json();
+                            }
+                            return response.json();
+                        })
+                        .then(data => {
+                            docData = data;
+                            loadingElement.querySelector('div').textContent = 'Processing visualization...';
+                            
+                            // Process on next frame to allow UI update
+                            setTimeout(() => {
+                                try {
+                                    createVisualization(data);
+                                    loadingElement.style.display = 'none';
+                                    updateStats();
+                                } catch (error) {
+                                    loadingElement.innerHTML = `<div class="error">Error creating visualization: ${error.message}</div>`;
+                                    console.error('Visualization error:', error);
+                                }
+                            }, 10);
+                        })
+                        .catch(error => {
+                            loadingElement.innerHTML = `
+                                <div class="error">Error loading data: ${error.message}</div>
+                                <div>This may be due to opening the file directly. 
+                                Please run the visualization using the server approach.</div>
+                            `;
+                            console.error('Error loading data:', error);
+                        });
+                }
+                
+                function createVisualization(data) {
+                    const positions = data.points;
+                    const colors = data.colors;
+                    
+                    // Calculate bounds for normalization
+                    let minX = Infinity, maxX = -Infinity;
+                    let minY = Infinity, maxY = -Infinity;
+                    let minZ = Infinity, maxZ = -Infinity;
+                    
+                    for (const pos of positions) {
+                        minX = Math.min(minX, pos[0]);
+                        maxX = Math.max(maxX, pos[0]);
+                        minY = Math.min(minY, pos[1]);
+                        maxY = Math.max(maxY, pos[1]);
+                        minZ = Math.min(minZ, pos[2]);
+                        maxZ = Math.max(maxZ, pos[2]);
+                    }
+                    
+                    const rangeX = maxX - minX;
+                    const rangeY = maxY - minY;
+                    const rangeZ = maxZ - minZ;
+                    const maxRange = Math.max(rangeX, rangeY, rangeZ);
+                    
+                    // Create geometry
+                    const geometry = new THREE.BufferGeometry();
+                    const normalizedPositions = [];
+                    
+                    for (const pos of positions) {
+                        // Normalize to range -5 to 5
+                        const x = ((pos[0] - minX) / maxRange * 10) - 5;
+                        const y = ((pos[1] - minY) / maxRange * 10) - 5;
+                        const z = ((pos[2] - minZ) / maxRange * 10) - 5;
+                        normalizedPositions.push(x, y, z);
+                    }
+                    
+                    // Create flat array of colors
+                    const colorArray = new Float32Array(colors.flat());
+                    originalColors = [...colorArray];
+                    
+                    geometry.setAttribute('position', new THREE.Float32BufferAttribute(normalizedPositions, 3));
+                    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colorArray, 3));
+                    
+                    // Create points material
+                    const material = new THREE.PointsMaterial({
+                        size: 0.05,
+                        vertexColors: true,
+                        sizeAttenuation: true,
+                    });
+                    
+                    // Create points object
+                    pointsObject = new THREE.Points(geometry, material);
+                    scene.add(pointsObject);
+                    
+                    // Create document groupings (only if fewer than 50k points for performance)
+                    if (positions.length < 50000) {
+                        createDocumentConnections(data, normalizedPositions);
+                    } else {
+                        document.getElementById('showConnections').checked = false;
+                        document.getElementById('showConnections').disabled = true;
+                        document.getElementById('showConnections').parentElement.title = 
+                            "Disabled for large datasets (>50k points)";
+                    }
+                    
+                    // Add event listeners
+                    window.addEventListener('click', onMouseClick);
+                    window.addEventListener('resize', onWindowResize);
+                    
+                    // Start animation loop
+                    animate();
+                }
+                
+                function createDocumentConnections(data, normalizedPositions) {
+                    // Group points by document
+                    const docGroups = {};
+                    
+                    for (let i = 0; i < data.docs.length; i++) {
+                        const docId = data.docs[i];
+                        if (!docGroups[docId]) {
+                            docGroups[docId] = [];
+                        }
+                        docGroups[docId].push(i);
+                    }
+                    
+                    // For each document with multiple chunks, create connections
+                    for (const docId in docGroups) {
+                        const indices = docGroups[docId];
+                        if (indices.length > 1) {
+                            // Calculate centroid
+                            const centroid = [0, 0, 0];
+                            for (const idx of indices) {
+                                centroid[0] += normalizedPositions[idx * 3];
+                                centroid[1] += normalizedPositions[idx * 3 + 1];
+                                centroid[2] += normalizedPositions[idx * 3 + 2];
+                            }
+                            centroid[0] /= indices.length;
+                            centroid[1] /= indices.length;
+                            centroid[2] /= indices.length;
+                            
+                            // Create connections (limit for performance)
+                            const connectionLimit = Math.min(indices.length, 10);
+                            const docColor = new THREE.Color(
+                                data.colors[indices[0]][0],
+                                data.colors[indices[0]][1],
+                                data.colors[indices[0]][2]
+                            );
+                            
+                            for (let i = 0; i < connectionLimit; i++) {
+                                const idx = indices[i];
+                                const lineGeometry = new THREE.BufferGeometry();
+                                const linePositions = [
+                                    normalizedPositions[idx * 3],
+                                    normalizedPositions[idx * 3 + 1],
+                                    normalizedPositions[idx * 3 + 2],
+                                    centroid[0], centroid[1], centroid[2]
+                                ];
+                                
+                                lineGeometry.setAttribute('position', new THREE.Float32BufferAttribute(linePositions, 3));
+                                
+                                const lineMaterial = new THREE.LineBasicMaterial({
+                                    color: docColor,
+                                    transparent: true,
+                                    opacity: 0.2
+                                });
+                                
+                                const line = new THREE.Line(lineGeometry, lineMaterial);
+                                scene.add(line);
+                                connectionLines.push(line);
+                            }
+                        }
+                    }
+                }
+                
+                function animate() {
+                    requestAnimationFrame(animate);
+                    controls.update();
+                    renderer.render(scene, camera);
+                }
+                
+                function onMouseClick(event) {
+                    // Calculate mouse position in normalized device coordinates
+                    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+                    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+                    
+                    // Update the picking ray with the camera and mouse position
+                    raycaster.setFromCamera(mouse, camera);
+                    
+                    // Check for intersections
+                    if (pointsObject) {
+                        const intersects = raycaster.intersectObject(pointsObject);
+                        
+                        if (intersects.length > 0) {
+                            const index = intersects[0].index;
+                            
+                            // Show information about the selected point
+                            const infoDiv = document.getElementById('info');
+                            infoDiv.innerHTML = `
+                                <strong>Document:</strong> ${docData.docs[index]}<br>
+                                <strong>Text:</strong> ${docData.texts[index]}
+                            `;
+                            
+                            // Highlight the selected point and its document
+                            highlightPoint(index);
+                        }
+                    }
+                }
+                
+                function highlightPoint(index) {
+                    // Reset previous highlights
+                    if (selectedPoint !== null) {
+                        const colors = pointsObject.geometry.attributes.color;
+                        for (let i = 0; i < colors.count; i++) {
+                            colors.setXYZ(
+                                i,
+                                originalColors[i * 3],
+                                originalColors[i * 3 + 1],
+                                originalColors[i * 3 + 2]
+                            );
+                        }
+                    }
+                    
+                    // Highlight the selected document
+                    const docId = docData.docs[index];
+                    const colors = pointsObject.geometry.attributes.color;
+                    
+                    for (let i = 0; i < docData.docs.length; i++) {
+                        if (docData.docs[i] === docId) {
+                            // Highlight with yellow
+                            colors.setXYZ(i, 1.0, 1.0, 0.0);
+                        }
+                    }
+                    
+                    colors.needsUpdate = true;
+                    selectedPoint = index;
+                }
+                
+                function onWindowResize() {
+                    camera.aspect = window.innerWidth / window.innerHeight;
+                    camera.updateProjectionMatrix();
+                    renderer.setSize(window.innerWidth, window.innerHeight);
+                }
+                
+                function resetView() {
+                    camera.position.set(0, 0, 5);
+                    controls.reset();
+                }
+                
+                function updatePointSize(event) {
+                    if (pointsObject) {
+                        pointsObject.material.size = parseFloat(event.target.value);
+                    }
+                }
+                
+                function toggleConnections(event) {
+                    const visible = event.target.checked;
+                    connectionLines.forEach(line => {
+                        line.visible = visible;
+                    });
+                }
+                
+                function updateStats() {
+                    statsElement.textContent = `Points: ${docData.points.length} | Documents: ${Object.keys(docData.doc_map).length} | Model: ${docData.model_name}`;
+                }
+            </script>
+        </body>
+        </html>
+        """.replace("{model_name}", self.current_model['model_name'])
+        
+        with open(html_file, 'w') as f:
+            f.write(html_template)
+        
+        print(f"Visualization files created at:")
+        print(f"- JSON: {json_file}")
+        print(f"- HTML: {html_file}")
+        print(f"To view: Start a web server in '{output_dir}' and open the HTML file")
+        
+        return json_file, html_file
