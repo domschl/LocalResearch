@@ -2269,3 +2269,36 @@ class IcoTqStore:
         else:
             self.log.warning(f"Unsupported device '{dev}', fallback 'auto'.")
             return self.resolve_device('auto')
+
+
+    def visualize_embeddings_3d(self, output_dir=None, max_points=None, method="web"):
+        """
+        Visualize embeddings as a 3D point cloud.
+        
+        Args:
+            output_dir: Directory to save visualization files
+            max_points: Limit number of points to render (None for all)
+            method: Visualization method ("web", "plotly", "pyvista")
+        
+        Returns:
+            Path to visualization file or figure object
+        """
+        if self.embeddings_matrix is None:
+            raise IcotqError("No embeddings available. Load a model and generate embeddings first.")
+        
+        if method == "threejs":
+            from icotq_viz import prepare_embedding_visualization
+            return prepare_embedding_visualization(self, output_dir, max_points)
+        elif method == "plotly":
+            # Import here to avoid dependency if not used
+            import sys
+            sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+            from icotq_viz import visualize_embeddings
+            return visualize_embeddings(self)
+        elif method == "pyvista":
+            import sys
+            sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+            from icotq_viz import visualize_embeddings_pyvista
+            return visualize_embeddings_pyvista(self)
+        else:
+            raise ValueError(f"Unknown visualization method: {method}")

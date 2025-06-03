@@ -225,6 +225,67 @@ def iq_clean(its: IcoTqStore, _logger:logging.Logger, param:str=""):
     if param == "" or "pdf" in param:
         its.check_clean(dry_run=False)
 
+def iq_plot(its: IcoTqStore, _logger:logging.Logger, param:str=""):
+    pari = param.split(' ')
+    if pari[0] not in ["plotly", "pyvista", "threejs"]:
+        print("Usage: 'plot plotly|pyvista|threejs' to visualize embeddings in 3D")
+        return
+    
+    mode = pari[0]
+    max_points = None
+    if len(pari)==2:
+        try:
+            max_points = int(pari[1])
+        except ValueError:
+            print(f"Warning: Invalid number '{pari[1]}' for max_points, using default")
+    
+    out_path = os.path.join(its.root_path, "plots")
+    if not os.path.exists(out_path):
+        os.makedirs(out_path)
+    
+    result = its.visualize_embeddings_3d(output_dir=out_path, method=mode, max_points=max_points)
+    
+    if mode == "threejs":
+        port = 8000
+        print(f"\n[Starting local web server on port {port}]")
+        print(f"Opening visualization in browser: http://localhost:{port}/embedding_visualization.html")
+        
+        # Import server modules only when needed
+        import subprocess
+        import threading
+        import webbrowser
+        
+        # Function to run server in a separate thread
+        def run_server():
+            # Change to the output directory
+            os.chdir(out_path)
+            # Start Python's built-in HTTP server
+            subprocess.run(["python", "-m", "http.server", str(port)])
+        
+        # Start server in background thread
+        server_thread = threading.Thread(target=run_server)
+        server_thread.daemon = True  # Allow the program to exit even if thread is running
+        server_thread.start()
+        
+        # Give the server a moment to start
+        import time
+        time.sleep(1)
+        
+        # Open browser to the visualization
+        webbrowser.open(f"http://localhost:{port}/embedding_visualization.html")
+        
+        print("\nVisualization server running. Press Ctrl+C to stop and return to the prompt.")
+        print("(Keep this terminal window open while viewing the visualization)")
+        
+        try:
+            # Keep the main thread alive until user interrupts
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\nStopping visualization server...")
+    
+    return result
+
 def iq_help(parser:argparse.ArgumentParser, valid_actions:list[tuple[str, str]]):
     parser.print_help()
     print()
@@ -244,6 +305,7 @@ def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
                                             ('search', "Search for keywords given as repl argument or with '-k <keywords>' option. You need to 'sync' and 'index' first"),
                                             ('check', "Verify consistency of data references and indices. Use 'clean' to apply actions."),
                                             ('clean', "Repair consistency of data references and indices. Remove debris. Use 'check' first for dry-run."),
+                                            ('plot', "Visualize embeddings in 3D, using plotly|pyvista|threejs"),
                                             ('help', 'Display usage information')]
     parser: ArgumentParser = argparse.ArgumentParser(description="IcoTq")
     _ = parser.add_argument(
@@ -297,6 +359,8 @@ def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
             iq_check(its, logger, param)
         if 'clean' in actions:
             iq_clean(its, logger, param)
+        if 'plot' in actions:
+            iq_plot(its, logger, param)
         if cast(bool, args.non_interactive) is True:
             break
         if first is True:
