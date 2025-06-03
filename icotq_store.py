@@ -108,7 +108,7 @@ class IcotqConfigurationError(IcotqError):
 
 class IcoTqStore:
     # Accept config_file_override: str | None
-    def __init__(self, config_file_override: str | None = None, config_path_override: str | None = None, calc_3d:bool=False) -> None:
+    def __init__(self, config_file_override: str | None = None, config_path_override: str | None = None) -> None:
         self.log:logging.Logger = logging.getLogger("IcoTqStore")
         # Disable log spam
         tmp = logging.getLogger("transformers_modules")
@@ -116,7 +116,6 @@ class IcoTqStore:
         tmp_st = logging.getLogger("sentence_transformers")
         tmp_st.setLevel(logging.WARNING)
 
-        self.calc_3d:bool = calc_3d
         if PYMUPDF4LLM_AVAILABLE:
             self.log.info("pymupdf4llm library found, will be used as fallback for PDF text extraction.")
         else:
@@ -176,7 +175,6 @@ class IcoTqStore:
                     _ = self._load_model_internal(self.config['embeddings_model_name'],
                                             self.config['embeddings_device'],
                                             self.config['embeddings_model_trust_code'])
-                    # _ = self._calculate_doc_embeddings_internal(model_name=self.config['embeddings_model_name'], calc_3d=self.calc_3d)
                 except IcotqError as e:
                     self.log.error(f"Failed to load initial model specified in config: {e}")
 
@@ -187,7 +185,6 @@ class IcoTqStore:
             if self.current_model:
                 try:
                     _ = self._load_tensor_internal(model_name=self.current_model['model_name'])
-                    _ = self._calculate_doc_embeddings_internal(model_name=self.current_model['model_name'], calc_3d=self.calc_3d)
                 except IcotqConsistencyError as e:
                     self.log.error(f"Consistency Error loading tensor for initial model '{self.current_model['model_name']}': {e}")
                     if self.config.get('auto_fix_inconsistency', False):
@@ -196,7 +193,6 @@ class IcoTqStore:
                             self._generate_embeddings_internal(purge=True, model_name_override=self.current_model['model_name'])
                             self.log.info(f"Automatic re-index for '{self.current_model['model_name']}' completed.")
                             _ = self._load_tensor_internal(model_name=self.current_model['model_name'])
-                            _ = self._calculate_doc_embeddings_internal(model_name=self.current_model['model_name'], calc_3d=self.calc_3d)
                         except IcotqError as fix_e:
                             self.log.error(f"Automatic fix failed for model '{self.current_model['model_name']}': {fix_e}")
                             self.embeddings_matrix = None
@@ -243,7 +239,7 @@ class IcoTqStore:
             changed = False
             if bad_home:
                 for source in self.config['tq_sources']:
-                    if source['path'].startswith(bad_home):
+                    if source['path'].startswith("bad_home"):
                         self.log.info(f"Replacing bad home path {bad_home} with {home_path} in source path {source['path']}")
                         source['path'] = "~/" + source['path'][len(bad_home):]
                         changed = True
@@ -262,21 +258,27 @@ class IcoTqStore:
 
     def _create_default_config(self):
         """Sets the default configuration."""
-        self.config = IcotqConfig(
-            '~/IcoTqStore',
-            [
-                TqSource(
-                    'Calibre', 'calibre_library',
-                    '~/ReferenceLibrary/Calibre Library', ['txt', 'pdf']
-                ),
-                TqSource(
-                    'Notes', 'folder',
-                    '~/Notes', ['md']
-                )],
-            'ibm-granite/granite-embedding-107m-multilingual',
-            'auto',
-            True,
-            False
+        self.config = IcotqConfig({
+            'icotq_path': '~/IcoTqStore',
+            'tq_sources': [
+                TqSource({
+                    'name': 'Calibre',
+                    'tqtype': 'calibre_library',
+                    'path': '~/ReferenceLibrary/Calibre Library',
+                    'file_types': ['txt', 'pdf']
+                }),
+                TqSource({
+                    'name': 'Notes',
+                    'tqtype': 'folder',
+                    'path': '~/Notes',
+                    'file_types': ['md']
+                })
+            ],
+            'embeddings_model_name': 'ibm-granite/granite-embedding-107m-multilingual',
+            'embeddings_device': 'auto',
+            'embeddings_model_trust_code': True,
+            'auto_fix_inconsistency': False
+        }
         )
 
     def _validate_config_paths(self):
@@ -599,52 +601,6 @@ class IcoTqStore:
 
         return loaded_tensor is not None
 
-    def _calculate_doc_embeddings_internal(self, model_name: str | None = None, calc_3d:bool = False) -> bool:
-        if self.doc_embeddings_matrix is not None:
-            del self.doc_embeddings_matrix
-            self.doc_embeddings_matrix = None
-
-        # if self.embeddings_matrix is None:
-        #     self.log.error(f"Cannot calculate document embeddings: No embeddings matrix loaded for model '{model_name}'.")
-        #     return False
-
-        if model_name is None and self.current_model is not None:
-            model_name = self.current_model['model_name']
-
-        if self.current_model is None or model_name != self.current_model['model_name']:
-            self.log.error(f"Cannot calculate document embeddings: Model '{model_name}' is not currently loaded.")
-            return False
-
-        self.log.info(f"Calculating document embeddings for model '{model_name}'")
-        for entry in self.lib:
-            if model_name in entry['emb_ptrs']:
-                # Get the tensor-slice from emb_ptrs:
-                emb_ptrs = entry['emb_ptrs'][model_name]
-                start, length = emb_ptrs[0], emb_ptrs[1]
-                if self.embeddings_matrix is not None:
-                    doc_embeddings: torch.Tensor = self.embeddings_matrix[start:start + length, :]
-                # Calculate the mean of the embeddings
-                doc_mean = torch.mean(doc_embeddings, dim=0).reshape(1, -1)
-                if self.doc_embeddings_matrix is None:
-                    self.doc_embeddings_matrix = doc_mean
-                else:
-                    self.doc_embeddings_matrix = torch.cat([self.doc_embeddings_matrix, doc_mean], dim=0)  # pyright:ignore[reportUnknownMemberType]
-                # self.log.info(f"Document embeddings for '{entry['desc_filename']}' calculated, shape {self.doc_embeddings_matrix.shape}.")
-
-        if self.doc_embeddings_matrix is None:  # pyright:ignore[reportUnknownMemberType]
-            self.log.error(f"Failed to calculate document embeddings for model '{model_name}'. No entries found.")
-            return False
-
-        if calc_3d is True:
-            # Calculate PCA for 3D visualization
-            self.log.info("Calculating PCA for 3D visualization of document embeddings.")
-            pca = PCA(n_components=3)
-            local_doc_emb: np.typing.NDArray[np.float32]= self.doc_embeddings_matrix.cpu().numpy()  # pyright:ignore[reportUnknownVariableType, reportUnknownMemberType]
-            pca_result: np.typing.NDArray[np.float32] = cast(np.typing.NDArray[np.float32], pca.fit_transform(local_doc_emb))  # pyright:ignore[reportUnknownMemberType]
-            self.log.info(f"PCA result shape: {pca_result.shape}")
-            self.pca_matrix = torch.tensor(pca_result)
-        return True
-
     def _save_config_internal(self):
         """Saves config atomically. Assumes lock is held."""
         home_path = os.path.expanduser('~')
@@ -961,9 +917,6 @@ class IcoTqStore:
                     except IcotqError as e:
                         self.log.error(f"Error loading tensor for model '{name}': {e}")
                         self.embeddings_matrix = None
-
-                    # calculate doc embeddings if requested
-                    _ = self._calculate_doc_embeddings_internal(name, calc_3d=self.calc_3d)
 
                     self.config['embeddings_model_name'] = name
                     self.config['embeddings_device'] = device
@@ -1624,7 +1577,6 @@ class IcoTqStore:
             if self.current_model and self.current_model['model_name'] == target_model_name:
                 self.embeddings_matrix = local_embeddings_matrix
                 self.log.info(f"Current model's ({target_model_name}) in-memory tensor updated.")
-                _ = self._calculate_doc_embeddings_internal(self.current_model['model_name'], calc_3d=self.calc_3d)
         except IcotqCriticalError as e: 
             print("\nCRITICAL ERROR during final save.")
             raise
