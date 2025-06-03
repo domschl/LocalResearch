@@ -421,7 +421,7 @@ class IcoTqStore:
         finally:
              if fd_needs_explicit_close and temp_fd is not None:
                  try: os.close(temp_fd)
-                 except OSError as close_e: self.log.warning(f"Ignoring error closing temp_fd {temp_fd} in finally: {close_e}")
+                 except OSError: pass
              if temp_path and os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)
@@ -1991,6 +1991,415 @@ class IcoTqStore:
                 self.log.critical(f"Unexpected critical error during search: {e}", exc_info=True)
                 return []
 
+    def visualize_embeddings_3d(self, output_dir=None, max_points=None, method="threejs"):
+        """
+        Visualize embeddings as a 3D point cloud using Three.js with a web server approach.
+        
+        Args:
+            output_dir: Directory to save visualization files
+            max_points: Limit number of points to render (None for all)
+        
+        Returns:
+            Tuple of (json_path, html_path) for the visualization files
+        """
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=".*'force_all_finite'.*")
+           
+        if self.embeddings_matrix is None:
+            raise IcotqError("No embeddings available. Load a model and generate embeddings first.")
+        
+        # Define output directory
+        if output_dir is None:
+            output_dir = os.path.join(self.root_path, "Visualizations")
+        
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Prepare the data
+        print("Preparing embedding visualization data...")
+        
+        # Extract embeddings
+        start_time = time.time()
+        embeddings = self.embeddings_matrix.cpu().numpy()
+        num_embeddings = embeddings.shape[0]
+        print(f"Extracted {num_embeddings} embeddings in {time.time() - start_time:.2f}s")
+        
+        # Limit points if needed
+        if max_points and num_embeddings > max_points:
+            print(f"Limiting to {max_points} points")
+            indices = np.random.choice(num_embeddings, max_points, replace=False)
+            indices.sort()  # Keep order for better document correlation
+            embeddings = embeddings[indices]
+        
+        # Build document mapping
+        start_time = time.time()
+        doc_mapping = []
+        doc_ids = []
+        chunk_texts = []
+        unique_docs = set()
+        
+        for entry in self.lib:
+            if self.current_model['model_name'] in entry.get('emb_ptrs', {}):
+                start, length = entry['emb_ptrs'][self.current_model['model_name']]
+                doc_id = entry['desc_filename']
+                unique_docs.add(doc_id)
+                
+                # Only process chunks within our embedding limits
+                actual_length = min(length, embeddings.shape[0] - start)
+                for i in range(actual_length):
+                    idx = start + i
+                    if idx >= embeddings.shape[0]:
+                        break
+                    
+                    doc_mapping.append((idx, doc_id))
+                    doc_ids.append(doc_id)
+                    chunk_text = self.get_chunk(
+                        entry['text'], i, 
+                        self.current_model['chunk_size'], 
+                        self.current_model['chunk_overlap']
+                    )
+                    chunk_texts.append(chunk_text[:200])  # Limit text size
+        
+        print(f"Processed {len(doc_mapping)} document mappings in {time.time() - start_time:.2f}s")
+        
+        # Dimensionality reduction
+        start_time = time.time()
+        print("Performing dimensionality reduction...")
+        
+        from sklearn.decomposition import PCA
+        import umap
+        
+        # Always use PCA first for large dimensions
+        if embeddings.shape[1] > 50:
+            pca = PCA(n_components=50)
+            embeddings_reduced = pca.fit_transform(embeddings)
+            print(f"PCA reduction completed in {time.time() - start_time:.2f}s")
+            start_time = time.time()
+        else:
+            embeddings_reduced = embeddings
+        
+        # Use UMAP with parallelization
+        print("Using parallel UMAP with all CPU cores")
+        reducer = umap.UMAP(
+            n_components=3, 
+            metric='cosine', 
+            n_neighbors=15, 
+            min_dist=0.1,
+            n_jobs=-1,  # Use all available cores
+            verbose=True,  # Show progress
+            low_memory=False # Faster but more memory-intensive or slower, less memory-intensive
+        )
+        embeddings_3d = reducer.fit_transform(embeddings_reduced)
+        print(f"UMAP reduction completed in {time.time() - start_time:.2f}s")
+        
+        # Assign colors
+        start_time = time.time()
+        unique_doc_list = list(unique_docs)
+        doc_color_map = {}
+        
+        import colorsys
+        for i, doc in enumerate(unique_doc_list):
+            # Generate a color from HSV for better distribution
+            hue = i / len(unique_doc_list)
+            rgb = colorsys.hsv_to_rgb(hue, 0.8, 0.9)
+            doc_color_map[doc] = [float(c) for c in rgb]
+        
+        colors = [doc_color_map[doc_id] for doc_id in doc_ids]
+        print(f"Color assignment completed in {time.time() - start_time:.2f}s")
+        
+        # Prepare output data
+        start_time = time.time()
+        output_data = {
+            "points": embeddings_3d.tolist(),
+            "colors": colors,
+            "docs": doc_ids,
+            "texts": chunk_texts,
+            "doc_map": {doc: i for i, doc in enumerate(unique_doc_list)},
+            "model_name": self.current_model['model_name'],
+            "total_points": len(embeddings_3d)
+        }
+        
+        # Generate output files
+        import json
+        
+        # 1. Save the JSON data
+        json_file = os.path.join(output_dir, f"embedding_viz_{self.current_model['model_name']}.json")
+        with open(json_file, 'w') as f:
+            json.dump(output_data, f)
+        
+        # 2. Create the HTML visualization file that loads data from the server
+        html_file = os.path.join(output_dir, "embedding_visualization.html")
+        
+        # In the HTML template, find the part where the visualization is created
+        # and replace the Points material with instanced spheres
+        
+        html_template = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Embeddings Visualization</title>
+            <!-- ...existing code... -->
+        </head>
+        <body>
+            <!-- ...existing code... -->
+            
+            <script>
+            // ...existing code...
+            
+            function createVisualization(data) {{
+                // ...existing normalization code...
+                
+                // Create instance geometry - a sphere
+                const sphereGeometry = new THREE.SphereGeometry(0.05, 8, 8);
+                const material = new THREE.MeshPhysicalMaterial({{
+                    transparent: true,
+                    opacity: 0.7,
+                    roughness: 0.2,
+                    metalness: 0.1,
+                    clearcoat: 0.3
+                }});
+                
+                const instancedMesh = new THREE.InstancedMesh(
+                    sphereGeometry,
+                    material,
+                    positions.length
+                );
+                
+                // Set instance positions and colors
+                const dummy = new THREE.Object3D();
+                for (let i = 0; i < positions.length; i++) {{
+                    const x = ((positions[i][0] - minX) / maxRange * 10) - 5;
+                    const y = ((positions[i][1] - minY) / maxRange * 10) - 5;
+                    const z = ((positions[i][2] - minZ) / maxRange * 10) - 5;
+                    
+                    dummy.position.set(x, y, z);
+                    dummy.updateMatrix();
+                    instancedMesh.setMatrixAt(i, dummy.matrix);
+                    
+                    // Set color for this instance
+                    instancedMesh.setColorAt(i, new THREE.Color(
+                        colors[i][0],
+                        colors[i][1],
+                        colors[i][2]
+                    ));
+                }}
+                
+                instancedMesh.instanceMatrix.needsUpdate = true;
+                if (instancedMesh.instanceColor) instancedMesh.instanceColor.needsUpdate = true;
+                
+                scene.add(instancedMesh);
+                pointsObject = instancedMesh;
+                
+                // Update stats
+                const statsElement = document.getElementById('stats');
+                statsElement.textContent = `Points: ${data.points.length} | Documents: ${Object.keys(data.doc_map).length} | Model: ${data.model_name}`;
+                
+                // Create document groupings (only if fewer than 50k points for performance)
+                if (positions.length < 50000) {{
+                    createDocumentConnections(data, normalizedPositions);
+                }} else {{
+                    document.getElementById('showConnections').checked = false;
+                    document.getElementById('showConnections').disabled = true;
+                    document.getElementById('showConnections').parentElement.title = 
+                        "Disabled for large datasets (>50k points)";
+                }}
+                
+                // Add event listeners
+                window.addEventListener('click', onMouseClick);
+                window.addEventListener('resize', onWindowResize);
+                
+                // Start animation loop
+                animate();
+            }}
+            
+            function createDocumentConnections(data, normalizedPositions) {{
+                // Group points by document
+                const docGroups = {{}};
+                
+                for (let i = 0; i < data.docs.length; i++)
+                
+                // For each document with multiple chunks, create connections
+                for (const docId in docGroups) {{
+                    const indices = docGroups[docId];
+                    if (indices.length > 1) {{
+                        // Calculate centroid
+                        const centroid = [0, 0, 0];
+                        for (const idx of indices) {{
+                            centroid[0] += normalizedPositions[idx * 3];
+                            centroid[1] += normalizedPositions[idx * 3 + 1];
+                            centroid[2] += normalizedPositions[idx * 3 + 2];
+                        }}
+                        centroid[0] /= indices.length;
+                        centroid[1] /= indices.length;
+                        centroid[2] /= indices.length;
+                        
+                        // Create connections (limit for performance)
+                        const connectionLimit = Math.min(indices.length, 10);
+                        const docColor = new THREE.Color(
+                            data.colors[indices[0]][0],
+                            data.colors[indices[0]][1],
+                            data.colors[indices[0]][2]
+                        );
+                        
+                        for (let i = 0; i < connectionLimit; i++) {{
+                            const idx = indices[i];
+                            const lineGeometry = new THREE.BufferGeometry();
+                            const linePositions = [
+                                normalizedPositions[idx * 3],
+                                normalizedPositions[idx * 3 + 1],
+                                normalizedPositions[idx * 3 + 2],
+                                centroid[0], centroid[1], centroid[2]
+                            ];
+                            
+                            lineGeometry.setAttribute('position', new THREE.Float32BufferAttribute(linePositions, 3));
+                            
+                            const lineMaterial = new THREE.LineBasicMaterial({{
+                                color: docColor,
+                                transparent: true,
+                                opacity: 0.2
+                            }});
+                            
+                            const line = new THREE.Line(lineGeometry, lineMaterial);
+                            scene.add(line);
+                            connectionLines.push(line);
+                        }}
+                    }}
+                }}
+            }}
+            
+            function animate() {{
+                requestAnimationFrame(animate);
+                controls.update();
+                renderer.render(scene, camera);
+            }}
+            
+            function onMouseClick(event) {{
+                // Calculate mouse position in normalized device coordinates
+                mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+                mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+                
+                // Update the picking ray with the camera and mouse position
+                raycaster.setFromCamera(mouse, camera);
+                
+                // Check for intersections
+                // For instanced mesh raycasting
+                if (pointsObject) {{
+                    raycaster.setFromCamera(mouse, camera);
+                    const intersects = raycaster.intersectObject(pointsObject);
+                    
+                    if (intersects.length > 0) {{
+                        const instanceId = intersects[0].instanceId;
+                        
+                        // Show information about the selected point
+                        const infoDiv = document.getElementById('info');
+                        infoDiv.innerHTML = 
+                            '<strong>Document:</strong> ' + data.docs[instanceId] + '<br>' +
+                            '<strong>Text:</strong> ' + data.texts[instanceId];
+                        
+                        // Highlight the selected point
+                        highlightPoint(instanceId);
+                    }}
+                }}
+            }}
+            
+            // Highlight a point by changing its color                
+            function highlightPoint(index) {{
+                // Reset previous highlights
+                if (selectedPoint !== null) {{
+                    const colors = pointsObject.geometry.attributes.color;
+                    for (let i = 0; i < colors.count; i++) {{
+                        colors.setXYZ(
+                            i,
+                            originalColors[i * 3],
+                            originalColors[i * 3 + 1],
+                            originalColors[i * 3 + 2]
+                        );
+                    }}
+                }}
+                
+                // Highlight the selected document
+                const docId = docData.docs[index];
+                const colors = pointsObject.geometry.attributes.color;
+                
+                for (let i = 0; i < docData.docs.length; i++) {{
+                    if (docData.docs[i] === docId) {{
+                        // Highlight with yellow
+                        colors.setXYZ(i, 1.0, 1.0, 0.0);
+                    }}
+                }}
+                
+                colors.needsUpdate = true;
+                selectedPoint = index;
+            }}
+            
+            function onWindowResize() {{
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            }}
+            
+            function resetView() {{
+                camera.position.set(0, 0, 5);
+                controls.reset();
+            }}
+
+            function updatePointSize(event) {{
+                if (pointsObject) {{
+                    const size = parseFloat(event.target.value);
+                    scene.remove(pointsObject);
+                    
+                    // Recreate with new size
+                    const sphereGeometry = new THREE.SphereGeometry(size, 8, 8);
+                    const newInstancedMesh = new THREE.InstancedMesh(
+                        sphereGeometry,
+                        pointsObject.material,
+                        pointsObject.count
+                    );
+                    
+                    // Copy matrices and colors
+                    for (let i = 0; i < pointsObject.count; i++) {{
+                        const matrix = new THREE.Matrix4();
+                        pointsObject.getMatrixAt(i, matrix);
+                        newInstancedMesh.setMatrixAt(i, matrix);
+                        
+                        const color = new THREE.Color();
+                        pointsObject.getColorAt(i, color);
+                        newInstancedMesh.setColorAt(i, color);
+                    }}
+                    
+                    newInstancedMesh.instanceMatrix.needsUpdate = true;
+                    if (newInstancedMesh.instanceColor) 
+                        newInstancedMesh.instanceColor.needsUpdate = true;
+                        
+                    scene.add(newInstancedMesh);
+                    pointsObject = newInstancedMesh;
+                }}
+            }}               
+
+            function toggleConnections(event) {{
+                const visible = event.target.checked;
+                connectionLines.forEach(line => {{
+                    line.visible = visible;
+                }});
+            }}
+            
+            function updateStats() {{
+                statsElement.textContent = `Points: ${docData.points.length} | Documents: ${Object.keys(docData.doc_map).length} | Model: ${docData.model_name}`;
+            }}
+            </script>
+        </body>
+        </html>
+        """.replace("{model_name}", self.current_model['model_name'])
+        
+        with open(html_file, 'w') as f:
+            f.write(html_template)
+        
+        print(f"Visualization files created at:")
+        print(f"- JSON: {json_file}")
+        print(f"- HTML: {html_file}")
+        print(f"To view: Start a web server in '{output_dir}' and open the HTML file")
+        
+        return json_file, html_file
 
     # === Static Utility Methods ===
 
@@ -2367,7 +2776,7 @@ class IcoTqStore:
             min_dist=0.1,
             n_jobs=-1,  # Use all available cores
             verbose=True,  # Show progress
-            low_memory=True  # Faster but more memory-intensive or slower, less memory-intensive
+            low_memory=False # Faster but more memory-intensive or slower, less memory-intensive
         )
         embeddings_3d = reducer.fit_transform(embeddings_reduced)
         print(f"UMAP reduction completed in {time.time() - start_time:.2f}s")
@@ -2410,317 +2819,208 @@ class IcoTqStore:
         # 2. Create the HTML visualization file that loads data from the server
         html_file = os.path.join(output_dir, "embedding_visualization.html")
         
-        html_template = """
+        # In the HTML template, find the part where the visualization is created
+        # and replace the Points material with instanced spheres
+        
+        html_template = f"""
+        
         <!DOCTYPE html>
         <html>
         <head>
-            <meta charset="utf-8">
-            <title>Embedding Visualization</title>
-            <script type="importmap">
-            {
-            "imports": {
-                "three": "https://unpkg.com/three@0.150.0/build/three.module.js",
-                "three/examples/jsm/controls/OrbitControls.js": "https://unpkg.com/three@0.150.0/examples/jsm/controls/OrbitControls.js"
-            }
-            }
-            </script>
+            <title>Embeddings Visualization</title>
+            <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+            <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/controls/OrbitControls.js"></script>
             <style>
-                body { 
-                    margin: 0; 
-                    overflow: hidden; 
-                    font-family: Arial, sans-serif;
-                }
-                #info {
-                    position: absolute; 
-                    top: 10px; 
-                    left: 10px; 
-                    background: rgba(255,255,255,0.8);
-                    padding: 10px;
-                    border-radius: 5px;
-                    max-width: 300px;
-                    max-height: 300px;
-                    overflow: auto;
-                    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-                }
-                #stats {
-                    position: absolute;
-                    bottom: 10px;
-                    left: 10px;
-                    background: rgba(255,255,255,0.8);
-                    padding: 10px;
-                    border-radius: 5px;
-                    font-size: 12px;
-                }
-                #loading {
-                    position: absolute;
-                    top: 50%;
-                    left: 50%;
-                    transform: translate(-50%, -50%);
-                    font-size: 24px;
-                    background: white;
-                    padding: 20px;
-                    border-radius: 10px;
-                    box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-                    text-align: center;
-                }
-                #loading .progress {
-                    margin-top: 10px;
-                    width: 100%;
-                    height: 10px;
-                    background-color: #f3f3f3;
-                    border-radius: 5px;
-                    overflow: hidden;
-                }
-                #loading .progress-bar {
-                    height: 100%;
-                    width: 0%;
-                    background-color: #4CAF50;
-                    transition: width 0.3s;
-                }
-                .controls {
-                    position: absolute;
-                    top: 10px;
-                    right: 10px;
-                    background: rgba(255,255,255,0.8);
-                    padding: 10px;
-                    border-radius: 5px;
-                    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-                }
-                .controls button {
-                    margin: 5px;
-                    padding: 5px 10px;
-                    cursor: pointer;
-                }
-                .controls label {
-                    display: block;
-                    margin-top: 10px;
-                }
-                .error {
-                    color: red;
-                    font-weight: bold;
-                }
+                body {{ margin: 0; overflow: hidden; }}
+                #container {{ width: 100%; height: 100vh; }}
+                #info {{ position: absolute; top: 10px; left: 10px; background: rgba(255,255,255,0.8); padding: 10px; max-width: 400px; max-height: 80vh; overflow: auto; }}
+                #controls {{ position: absolute; bottom: 10px; left: 10px; background: rgba(255,255,255,0.8); padding: 10px; }}
+                #stats {{ position: absolute; top: 10px; right: 10px; background: rgba(255,255,255,0.8); padding: 5px; }}
             </style>
         </head>
         <body>
-            <div id="info">Click a point to see document info</div>
+            <div id="container"></div>
+            <div id="info"></div>
+            <div id="controls">
+                <button onclick="resetView()">Reset View</button>
+                <div>
+                    <label>Point Size: <input type="range" min="0.01" max="0.2" step="0.01" value="0.05" onchange="updatePointSize(event)"></label>
+                </div>
+                <div>
+                    <label><input type="checkbox" id="showConnections" checked onchange="toggleConnections(event)"> Show Connections</label>
+                </div>
+            </div>
             <div id="stats"></div>
-            <div id="loading">
-                <div>Loading visualization data...</div>
-                <div class="progress"><div class="progress-bar"></div></div>
-            </div>
-            <div class="controls">
-                <button id="resetView">Reset View</button>
-                <label>
-                    Point Size:
-                    <input type="range" id="pointSize" min="0.01" max="0.2" step="0.01" value="0.05">
-                </label>
-                <label>
-                    Show Connections:
-                    <input type="checkbox" id="showConnections" checked>
-                </label>
-            </div>
             
-            <script type="module">
-                import * as THREE from 'three';
-                import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-                
+            <script>
                 // Global variables
                 let scene, camera, renderer, controls;
-                let pointsObject, connectionLines = [];
-                let raycaster, mouse;
+                let pointsGroup, highlightSphere;
+                let raycaster = new THREE.Raycaster();
+                let mouse = new THREE.Vector2();
                 let selectedPoint = null;
-                let originalColors = [];
-                let statsElement;
-                let docData;
+                let connectionLines = [];
+                let visualData; // Store loaded data globally
+                let spheres = [];
+                let sphereSize = 0.05;
                 
-                // Initialize the scene
+                // Initialize scene
                 init();
                 
-                function init() {
-                    // Setup renderer
-                    renderer = new THREE.WebGLRenderer({ antialias: true });
-                    renderer.setSize(window.innerWidth, window.innerHeight);
-                    renderer.setPixelRatio(window.devicePixelRatio);
-                    document.body.appendChild(renderer.domElement);
-                    
-                    // Setup scene
+                // Load data
+                loadData();
+                
+                function init() {{
+                    // Create scene
                     scene = new THREE.Scene();
-                    scene.background = new THREE.Color(0xf0f0f0);
+                    scene.background = new THREE.Color(0xf0f0f0); // Light gray background
                     
-                    // Setup camera
-                    camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+                    // Create camera
+                    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
                     camera.position.z = 5;
                     
-                    // Setup controls
-                    controls = new OrbitControls(camera, renderer.domElement);
-                    controls.enableDamping = true;
-                    controls.dampingFactor = 0.05;
+                    // Create renderer
+                    renderer = new THREE.WebGLRenderer({{ antialias: true }});
+                    renderer.setSize(window.innerWidth, window.innerHeight);
+                    document.getElementById('container').appendChild(renderer.domElement);
                     
-                    // Lighting
-                    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+                    // Create controls
+                    controls = new THREE.OrbitControls(camera, renderer.domElement);
+                    controls.enableDamping = true;
+                    controls.dampingFactor = 0.25;
+                    
+                    // Add lights
+                    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
                     scene.add(ambientLight);
                     
-                    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
-                    directionalLight.position.set(0, 1, 0);
+                    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+                    directionalLight.position.set(1, 1, 1);
                     scene.add(directionalLight);
                     
-                    // Raycaster for point selection
-                    raycaster = new THREE.Raycaster();
-                    raycaster.params.Points.threshold = 0.1;
-                    mouse = new THREE.Vector2();
+                    // Create a group to hold all spheres
+                    pointsGroup = new THREE.Group();
+                    scene.add(pointsGroup);
                     
-                    // Stats display
-                    statsElement = document.getElementById('stats');
-                    
-                    // Initialize UI controls
-                    document.getElementById('resetView').addEventListener('click', resetView);
-                    document.getElementById('pointSize').addEventListener('input', updatePointSize);
-                    document.getElementById('showConnections').addEventListener('change', toggleConnections);
-                    
-                    // Load data from the server
-                    loadData();
-                }
+                    // Create highlight sphere (invisible initially)
+                    const highlightGeo = new THREE.SphereGeometry(sphereSize * 1.3, 16, 12);
+                    const highlightMat = new THREE.MeshBasicMaterial({{
+                        color: 0xffff00,
+                        transparent: true,
+                        opacity: 0.7,
+                        wireframe: true
+                    }});
+                    highlightSphere = new THREE.Mesh(highlightGeo, highlightMat);
+                    highlightSphere.visible = false;
+                    scene.add(highlightSphere);
+                }}
                 
-                function loadData() {
-                    const loadingElement = document.getElementById('loading');
-                    const progressBar = document.querySelector('.progress-bar');
-                    
-                    const dataFile = './embedding_viz_{model_name}.json';
-                    
-                    fetch(dataFile)
-                        .then(response => {
-                            if (!response.ok) {
-                                throw new Error(`HTTP error! status: ${response.status}`);
-                            }
-                            
-                            // Check if content is large and show progress
-                            const contentLength = response.headers.get('Content-Length');
-                            if (contentLength && parseInt(contentLength) > 10000000) {
-                                const reader = response.body.getReader();
-                                const totalLength = parseInt(contentLength);
-                                let receivedLength = 0;
-                                
-                                loadingElement.querySelector('div').textContent = 'Loading large dataset...';
-                                
-                                return new ReadableStream({
-                                    start(controller) {
-                                        const push = () => {
-                                            reader.read().then(({ done, value }) => {
-                                                if (done) {
-                                                    controller.close();
-                                                    return;
-                                                }
-                                                
-                                                receivedLength += value.length;
-                                                const percentage = (receivedLength / totalLength * 100).toFixed(0);
-                                                progressBar.style.width = percentage + '%';
-                                                loadingElement.querySelector('div').textContent = 
-                                                    `Loading large dataset... ${percentage}%`;
-                                                
-                                                controller.enqueue(value);
-                                                push();
-                                            });
-                                        }
-                                        push();
-                                    }
-                                });
-                            }
-                            return response.body;
-                        })
-                        .then(body => {
-                            if (body instanceof ReadableStream) {
-                                return new Response(body).json();
-                            }
-                            return response.json();
-                        })
-                        .then(data => {
-                            docData = data;
-                            loadingElement.querySelector('div').textContent = 'Processing visualization...';
-                            
-                            // Process on next frame to allow UI update
-                            setTimeout(() => {
-                                try {
-                                    createVisualization(data);
-                                    loadingElement.style.display = 'none';
-                                    updateStats();
-                                } catch (error) {
-                                    loadingElement.innerHTML = `<div class="error">Error creating visualization: ${error.message}</div>`;
-                                    console.error('Visualization error:', error);
-                                }
-                            }, 10);
-                        })
-                        .catch(error => {
-                            loadingElement.innerHTML = `
-                                <div class="error">Error loading data: ${error.message}</div>
-                                <div>This may be due to opening the file directly. 
-                                Please run the visualization using the server approach.</div>
-                            `;
-                            console.error('Error loading data:', error);
-                        });
-                }
+                function loadData() {{
+                    fetch('{os.path.basename(json_file)}')
+                        .then(response => response.json())
+                        .then(data => {{
+                            visualData = data; // Store data globally
+                            createVisualization(data);
+                        }});
+                }}
                 
-                function createVisualization(data) {
+                function createVisualization(data) {{
+                    // Calculate min/max for normalization
                     const positions = data.points;
                     const colors = data.colors;
                     
-                    // Calculate bounds for normalization
-                    let minX = Infinity, maxX = -Infinity;
-                    let minY = Infinity, maxY = -Infinity;
-                    let minZ = Infinity, maxZ = -Infinity;
+                    let minX = Infinity, minY = Infinity, minZ = Infinity;
+                    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
                     
-                    for (const pos of positions) {
+                    for (const pos of positions) {{
                         minX = Math.min(minX, pos[0]);
-                        maxX = Math.max(maxX, pos[0]);
                         minY = Math.min(minY, pos[1]);
-                        maxY = Math.max(maxY, pos[1]);
                         minZ = Math.min(minZ, pos[2]);
+                        maxX = Math.max(maxX, pos[0]);
+                        maxY = Math.max(maxY, pos[1]);
                         maxZ = Math.max(maxZ, pos[2]);
-                    }
+                    }}
                     
                     const rangeX = maxX - minX;
                     const rangeY = maxY - minY;
                     const rangeZ = maxZ - minZ;
                     const maxRange = Math.max(rangeX, rangeY, rangeZ);
                     
-                    // Create geometry
-                    const geometry = new THREE.BufferGeometry();
-                    const normalizedPositions = [];
+                    // Create batches for better performance (avoid too many draw calls)
+                    // Use a shared geometry
+                    const sphereGeometry = new THREE.SphereGeometry(sphereSize, 8, 6);
                     
-                    for (const pos of positions) {
-                        // Normalize to range -5 to 5
-                        const x = ((pos[0] - minX) / maxRange * 10) - 5;
-                        const y = ((pos[1] - minY) / maxRange * 10) - 5;
-                        const z = ((pos[2] - minZ) / maxRange * 10) - 5;
-                        normalizedPositions.push(x, y, z);
-                    }
+                    // Use instanced mesh for better performance
+                    const maxInstancesPerBatch = 1000;
+                    const batchCount = Math.ceil(positions.length / maxInstancesPerBatch);
                     
-                    // Create flat array of colors
-                    const colorArray = new Float32Array(colors.flat());
-                    originalColors = [...colorArray];
+                    for (let batch = 0; batch < batchCount; batch++) {{
+                        const startIdx = batch * maxInstancesPerBatch;
+                        const endIdx = Math.min(startIdx + maxInstancesPerBatch, positions.length);
+                        const instanceCount = endIdx - startIdx;
+                        
+                        // Create instanced mesh for this batch
+                        const instancedMesh = new THREE.InstancedMesh(
+                            sphereGeometry,
+                            new THREE.MeshPhysicalMaterial({{
+                                transparent: true,
+                                opacity: 0.7,
+                                roughness: 0.3,
+                                metalness: 0.1
+                            }}),
+                            instanceCount
+                        );
+                        
+                        // Set positions and colors
+                        const dummy = new THREE.Object3D();
+                        for (let i = 0; i < instanceCount; i++) {{
+                            const dataIdx = startIdx + i;
+                            
+                            // Normalize position
+                            const x = ((positions[dataIdx][0] - minX) / maxRange * 10) - 5;
+                            const y = ((positions[dataIdx][1] - minY) / maxRange * 10) - 5;
+                            const z = ((positions[dataIdx][2] - minZ) / maxRange * 10) - 5;
+                            
+                            // Set position
+                            dummy.position.set(x, y, z);
+                            dummy.updateMatrix();
+                            instancedMesh.setMatrixAt(i, dummy.matrix);
+                            
+                            // Set color
+                            const color = new THREE.Color(
+                                colors[dataIdx][0],
+                                colors[dataIdx][1],
+                                colors[dataIdx][2]
+                            );
+                            instancedMesh.setColorAt(i, color);
+                        }}
+                        
+                        // Need to update these after setting
+                        instancedMesh.instanceMatrix.needsUpdate = true;
+                        if (instancedMesh.instanceColor) instancedMesh.instanceColor.needsUpdate = true;
+                        
+                        // Store reference to original data indices
+                        instancedMesh.userData = {{ startIdx: startIdx }};
+                        
+                        // Add to scene
+                        pointsGroup.add(instancedMesh);
+                        spheres.push(instancedMesh);
+                    }}
                     
-                    geometry.setAttribute('position', new THREE.Float32BufferAttribute(normalizedPositions, 3));
-                    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colorArray, 3));
+                    // Update stats
+                    const statsElement = document.getElementById('stats');
+                    statsElement.textContent = 'Points: ' + data.points.length + 
+                        ' | Documents: ' + Object.keys(data.doc_map).length + 
+                        ' | Model: ' + data.model_name;
                     
-                    // Create points material
-                    const material = new THREE.PointsMaterial({
-                        size: 0.05,
-                        vertexColors: true,
-                        sizeAttenuation: true,
-                    });
-                    
-                    // Create points object
-                    pointsObject = new THREE.Points(geometry, material);
-                    scene.add(pointsObject);
-                    
-                    // Create document groupings (only if fewer than 50k points for performance)
-                    if (positions.length < 50000) {
-                        createDocumentConnections(data, normalizedPositions);
-                    } else {
+                    // Create document connections (if not too many points)
+                    if (positions.length < 50000) {{
+                        createDocumentConnections(data);
+                    }} else {{
                         document.getElementById('showConnections').checked = false;
                         document.getElementById('showConnections').disabled = true;
                         document.getElementById('showConnections').parentElement.title = 
                             "Disabled for large datasets (>50k points)";
-                    }
+                    }}
                     
                     // Add event listeners
                     window.addEventListener('click', onMouseClick);
@@ -2728,34 +3028,51 @@ class IcoTqStore:
                     
                     // Start animation loop
                     animate();
-                }
+                }}
                 
-                function createDocumentConnections(data, normalizedPositions) {
+                function createDocumentConnections(data) {{
                     // Group points by document
-                    const docGroups = {};
+                    const docGroups = {{}};
+                    const positions = data.points;
                     
-                    for (let i = 0; i < data.docs.length; i++) {
+                    for (let i = 0; i < data.docs.length; i++) {{
                         const docId = data.docs[i];
-                        if (!docGroups[docId]) {
-                            docGroups[docId] = [];
-                        }
+                        if (!docGroups[docId]) docGroups[docId] = [];
                         docGroups[docId].push(i);
-                    }
+                    }}
+                    
+                    // Get normalized position for a point index
+                    function getNormalizedPosition(idx) {{
+                        const positions = data.points;
+                        const minX = Math.min(...positions.map(p => p[0]));
+                        const minY = Math.min(...positions.map(p => p[1]));
+                        const minZ = Math.min(...positions.map(p => p[2]));
+                        const maxX = Math.max(...positions.map(p => p[0]));
+                        const maxY = Math.max(...positions.map(p => p[1]));
+                        const maxZ = Math.max(...positions.map(p => p[2]));
+                        
+                        const rangeX = maxX - minX;
+                        const rangeY = maxY - minY;
+                        const rangeZ = maxZ - minZ;
+                        const maxRange = Math.max(rangeX, rangeY, rangeZ);
+                        
+                        const x = ((positions[idx][0] - minX) / maxRange * 10) - 5;
+                        const y = ((positions[idx][1] - minY) / maxRange * 10) - 5;
+                        const z = ((positions[idx][2] - minZ) / maxRange * 10) - 5;
+                        
+                        return new THREE.Vector3(x, y, z);
+                    }}
                     
                     // For each document with multiple chunks, create connections
-                    for (const docId in docGroups) {
+                    for (const docId in docGroups) {{
                         const indices = docGroups[docId];
-                        if (indices.length > 1) {
+                        if (indices.length > 1) {{
                             // Calculate centroid
-                            const centroid = [0, 0, 0];
-                            for (const idx of indices) {
-                                centroid[0] += normalizedPositions[idx * 3];
-                                centroid[1] += normalizedPositions[idx * 3 + 1];
-                                centroid[2] += normalizedPositions[idx * 3 + 2];
-                            }
-                            centroid[0] /= indices.length;
-                            centroid[1] /= indices.length;
-                            centroid[2] /= indices.length;
+                            const centroid = new THREE.Vector3();
+                            for (const idx of indices) {{
+                                centroid.add(getNormalizedPosition(idx));
+                            }}
+                            centroid.divideScalar(indices.length);
                             
                             // Create connections (limit for performance)
                             const connectionLimit = Math.min(indices.length, 10);
@@ -2765,39 +3082,36 @@ class IcoTqStore:
                                 data.colors[indices[0]][2]
                             );
                             
-                            for (let i = 0; i < connectionLimit; i++) {
+                            for (let i = 0; i < connectionLimit; i++) {{
                                 const idx = indices[i];
-                                const lineGeometry = new THREE.BufferGeometry();
-                                const linePositions = [
-                                    normalizedPositions[idx * 3],
-                                    normalizedPositions[idx * 3 + 1],
-                                    normalizedPositions[idx * 3 + 2],
-                                    centroid[0], centroid[1], centroid[2]
-                                ];
+                                const pointPos = getNormalizedPosition(idx);
                                 
-                                lineGeometry.setAttribute('position', new THREE.Float32BufferAttribute(linePositions, 3));
+                                const lineGeometry = new THREE.BufferGeometry().setFromPoints([
+                                    pointPos,
+                                    centroid
+                                ]);
                                 
-                                const lineMaterial = new THREE.LineBasicMaterial({
+                                const lineMaterial = new THREE.LineBasicMaterial({{
                                     color: docColor,
                                     transparent: true,
                                     opacity: 0.2
-                                });
+                                }});
                                 
                                 const line = new THREE.Line(lineGeometry, lineMaterial);
                                 scene.add(line);
                                 connectionLines.push(line);
-                            }
-                        }
-                    }
-                }
+                            }}
+                        }}
+                    }}
+                }}
                 
-                function animate() {
+                function animate() {{
                     requestAnimationFrame(animate);
                     controls.update();
                     renderer.render(scene, camera);
-                }
+                }}
                 
-                function onMouseClick(event) {
+                function onMouseClick(event) {{
                     // Calculate mouse position in normalized device coordinates
                     mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
                     mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
@@ -2805,87 +3119,120 @@ class IcoTqStore:
                     // Update the picking ray with the camera and mouse position
                     raycaster.setFromCamera(mouse, camera);
                     
-                    // Check for intersections
-                    if (pointsObject) {
-                        const intersects = raycaster.intersectObject(pointsObject);
+                    // Test intersections with all instanced meshes
+                    let minDistance = Infinity;
+                    let closestIntersection = null;
+                    
+                    spheres.forEach(instancedMesh => {{
+                        const intersects = raycaster.intersectObject(instancedMesh);
+                        if (intersects.length > 0) {{
+                            if (intersects[0].distance < minDistance) {{
+                                minDistance = intersects[0].distance;
+                                closestIntersection = {{
+                                    instanceId: intersects[0].instanceId,
+                                    mesh: instancedMesh
+                                }};
+                            }}
+                        }}
+                    }});
+                    
+                    if (closestIntersection) {{
+                        // Calculate the actual data index
+                        const dataIndex = closestIntersection.mesh.userData.startIdx + closestIntersection.instanceId;
                         
-                        if (intersects.length > 0) {
-                            const index = intersects[0].index;
-                            
-                            // Show information about the selected point
-                            const infoDiv = document.getElementById('info');
-                            infoDiv.innerHTML = `
-                                <strong>Document:</strong> ${docData.docs[index]}<br>
-                                <strong>Text:</strong> ${docData.texts[index]}
-                            `;
-                            
-                            // Highlight the selected point and its document
-                            highlightPoint(index);
-                        }
-                    }
-                }
+                        // Show information about the selected point
+                        const infoDiv = document.getElementById('info');
+                        infoDiv.innerHTML = 
+                            '<strong>Document:</strong> ' + visualData.docs[dataIndex] + '<br>' +
+                            '<strong>Text:</strong> ' + visualData.texts[dataIndex];
+                        
+                        // Highlight the selected point
+                        highlightPoint(dataIndex, closestIntersection);
+                    }} else {{
+                        // Clicked on empty space - reset selection
+                        resetHighlight();
+                        document.getElementById('info').innerHTML = '';
+                    }}
+                }}
                 
-                function highlightPoint(index) {
-                    // Reset previous highlights
-                    if (selectedPoint !== null) {
-                        const colors = pointsObject.geometry.attributes.color;
-                        for (let i = 0; i < colors.count; i++) {
-                            colors.setXYZ(
-                                i,
-                                originalColors[i * 3],
-                                originalColors[i * 3 + 1],
-                                originalColors[i * 3 + 2]
-                            );
-                        }
-                    }
+                function highlightPoint(dataIndex, intersection) {{
+                    // Reset previous selection
+                    resetHighlight();
                     
-                    // Highlight the selected document
-                    const docId = docData.docs[index];
-                    const colors = pointsObject.geometry.attributes.color;
+                    selectedPoint = dataIndex;
                     
-                    for (let i = 0; i < docData.docs.length; i++) {
-                        if (docData.docs[i] === docId) {
-                            // Highlight with yellow
-                            colors.setXYZ(i, 1.0, 1.0, 0.0);
-                        }
-                    }
+                    // Get the position matrix from the instanced mesh
+                    const matrix = new THREE.Matrix4();
+                    intersection.mesh.getMatrixAt(intersection.instanceId, matrix);
+                    const position = new THREE.Vector3();
+                    position.setFromMatrixPosition(matrix);
                     
-                    colors.needsUpdate = true;
-                    selectedPoint = index;
-                }
+                    // Position the highlight sphere
+                    highlightSphere.position.copy(position);
+                    highlightSphere.visible = true;
+                }}
                 
-                function onWindowResize() {
+                function resetHighlight() {{
+                    if (selectedPoint === null) return;
+                    
+                    // Hide highlight sphere
+                    highlightSphere.visible = false;
+                    selectedPoint = null;
+                }}
+                
+                function onWindowResize() {{
                     camera.aspect = window.innerWidth / window.innerHeight;
                     camera.updateProjectionMatrix();
                     renderer.setSize(window.innerWidth, window.innerHeight);
-                }
+                }}
                 
-                function resetView() {
+                function resetView() {{
                     camera.position.set(0, 0, 5);
                     controls.reset();
-                }
-                
-                function updatePointSize(event) {
-                    if (pointsObject) {
-                        pointsObject.material.size = parseFloat(event.target.value);
-                    }
-                }
-                
-                function toggleConnections(event) {
+                    
+                    // Also reset any highlighting
+                    resetHighlight();
+                    document.getElementById('info').innerHTML = '';
+                }}
+
+                function updatePointSize(event) {{
+                    const newSize = parseFloat(event.target.value);
+                    sphereSize = newSize;
+                    
+                    // Update all instanced meshes
+                    const newGeometry = new THREE.SphereGeometry(newSize, 8, 6);
+                    
+                    // Remove all existing spheres
+                    while (pointsGroup.children.length > 0) {{
+                        const mesh = pointsGroup.children[0];
+                        pointsGroup.remove(mesh);
+                        mesh.geometry.dispose();
+                        mesh.material.dispose();
+                    }}
+                    
+                    // Clear the array
+                    spheres = [];
+                    
+                    // Recreate visualization with new size
+                    createVisualization(visualData);
+                    
+                    // Update highlight sphere
+                    highlightSphere.geometry.dispose();
+                    highlightSphere.geometry = new THREE.SphereGeometry(newSize * 1.3, 16, 12);
+                    highlightSphere.visible = false;
+                }}
+
+                function toggleConnections(event) {{
                     const visible = event.target.checked;
-                    connectionLines.forEach(line => {
+                    connectionLines.forEach(line => {{
                         line.visible = visible;
-                    });
-                }
-                
-                function updateStats() {
-                    statsElement.textContent = `Points: ${docData.points.length} | Documents: ${Object.keys(docData.doc_map).length} | Model: ${docData.model_name}`;
-                }
+                    }});
+                }}
             </script>
         </body>
         </html>
         """.replace("{model_name}", self.current_model['model_name'])
-        
+            
         with open(html_file, 'w') as f:
             f.write(html_template)
         
