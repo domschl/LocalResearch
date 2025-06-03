@@ -34,7 +34,7 @@ def iq_search(its: IcoTqStore, logger:logging.Logger, search_spec: str):
     print()
     print()
     console = Console()
-    if len(results) > 0:
+    if results is not None and len(results) > 0:
         for i in range(len(results)):
             result = results[i]
             y_min: float | None = None
