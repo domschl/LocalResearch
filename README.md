@@ -45,3 +45,29 @@ search this is the search-topic I am interested in
 ```
 
 
+## Web stuff (preliminary)
+
+### Update dependencies manually
+
+```bash
+curl -o static/js/three.module.js https://unpkg.com/three@0.150.0/build/three.module.js
+curl -o static/js/OrbitControls.js https://unpkg.com/three@0.150.0/examples/jsm/controls/OrbitControls.js
+curl -o static/js/three.core.js https://unpkg.com/three@0.177.0/build/three.core.js
+```
+
+Update manually header of OrbitControls.js (import path):
+
+```javascript
+import {
+	Controls,
+	MOUSE,
+	Quaternion,
+	Spherical,
+	TOUCH,
+	Vector2,
+	Vector3,
+	Plane,
+	Ray,
+	MathUtils
+} from '/js/three.module.js';
+```
