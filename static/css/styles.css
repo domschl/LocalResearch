@@ -1,0 +1,204 @@
+body {
+    font-family: sans-serif;
+    margin: 20px;
+    background-color: #f4f4f4;
+}
+
+h1 {
+    text-align: center;
+    color: #333;
+}
+
+.search-container {
+    display: flex;
+    margin-bottom: 20px;
+    gap: 10px;
+}
+
+#searchInput {
+    flex-grow: 1;
+    padding: 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+}
+
+#searchButton {
+    padding: 10px 15px;
+    background-color: #5cb85c;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+#searchButton:hover {
+    background-color: #4cae4c;
+}
+
+#status {
+    margin-bottom: 15px;
+    font-style: italic;
+    color: #555;
+    padding: 10px;
+    background-color: #eee;
+    border-radius: 4px;
+    text-align: center;
+}
+
+#resultsContainer {
+    margin-top: 20px;
+}
+
+.result-item {
+    background-color: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    margin-bottom: 15px;
+    padding: 15px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.result-item h4 {
+    margin-top: 0;
+    color: #0275d8;
+    font-size: 1.1em;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 5px;
+    margin-bottom: 10px;
+}
+
+.result-chunk {
+    white-space: pre-wrap;
+    /* Important for newlines and wrapping */
+    line-height: 1.5;
+    /* Readability */
+    font-family: monospace;
+    /* Often better for character alignment */
+    font-size: 0.95em;
+    word-wrap: break-word;
+}
+
+.controls-container {
+    display: flex;
+    flex-direction: column;
+    /* Stack search and slider */
+    gap: 15px;
+    /* Space between search and slider */
+    margin-bottom: 20px;
+    padding: 15px;
+    background-color: #e9e9e9;
+    border-radius: 5px;
+}
+
+.search-container {
+    display: flex;
+    /* Removed margin-bottom as parent provides gap */
+    gap: 10px;
+}
+
+.slider-container {
+    display: flex;
+    align-items: center;
+    /* Vertically align label, slider, value */
+    gap: 10px;
+}
+
+#thresholdSlider {
+    flex-grow: 1;
+    /* Allow slider to take up space */
+    cursor: pointer;
+    max-width: 400px;
+    /* Prevent it getting too wide */
+}
+
+#thresholdValue {
+    font-weight: bold;
+    min-width: 3em;
+    /* Reserve space for value */
+    text-align: right;
+}
+
+/* Visualization specific styles */
+body.visualization {
+    margin: 0;
+    overflow: hidden;
+    font-family: Arial, sans-serif;
+}
+
+#info {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    background: rgba(255, 255, 255, 0.8);
+    padding: 10px;
+    border-radius: 5px;
+    max-width: 300px;
+    max-height: 300px;
+    overflow: auto;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+}
+
+#stats {
+    position: absolute;
+    bottom: 10px;
+    left: 10px;
+    background: rgba(255, 255, 255, 0.8);
+    padding: 10px;
+    border-radius: 5px;
+    font-size: 12px;
+}
+
+#loading {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 24px;
+    background: white;
+    padding: 20px;
+    border-radius: 10px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+    text-align: center;
+}
+
+#loading .progress {
+    margin-top: 10px;
+    width: 100%;
+    height: 10px;
+    background-color: #f3f3f3;
+    border-radius: 5px;
+    overflow: hidden;
+}
+
+#loading .progress-bar {
+    height: 100%;
+    width: 0%;
+    background-color: #4CAF50;
+    transition: width 0.3s;
+}
+
+.controls {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background: rgba(255, 255, 255, 0.8);
+    padding: 10px;
+    border-radius: 5px;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+}
+
+.controls button {
+    margin: 5px;
+    padding: 5px 10px;
+    cursor: pointer;
+}
+
+.controls label {
+    display: block;
+    margin-top: 10px;
+}
+
+.error {
+    color: red;
+    font-weight: bold;
+}

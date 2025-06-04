@@ -7,6 +7,12 @@ from rich.console import Console
 from icotq_store import IcoTqStore, SearchResult
 from typing import cast, TypedDict, Any
 import numpy as np
+import http.server
+import socketserver
+import threading
+import json
+import webbrowser
+from urllib.parse import parse_qs, urlparse
 
 def iq_info(its: IcoTqStore, _logger:logging.Logger) -> None:
     its.list_sources()
@@ -225,99 +231,50 @@ def iq_clean(its: IcoTqStore, _logger:logging.Logger, param:str=""):
     if param == "" or "pdf" in param:
         its.check_clean(dry_run=False)
 
-def iq_plot(its: IcoTqStore, _logger:logging.Logger, param:str=""):
+def iq_plot(its: IcoTqStore, _logger: logging.Logger, param: str = ""):
     pari = param.split(' ')
     
     max_points = None
+    model_name = None
+    
     if len(pari) > 0:
         try:
             max_points = int(pari[0])
             print(f"Limiting visualization to {max_points} points")
         except ValueError:
-            print(f"Warning: Invalid number '{pari[0]}' for max_points, using default")
-    
-    out_path = os.path.join(its.root_path, "plots")
-    if not os.path.exists(out_path):
-        os.makedirs(out_path)
-    
-    try:
-        # Generate the visualization files
-        json_file, html_file = its.visualize_embeddings_3d(output_dir=out_path, max_points=max_points)
-        
-        # Start a local web server to serve the files
-        import http.server
-        import socketserver
-        import threading
-        import webbrowser
-        import time
-        
-        # Find an available port
-        port = 8000
-        for test_port in range(8000, 8100):
-            try:
-                with socketserver.TCPServer(("", test_port), None) as s:
-                    pass
-                port = test_port
-                break
-            except OSError:
-                continue
-        
-        print(f"\n[Starting local web server on port {port}]")
-        
-        # Change to the output directory to serve files from there
-        original_dir = os.getcwd()
-        os.chdir(out_path)
-        
-        # Custom request handler to handle CORS
-        class CORSRequestHandler(http.server.SimpleHTTPRequestHandler):
-            def end_headers(self):
-                self.send_header('Access-Control-Allow-Origin', '*')
-                super().end_headers()
+            # Not a number, might be a model name
+            model_name = pari[0]
             
-            def log_message(self, format, *args):
-                # Suppress logging to keep output clean
-                pass
-        
-        # Start the server in a separate thread
-        def run_server():
-            with socketserver.TCPServer(("", port), CORSRequestHandler) as httpd:
-                print(f"Server running at http://localhost:{port}/")
-                httpd.serve_forever()
-        
-        server_thread = threading.Thread(target=run_server)
-        server_thread.daemon = True  # Allow program to exit even if thread is running
-        server_thread.start()
-        
-        # Wait a moment for the server to start
-        time.sleep(0.5)
-        
-        # Open the visualization in the default browser
-        vis_url = f"http://localhost:{port}/{os.path.basename(html_file)}"
-        print(f"Opening visualization in browser: {vis_url}")
-        webbrowser.open(vis_url)
-        
-        print("\nVisualization server running. Press Ctrl+C to stop and return to the prompt.")
-        print("(Keep this terminal window open while viewing the visualization)")
-        
-        try:
-            # Keep the main thread alive until user interrupts
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            print("\nStopping visualization server...")
-        finally:
-            # Change back to the original directory
-            os.chdir(original_dir)
-        
-        return html_file
-    except Exception as e:
-        import traceback
-        _logger.error(f"Error in visualization: {str(e)}")
-        _logger.error(traceback.format_exc())
-        print(f"Error creating visualization: {str(e)}")
-        print("Check if you have loaded a model and generated embeddings first.")
-        print("Also ensure you have umap-learn and scikit-learn installed:")
-        print("  pip install umap-learn scikit-learn")
+            if len(pari) > 1:
+                try:
+                    max_points = int(pari[1])
+                    print(f"Limiting visualization to {max_points} points")
+                except ValueError:
+                    print(f"Warning: Invalid number '{pari[1]}' for max_points, using default")
+    
+    # Check if embeddings are available
+    if its.embeddings_matrix is None:
+        print("No embeddings available. Load a model and generate embeddings first.")
+        return
+    
+    # Find the visualization page URL
+    url = "http://localhost:8080/visualization.html"
+    
+    # Add query parameters if needed
+    params = []
+    if model_name:
+        params.append(f"model={model_name}")
+    if max_points:
+        params.append(f"max={max_points}")
+    
+    if params:
+        url += "?" + "&".join(params)
+    
+    # Open in browser
+    print(f"Opening embedding visualization in browser: {url}")
+    webbrowser.open(url)
+    
+    return url
 
 def iq_help(parser:argparse.ArgumentParser, valid_actions:list[tuple[str, str]]):
     parser.print_help()
@@ -329,102 +286,297 @@ def iq_help(parser:argparse.ArgumentParser, valid_actions:list[tuple[str, str]])
     print()
     print("To exit, use ^D, 'exit', or 'quit'")
 
-def parse_cmd(its: IcoTqStore, logger: logging.Logger) -> None:
-    valid_actions = [('info', 'Overview of available data and sources'), 
-                                            ('sync', "[max_docs] evaluate available sources and cache text information and metadata, optional max_docs limits number of imported docs, sync source repos with cached text for indexing. Use 'index' function afterwards to create the actual index!"), 
-                                            ('index', "[purge] Generate embeddings index for currently active model. Option purge starts index from scratch. ('list models', 'select <model-id>' to change current model)"),
-                                            ('list', "models|sources|docs [keywords]"),
-                                            ('select', "model-index as shown by: 'list models', use 'index' to create or update embeddings indices"),
-                                            ('search', "Search for keywords given as repl argument or with '-k <keywords>' option. You need to 'sync' and 'index' first"),
-                                            ('check', "Verify consistency of data references and indices. Use 'clean' to apply actions."),
-                                            ('clean', "Repair consistency of data references and indices. Remove debris. Use 'check' first for dry-run."),
-                                            ('plot', "[max_points] Visualize embeddings in 3D"),
-                                            ('help', 'Display usage information')]
-    parser: ArgumentParser = argparse.ArgumentParser(description="IcoTq")
-    _ = parser.add_argument(
-        "action",
-        nargs="*",
-        default="",
-        help="Actions: " + ','.join([f"'{command}': {help}" for command, help in valid_actions]),
-    )
-    _ = parser.add_argument(
-            "-n",
-            "--non-interactive",
-            action="store_true",
-            help="Non-interactive mode, do not enter repl",
-        )
-    _ = parser.add_argument(
-        "-k",
-        "--keywords",
-        type=str,
-        default="",
-        help="Restrict search to list of space separated keywords, leading '!' used for exclusion (negation)," +\
-        " '*' for wildcards at beginning, middle or end of keywords." +\
-        " Multiple space separated keywords are combined with AND, use '|' for OR combinations." +\
-        "! Also to add parameters for 'import' (max_docs) and 'list' (models|sources|docs) commands",
-    )
-
-    args = parser.parse_args()
-    quit:bool = False
-    first:bool = True
-    param = cast(str, args.keywords)
-    actions: list[str] =  cast(list[str], args.action)
-    while quit is False:
-        for action in actions:
-            if action not in [cmd for cmd, _ in valid_actions]:
-                if (action != ''):
-                    logger.error(f"Invalid action '{action}', 'help' for more information")
-        if 'info' in actions:
-            iq_info(its, logger)
-        if 'sync' in actions:
-            iq_sync(its,  logger, max_imports_str=param)
-        if 'help' in actions:
-            iq_help(parser, valid_actions)
-        if 'index' in actions:
-            iq_index(its, logger, param)
-        if 'search' in actions:
-            iq_search(its, logger, param)
-        if 'list' in actions:
-            iq_list(its, logger, param)
-        if 'select' in actions:
-            iq_select(its, logger, param)
-        if 'check' in actions:
-            iq_check(its, logger, param)
-        if 'clean' in actions:
-            iq_clean(its, logger, param)
-        if 'plot' in actions:
-            iq_plot(its, logger, param)
-        if cast(bool, args.non_interactive) is True:
-            break
-        if first is True:
-            print("Enter 'help' for command summary.")
-            first = False
+def parse_cmd(its: IcoTqStore, logger: logging.Logger, args):
+    """Parse and execute a command with arguments"""
+    if not args:
+        return
+        
+    cmd = args[0].lower()
+    param = " ".join(args[1:]) if len(args) > 1 else ""
+    
+    # Command mapping
+    cmd_map = {
+        "info": lambda: iq_info(its, logger),
+        "index": lambda: iq_index(its, logger, param),
+        "search": lambda: iq_search(its, logger, param),
+        "sync": lambda: iq_sync(its, logger, param if param else None),
+        "select": lambda: iq_select(its, logger, param),
+        "plot": lambda: iq_plot(its, logger, param),
+        "list": lambda: iq_list(its, logger, param),
+        # Add other commands here
+    }
+    
+    if cmd in cmd_map:
         try:
-            cmd = input("> ")
-        except (EOFError, KeyboardInterrupt):
-            quit = True
-            continue
-        # print(f"{len(cmd)}: >{cmd}<")
-        cmd_inp = cmd.strip()
-        if cmd_inp == 'quit' or cmd_inp == 'exit': 
-            quit = True
-        else:
-            ind = cmd_inp.find(' ')
-            if ind != -1:
-                actions = [cmd_inp[:ind].strip()]
-                param = cmd_inp[ind:].strip()
-            else:
-                actions = [cmd_inp]
-                param = ""
-    print()
+            result = cmd_map[cmd]()
+            return result
+        except Exception as e:
+            logger.error(f"Error executing command '{cmd}': {str(e)}")
+            print(f"Error: {str(e)}")
+    else:
+        print(f"Unknown command: {cmd}")
+        print("Available commands: " + ", ".join(cmd_map.keys()))
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger("IQ")
-    logger.info("Starting...")
-     
-    its = IcoTqStore()
-    parse_cmd(its, logger)
+    parser = ArgumentParser()
+    parser.add_argument("--config", help="Path to config file")
+    parser.add_argument("--config-path", help="Path to config directory")
+    parser.add_argument("--no-server", action="store_true", help="Don't start the web visualization server")
+    parser.add_argument("--server-port", type=int, default=8080, help="Port for the web visualization server")
+    
+    args, remaining_args = parser.parse_known_args()
+    
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    logger = logging.getLogger("iq")
+    
+    try:
+        its = IcoTqStore(config_file_override=args.config, config_path_override=args.config_path)
+        
+        # Start visualization server unless disabled
+        vis_server = None
+        if not args.no_server:
+            vis_server = EmbeddingVisServer(its, port=args.server_port)
+            vis_server.start()
+        
+        if len(remaining_args) > 0:
+            # Command-line mode
+            parse_cmd(its, logger, remaining_args)
+        else:
+            # Interactive mode
+            while True:
+                try:
+                    user_input = input("iq> ")
+                    if user_input.lower() in ["exit", "quit", "q"]:
+                        break
+                    parse_cmd(its, logger, user_input.split())
+                except EOFError:
+                    break
+                except KeyboardInterrupt:
+                    print("\nUse 'exit' to quit")
+        
+        # Stop server when done
+        if vis_server and vis_server.running:
+            vis_server.stop()
+            
+    except Exception as e:
+        logger.error(f"Error: {str(e)}")
+        print(f"Error: {str(e)}")
+        sys.exit(1)
+
+class EmbeddingVisServer:
+    """Web server for embedding visualizations"""
+    
+    def __init__(self, icotq_store, host="localhost", port=8080):
+        self.icotq_store = icotq_store
+        self.host = host
+        self.port = self._find_available_port(port)
+        self.server = None
+        self.server_thread = None
+        self.running = False
+        self.logger = logging.getLogger("EmbeddingVisServer")
+        
+        # Check that static directory exists
+        self.static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+        if not os.path.exists(self.static_dir):
+            os.makedirs(self.static_dir)
+            self.logger.warning(f"Created empty static directory at {self.static_dir}")
+            print(f"Warning: Static directory created at {self.static_dir} but no files exist.")
+            print("Please add the necessary HTML/JS/CSS files for visualization.")
+    
+    def _find_available_port(self, start_port):
+        """Find an available port starting from start_port"""
+        port = start_port
+        max_port = start_port + 100
+        
+        while port < max_port:
+            try:
+                with socketserver.TCPServer(("", port), None) as s:
+                    pass
+                return port
+            except OSError:
+                port += 1
+        
+        raise RuntimeError(f"Could not find an available port between {start_port} and {max_port}")
+    
+    def start(self):
+        """Start the web server in a background thread"""
+        if self.running:
+            self.logger.info(f"Server already running at http://{self.host}:{self.port}")
+            return
+        
+        # Create request handler class with access to icotq_store
+        icotq_store_ref = self.icotq_store
+        static_dir_ref = self.static_dir
+        
+        class APIHandler(http.server.SimpleHTTPRequestHandler):
+            def __init__(self, *args, **kwargs):
+                self.icotq_store = icotq_store_ref
+                super().__init__(*args, directory=static_dir_ref, **kwargs)
+            
+            def do_GET(self):
+                """Handle GET requests"""
+                # Parse URL
+                parsed_url = urlparse(self.path)
+                path = parsed_url.path
+                
+                # API endpoints
+                if path.startswith('/api/'):
+                    self.send_response(200)
+                    self.send_header('Content-type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    
+                    # Handle different API endpoints
+                    if path == '/api/embeddings':
+                        query = parse_qs(parsed_url.query)
+                        model_name = query.get('model', [None])[0]
+                        max_points = query.get('max', [None])[0]
+                        
+                        if max_points:
+                            try:
+                                max_points = int(max_points)
+                            except ValueError:
+                                max_points = None
+                        
+                        # Generate embedding data
+                        data = self._generate_embedding_data(model_name, max_points)
+                        self.wfile.write(json.dumps(data).encode())
+                    
+                    elif path == '/api/models':
+                        # Return list of available models
+                        models = self.icotq_store.list_models(return_result=True)
+                        self.wfile.write(json.dumps(models).encode())
+                    
+                    else:
+                        # Unknown API endpoint
+                        self.send_error(404, "API endpoint not found")
+                
+                # Serve static files
+                else:
+                    return super().do_GET()
+            
+            def _generate_embedding_data(self, model_name=None, max_points=None):
+                """Generate embedding data for visualization"""
+                import numpy as np
+                import colorsys
+                import warnings
+                
+                # Suppress deprecation warnings
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", message=".*'force_all_finite' was renamed to 'ensure_all_finite'.*")
+                    
+                    # Ensure model is loaded
+                    if model_name and model_name != self.icotq_store.current_model.get('model_name'):
+                        try:
+                            self.icotq_store.load_model(model_name)
+                        except Exception as e:
+                            return {"error": f"Failed to load model: {str(e)}"}
+                    
+                    if self.icotq_store.embeddings_matrix is None:
+                        return {"error": "No embeddings available. Load a model and generate embeddings first."}
+                    
+                    # Extract embeddings
+                    embeddings = self.icotq_store.embeddings_matrix.cpu().numpy()
+                    
+                    # Limit points if needed
+                    if max_points and embeddings.shape[0] > max_points:
+                        indices = np.random.choice(embeddings.shape[0], max_points, replace=False)
+                        indices.sort()  # Keep order for better document correlation
+                        embeddings = embeddings[indices]
+                    
+                    # Build document mapping
+                    doc_mapping = []
+                    doc_ids = []
+                    chunk_texts = []
+                    unique_docs = set()
+                    
+                    for entry in self.icotq_store.lib:
+                        if self.icotq_store.current_model['model_name'] in entry.get('emb_ptrs', {}):
+                            start, length = entry['emb_ptrs'][self.icotq_store.current_model['model_name']]
+                            doc_id = entry['desc_filename']
+                            unique_docs.add(doc_id)
+                            
+                            # Only process chunks within our embedding limits
+                            actual_length = min(length, embeddings.shape[0] - start)
+                            for i in range(actual_length):
+                                idx = start + i
+                                if idx >= embeddings.shape[0]:
+                                    break
+                                
+                                doc_mapping.append((idx, doc_id))
+                                doc_ids.append(doc_id)
+                                chunk_text = self.icotq_store.get_chunk(
+                                    entry['text'], i, 
+                                    self.icotq_store.current_model['chunk_size'], 
+                                    self.icotq_store.current_model['chunk_overlap']
+                                )
+                                chunk_texts.append(chunk_text[:200])  # Limit text size
+                    
+                    # Dimensionality reduction
+                    from sklearn.decomposition import PCA
+                    import umap
+                    
+                    # PCA first for efficiency
+                    if embeddings.shape[1] > 50:
+                        pca = PCA(n_components=50)
+                        embeddings_reduced = pca.fit_transform(embeddings)
+                    else:
+                        embeddings_reduced = embeddings
+                    
+                    # UMAP with parallel processing
+                    reducer = umap.UMAP(
+                        n_components=3, 
+                        metric='cosine', 
+                        n_neighbors=15, 
+                        min_dist=0.1,
+                        n_jobs=-1,
+                        low_memory=False
+                    )
+                    embeddings_3d = reducer.fit_transform(embeddings_reduced)
+                    
+                    # Assign colors
+                    unique_doc_list = list(unique_docs)
+                    doc_color_map = {}
+                    
+                    for i, doc in enumerate(unique_doc_list):
+                        # Generate a color from HSV for better distribution
+                        hue = i / len(unique_doc_list)
+                        rgb = colorsys.hsv_to_rgb(hue, 0.8, 0.9)
+                        doc_color_map[doc] = [float(c) for c in rgb]
+                    
+                    colors = [doc_color_map[doc_id] for doc_id in doc_ids]
+                    
+                    # Prepare output data
+                    output_data = {
+                        "points": embeddings_3d.tolist(),
+                        "colors": colors,
+                        "docs": doc_ids,
+                        "texts": chunk_texts,
+                        "doc_map": {doc: i for i, doc in enumerate(unique_doc_list)},
+                        "model_name": self.icotq_store.current_model['model_name'],
+                        "total_points": len(embeddings_3d)
+                    }
+                    
+                    return output_data
+        
+        # Create and start the server
+        self.server = socketserver.ThreadingTCPServer((self.host, self.port), APIHandler)
+        self.server_thread = threading.Thread(target=self.server.serve_forever)
+        self.server_thread.daemon = True
+        self.server_thread.start()
+        
+        self.running = True
+        self.logger.info(f"Visualization server started at http://{self.host}:{self.port}")
+        print(f"Visualization server running at http://{self.host}:{self.port}")
+    
+    def stop(self):
+        """Stop the web server"""
+        if self.server and self.running:
+            self.server.shutdown()
+            self.server.server_close()
+            self.running = False
+            self.logger.info("Visualization server stopped")
+            print("Visualization server stopped")
 
 if __name__ == "__main__":
     main()
