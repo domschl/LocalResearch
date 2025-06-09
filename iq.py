@@ -7,12 +7,11 @@ from rich.console import Console
 from icotq_store import IcoTqStore, SearchResult
 from typing import cast, TypedDict, Any
 import numpy as np
-import http.server
-import socketserver
-import threading
 import json
-import webbrowser
-from urllib.parse import parse_qs, urlparse
+import shutil
+import pathlib
+import argparse # Ensure argparse is imported
+import torch
 
 def iq_info(its: IcoTqStore, _logger:logging.Logger) -> None:
     its.list_sources()
@@ -231,50 +230,103 @@ def iq_clean(its: IcoTqStore, _logger:logging.Logger, param:str=""):
     if param == "" or "pdf" in param:
         its.check_clean(dry_run=False)
 
-def iq_plot(its: IcoTqStore, _logger: logging.Logger, param: str = ""):
-    pari = param.split(' ')
-    
-    max_points = None
-    model_name = None
-    
-    if len(pari) > 0:
-        try:
-            max_points = int(pari[0])
-            print(f"Limiting visualization to {max_points} points")
-        except ValueError:
-            # Not a number, might be a model name
-            model_name = pari[0]
-            
-            if len(pari) > 1:
-                try:
-                    max_points = int(pari[1])
-                    print(f"Limiting visualization to {max_points} points")
-                except ValueError:
-                    print(f"Warning: Invalid number '{pari[1]}' for max_points, using default")
-    
-    # Check if embeddings are available
-    if its.embeddings_matrix is None:
-        print("No embeddings available. Load a model and generate embeddings first.")
+def iq_export(its: IcoTqStore, logger: logging.Logger, params_str: str):
+    parser = argparse.ArgumentParser(description="Export data for web server.")
+    parser.add_argument("output_dir", help="Base directory to export the data to.")
+    parser.add_argument("--max_points", type=int, help="Maximum number of points for visualization.", default=None)
+    # No --model_name argument, will use current model from IcoTqStore
+
+    try:
+        args = parser.parse_args(params_str.split())
+    except SystemExit:
+        logger.error("Invalid export parameters.")
+        print("Invalid export parameters. Use 'export <output_dir> [--max_points N]'")
         return
-    
-    # Find the visualization page URL
-    url = "http://localhost:8080/visualization.html"
-    
-    # Add query parameters if needed
-    params = []
-    if model_name:
-        params.append(f"model={model_name}")
-    if max_points:
-        params.append(f"max={max_points}")
-    
-    if params:
-        url += "?" + "&".join(params)
-    
-    # Open in browser
-    print(f"Opening embedding visualization in browser: {url}")
-    webbrowser.open(url)
-    
-    return url
+
+    current_model_name = its.get_current_model_name()
+    if not current_model_name:
+        logger.error("No model is currently active. Please select a model using 'select <model_id>' first.")
+        print("No model is currently active. Please select a model using 'select <model_id>' first.")
+        return
+
+    output_base_dir = pathlib.Path(args.output_dir)
+    try:
+        output_base_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        logger.error(f"Error creating base directory {output_base_dir}: {e}")
+        print(f"Error creating base directory {output_base_dir}: {e}")
+        return
+
+    logger.info(f"Exporting data for current model: {current_model_name} to {args.output_dir}")
+
+    # 1. Copy shared icotq_library.json to the root of output_dir
+    try:
+        library_source_path_str = its._get_library_path()
+        if library_source_path_str:
+            library_source_path = pathlib.Path(library_source_path_str)
+            library_dest_path = output_base_dir / "icotq_library.json"
+            shutil.copy2(library_source_path, library_dest_path)
+            logger.info(f"Exported shared library to {library_dest_path}")
+            print(f"Exported shared library to {library_dest_path}")
+        else:
+            logger.warning("Could not determine library path. Skipping library export.")
+            print("Could not determine library path. Skipping library export.")
+    except Exception as e:
+        logger.error(f"Error exporting shared library: {e}")
+        print(f"Error exporting shared library: {e}")
+
+    # Create model-specific subdirectory
+    model_export_dir = output_base_dir / current_model_name
+    try:
+        model_export_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        logger.error(f"Error creating model directory {model_export_dir}: {e}")
+        print(f"Error creating model directory {model_export_dir}: {e}")
+        return
+
+    # 2. Prepare and save model-specific visualization_data.json
+    try:
+        logger.info(f"Preparing visualization data for {current_model_name} with max_points={args.max_points}...")
+        vis_data = its.prepare_visualization_data(
+            model_name_override=current_model_name, # Corrected parameter name
+            max_points=args.max_points
+        )
+        if vis_data:
+            vis_data_path = model_export_dir / "visualization_data.json"
+            with open(vis_data_path, 'w') as f:
+                json.dump(vis_data, f)
+            logger.info(f"Exported visualization data to {vis_data_path}")
+            print(f"Exported visualization data to {vis_data_path}")
+        else:
+            logger.error("Failed to generate visualization data.")
+            print("Failed to generate visualization data.")
+    except Exception as e:
+        logger.error(f"Error preparing or saving visualization data: {e}")
+        print(f"Error preparing or saving visualization data: {e}")
+
+    # 3. Copy model-specific embeddings tensor
+    try:
+        tensor_source_path_str = its._get_tensor_path(current_model_name)
+        if tensor_source_path_str:
+            tensor_source_path = pathlib.Path(tensor_source_path_str)
+            # Ensure the source tensor file exists
+            if not tensor_source_path.is_file():
+                logger.error(f"Embeddings tensor file not found at {tensor_source_path}")
+                print(f"Embeddings tensor file not found at {tensor_source_path}")
+            else:
+                tensor_dest_path = model_export_dir / "embeddings.pt" # Generic name within model folder
+                shutil.copy2(tensor_source_path, tensor_dest_path)
+                logger.info(f"Exported embeddings tensor to {tensor_dest_path}")
+                print(f"Exported embeddings tensor to {tensor_dest_path}")
+        else:
+            logger.warning(f"Could not determine tensor path for model {current_model_name}. Skipping tensor export.")
+            print(f"Could not determine tensor path for model {current_model_name}. Skipping tensor export.")
+    except Exception as e:
+        logger.error(f"Error exporting embeddings tensor: {e}")
+        print(f"Error exporting embeddings tensor: {e}")
+
+    logger.info(f"Export completed for model {current_model_name}. Files are in {output_base_dir} and {model_export_dir}")
+    print(f"Export completed for model {current_model_name}. Files are in {output_base_dir} and {model_export_dir.resolve()}")
 
 def iq_help(parser:argparse.ArgumentParser, valid_actions:list[tuple[str, str]]):
     parser.print_help()
@@ -301,7 +353,7 @@ def parse_cmd(its: IcoTqStore, logger: logging.Logger, args):
         "search": lambda: iq_search(its, logger, param),
         "sync": lambda: iq_sync(its, logger, param if param else None),
         "select": lambda: iq_select(its, logger, param),
-        "plot": lambda: iq_plot(its, logger, param),
+        "export": lambda: iq_export(its, logger, param),
         "list": lambda: iq_list(its, logger, param),
         # Add other commands here
     }
@@ -321,8 +373,7 @@ def main() -> None:
     parser = ArgumentParser()
     parser.add_argument("--config", help="Path to config file")
     parser.add_argument("--config-path", help="Path to config directory")
-    parser.add_argument("--no-server", action="store_true", help="Don't start the web visualization server")
-    parser.add_argument("--server-port", type=int, default=8080, help="Port for the web visualization server")
+    # Removed --no-server and --server-port arguments
     
     args, remaining_args = parser.parse_known_args()
     
@@ -332,11 +383,7 @@ def main() -> None:
     try:
         its = IcoTqStore(config_file_override=args.config, config_path_override=args.config_path)
         
-        # Start visualization server unless disabled
-        vis_server = None
-        if not args.no_server:
-            vis_server = EmbeddingVisServer(its, port=args.server_port)
-            vis_server.start()
+        # Removed EmbeddingVisServer instantiation and start/stop logic
         
         if len(remaining_args) > 0:
             # Command-line mode
@@ -354,229 +401,10 @@ def main() -> None:
                 except KeyboardInterrupt:
                     print("\nUse 'exit' to quit")
         
-        # Stop server when done
-        if vis_server and vis_server.running:
-            vis_server.stop()
-            
     except Exception as e:
         logger.error(f"Error: {str(e)}")
         print(f"Error: {str(e)}")
         sys.exit(1)
-
-class EmbeddingVisServer:
-    """Web server for embedding visualizations"""
-    
-    def __init__(self, icotq_store, host="localhost", port=8080):
-        self.icotq_store = icotq_store
-        self.host = host
-        self.port = self._find_available_port(port)
-        self.server = None
-        self.server_thread = None
-        self.running = False
-        self.logger = logging.getLogger("EmbeddingVisServer")
-        
-        # Check that static directory exists
-        self.static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
-        if not os.path.exists(self.static_dir):
-            os.makedirs(self.static_dir)
-            self.logger.warning(f"Created empty static directory at {self.static_dir}")
-            print(f"Warning: Static directory created at {self.static_dir} but no files exist.")
-            print("Please add the necessary HTML/JS/CSS files for visualization.")
-    
-    def _find_available_port(self, start_port):
-        """Find an available port starting from start_port"""
-        port = start_port
-        max_port = start_port + 100
-        
-        while port < max_port:
-            try:
-                with socketserver.TCPServer(("", port), None) as s:
-                    pass
-                return port
-            except OSError:
-                port += 1
-        
-        raise RuntimeError(f"Could not find an available port between {start_port} and {max_port}")
-    
-    def start(self):
-        """Start the web server in a background thread"""
-        if self.running:
-            self.logger.info(f"Server already running at http://{self.host}:{self.port}")
-            return
-        
-        # Create request handler class with access to icotq_store
-        icotq_store_ref = self.icotq_store
-        static_dir_ref = self.static_dir
-        
-        class APIHandler(http.server.SimpleHTTPRequestHandler):
-            def __init__(self, *args, **kwargs):
-                self.icotq_store = icotq_store_ref
-                super().__init__(*args, directory=static_dir_ref, **kwargs)
-            
-            def do_GET(self):
-                """Handle GET requests"""
-                # Parse URL
-                parsed_url = urlparse(self.path)
-                path = parsed_url.path
-                
-                # API endpoints
-                if path.startswith('/api/'):
-                    self.send_response(200)
-                    self.send_header('Content-type', 'application/json')
-                    self.send_header('Access-Control-Allow-Origin', '*')
-                    self.end_headers()
-                    
-                    # Handle different API endpoints
-                    if path == '/api/embeddings':
-                        query = parse_qs(parsed_url.query)
-                        model_name = query.get('model', [None])[0]
-                        max_points = query.get('max', [None])[0]
-                        
-                        if max_points:
-                            try:
-                                max_points = int(max_points)
-                            except ValueError:
-                                max_points = None
-                        
-                        # Generate embedding data
-                        data = self._generate_embedding_data(model_name, max_points)
-                        self.wfile.write(json.dumps(data).encode())
-                    
-                    elif path == '/api/models':
-                        # Return list of available models
-                        models = self.icotq_store.list_models(return_result=True)
-                        self.wfile.write(json.dumps(models).encode())
-                    
-                    else:
-                        # Unknown API endpoint
-                        self.send_error(404, "API endpoint not found")
-                
-                # Serve static files
-                else:
-                    return super().do_GET()
-            
-            def _generate_embedding_data(self, model_name=None, max_points=None):
-                """Generate embedding data for visualization"""
-                import numpy as np
-                import colorsys
-                import warnings
-                
-                # Suppress deprecation warnings
-                with warnings.catch_warnings():
-                    warnings.filterwarnings("ignore", message=".*'force_all_finite' was renamed to 'ensure_all_finite'.*")
-                    
-                    # Ensure model is loaded
-                    if model_name and model_name != self.icotq_store.current_model.get('model_name'):
-                        try:
-                            self.icotq_store.load_model(model_name)
-                        except Exception as e:
-                            return {"error": f"Failed to load model: {str(e)}"}
-                    
-                    if self.icotq_store.embeddings_matrix is None:
-                        return {"error": "No embeddings available. Load a model and generate embeddings first."}
-                    
-                    # Extract embeddings
-                    embeddings = self.icotq_store.embeddings_matrix.cpu().numpy()
-                    
-                    # Limit points if needed
-                    if max_points and embeddings.shape[0] > max_points:
-                        indices = np.random.choice(embeddings.shape[0], max_points, replace=False)
-                        indices.sort()  # Keep order for better document correlation
-                        embeddings = embeddings[indices]
-                    
-                    # Build document mapping
-                    doc_mapping = []
-                    doc_ids = []
-                    chunk_texts = []
-                    unique_docs = set()
-                    
-                    for entry in self.icotq_store.lib:
-                        if self.icotq_store.current_model['model_name'] in entry.get('emb_ptrs', {}):
-                            start, length = entry['emb_ptrs'][self.icotq_store.current_model['model_name']]
-                            doc_id = entry['desc_filename']
-                            unique_docs.add(doc_id)
-                            
-                            # Only process chunks within our embedding limits
-                            actual_length = min(length, embeddings.shape[0] - start)
-                            for i in range(actual_length):
-                                idx = start + i
-                                if idx >= embeddings.shape[0]:
-                                    break
-                                
-                                doc_mapping.append((idx, doc_id))
-                                doc_ids.append(doc_id)
-                                chunk_text = self.icotq_store.get_chunk(
-                                    entry['text'], i, 
-                                    self.icotq_store.current_model['chunk_size'], 
-                                    self.icotq_store.current_model['chunk_overlap']
-                                )
-                                chunk_texts.append(chunk_text[:200])  # Limit text size
-                    
-                    # Dimensionality reduction
-                    from sklearn.decomposition import PCA
-                    import umap
-                    
-                    # PCA first for efficiency
-                    if embeddings.shape[1] > 50:
-                        pca = PCA(n_components=50)
-                        embeddings_reduced = pca.fit_transform(embeddings)
-                    else:
-                        embeddings_reduced = embeddings
-                    
-                    # UMAP with parallel processing
-                    reducer = umap.UMAP(
-                        n_components=3, 
-                        metric='cosine', 
-                        n_neighbors=15, 
-                        min_dist=0.1,
-                        n_jobs=-1,
-                        low_memory=False
-                    )
-                    embeddings_3d = reducer.fit_transform(embeddings_reduced)
-                    
-                    # Assign colors
-                    unique_doc_list = list(unique_docs)
-                    doc_color_map = {}
-                    
-                    for i, doc in enumerate(unique_doc_list):
-                        # Generate a color from HSV for better distribution
-                        hue = i / len(unique_doc_list)
-                        rgb = colorsys.hsv_to_rgb(hue, 0.8, 0.9)
-                        doc_color_map[doc] = [float(c) for c in rgb]
-                    
-                    colors = [doc_color_map[doc_id] for doc_id in doc_ids]
-                    
-                    # Prepare output data
-                    output_data = {
-                        "points": embeddings_3d.tolist(),
-                        "colors": colors,
-                        "docs": doc_ids,
-                        "texts": chunk_texts,
-                        "doc_map": {doc: i for i, doc in enumerate(unique_doc_list)},
-                        "model_name": self.icotq_store.current_model['model_name'],
-                        "total_points": len(embeddings_3d)
-                    }
-                    
-                    return output_data
-        
-        # Create and start the server
-        self.server = socketserver.ThreadingTCPServer((self.host, self.port), APIHandler)
-        self.server_thread = threading.Thread(target=self.server.serve_forever)
-        self.server_thread.daemon = True
-        self.server_thread.start()
-        
-        self.running = True
-        self.logger.info(f"Visualization server started at http://{self.host}:{self.port}")
-        print(f"Visualization server running at http://{self.host}:{self.port}")
-    
-    def stop(self):
-        """Stop the web server"""
-        if self.server and self.running:
-            self.server.shutdown()
-            self.server.server_close()
-            self.running = False
-            self.logger.info("Visualization server stopped")
-            print("Visualization server stopped")
 
 if __name__ == "__main__":
     main()

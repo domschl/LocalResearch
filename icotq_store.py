@@ -28,6 +28,12 @@ try:
 except ImportError:
     PYMUPDF4LLM_AVAILABLE = False  # pyright: ignore[reportConstantRedefinition]
 
+# Imports for prepare_visualization_data
+import umap
+from sklearn.decomposition import PCA
+import colorsys
+
+
 class TqSource(TypedDict):
     name: str
     tqtype: str
@@ -558,6 +564,11 @@ class IcoTqStore:
         else:
              raise IcotqError("Cannot save tensor: Model context lost unexpectedly.")  # pyright:ignore[reportUnreachable]
 
+    def get_current_model_name(self) -> str | None: # Changed Optional
+        """Returns the name of the currently loaded model, or None if no model is loaded."""
+        if self.current_model:
+            return self.current_model['model_name']
+        return None
 
     def _load_tensor_internal(self, model_name: str, device_override: str | None = None, check_consistency: bool = True) -> bool: # Changed Optional
         """Loads tensor, handles consistency checks. Returns True if loaded."""
@@ -2335,8 +2346,8 @@ class IcoTqStore:
         unique_docs = set()
         
         for entry in self.lib:
-            if self.current_model['model_name'] in entry.get('emb_ptrs', {}):
-                start, length = entry['emb_ptrs'][self.current_model['model_name']]
+            if active_model_name in entry.get('emb_ptrs', {}):
+                start, length = entry['emb_ptrs'][active_model_name]
                 doc_id = entry['desc_filename']
                 unique_docs.add(doc_id)
                 
@@ -2394,11 +2405,11 @@ class IcoTqStore:
         doc_color_map = {}
         
         import colorsys
-        for i, doc in enumerate(unique_doc_list):
+        for i, doc_id_val in enumerate(unique_doc_list):
             # Generate a color from HSV for better distribution
             hue = i / len(unique_doc_list)
             rgb = colorsys.hsv_to_rgb(hue, 0.8, 0.9)
-            doc_color_map[doc] = [float(c) for c in rgb]
+            doc_color_map[doc_id_val] = [float(c) for c in rgb]
         
         colors = [doc_color_map[doc_id] for doc_id in doc_ids]
         print(f"Color assignment completed in {time.time() - start_time:.2f}s")
@@ -2849,3 +2860,194 @@ class IcoTqStore:
         print(f"To view: Start a web server in '{output_dir}' and open the HTML file")
         
         return json_file, html_file
+
+    # === New Method: Prepare Visualization Data ===
+
+    def prepare_visualization_data(self, model_name_override: str | None = None, 
+                                   max_points: int | None = 10000, 
+                                   reduction_method: str = 'umap', 
+                                   n_components: int = 3) -> dict:
+        """
+        Prepares data for 3D visualization of embeddings.
+        Performs dimensionality reduction and gathers necessary metadata.
+        Assumes umap-learn and scikit-learn are installed.
+        """
+        with self._lock: # Ensure thread safety during model loading and data access
+            active_model_name: str | None = None
+            original_model_info: EmbeddingsModel | None = self.current_model.copy() if self.current_model else None
+            original_embeddings_matrix: torch.Tensor | None = self.embeddings_matrix.clone() if self.embeddings_matrix is not None else None
+
+            try:
+                if model_name_override:
+                    active_model_name = model_name_override
+                    if not original_model_info or active_model_name != original_model_info['model_name']:
+                        self.log.info(f"Switching to model {active_model_name} for visualization data generation.")
+                        # This should load model definition and attempt to load its tensor
+                        self._load_model_internal(active_model_name, self.config['embeddings_device'], self.config['embeddings_model_trust_code'])
+                        self._load_tensor_internal(model_name=active_model_name) 
+                elif self.current_model:
+                    active_model_name = self.current_model['model_name']
+                else:
+                    return {"error": "No model specified and no current model loaded."}
+
+                if not self.current_model or self.current_model['model_name'] != active_model_name:
+                    return {"error": f"Failed to ensure model {active_model_name} is active."}
+
+                if self.embeddings_matrix is None:
+                    return {"error": f"Embeddings tensor for model {active_model_name} is not loaded."}
+
+                all_model_embeddings_list = []
+                all_metadata_list = [] 
+
+                for lib_idx, entry in enumerate(self.lib):
+                    if active_model_name in entry.get('emb_ptrs', {}):
+                        start_index, num_embeddings_for_entry = entry['emb_ptrs'][active_model_name]
+                        
+                        if start_index + num_embeddings_for_entry > self.embeddings_matrix.shape[0]:
+                            self.log.warning(f"Invalid emb_ptrs for entry {entry['desc_filename']} (idx {lib_idx}) model {active_model_name}. Have {self.embeddings_matrix.shape[0]} total embeddings. Entry wants range {start_index}-{start_index + num_embeddings_for_entry-1}. Skipping.")
+                            continue
+
+                        entry_embeddings = self.embeddings_matrix[start_index : start_index + num_embeddings_for_entry]
+                        all_model_embeddings_list.append(entry_embeddings)
+                        
+                        for i in range(num_embeddings_for_entry):
+                            chunk_text_label = f"{entry['desc_filename']} (chunk {i+1})"
+                            all_metadata_list.append({
+                                'doc_id': entry['desc_filename'],
+                                'text_label': chunk_text_label, 
+                                'source_name': entry['source_name'],
+                                'original_lib_index': lib_idx,
+                                'chunk_in_doc_index': i 
+                            })
+                
+                if not all_model_embeddings_list:
+                    return {"error": f"No embeddings found in library for model {active_model_name}."}
+
+                concatenated_embeddings = torch.cat(all_model_embeddings_list, dim=0)
+                
+                if concatenated_embeddings.shape[0] != len(all_metadata_list):
+                    self.log.error(f"Internal error: Mismatch between concatenated embeddings ({concatenated_embeddings.shape[0]}) and metadata list ({len(all_metadata_list)}) lengths.")
+                    return {"error": "Internal error: Embeddings and metadata count mismatch."}
+
+                sampled_embeddings_np: np.ndarray
+                sampled_metadata: list
+
+                num_available_points = concatenated_embeddings.shape[0]
+                if max_points is not None and num_available_points > max_points:
+                    indices = np.random.choice(num_available_points, max_points, replace=False)
+                    indices.sort() 
+                    sampled_embeddings_np = concatenated_embeddings[indices].cpu().numpy()
+                    sampled_metadata = [all_metadata_list[i] for i in indices]
+                else:
+                    sampled_embeddings_np = concatenated_embeddings.cpu().numpy()
+                    sampled_metadata = all_metadata_list
+                
+                if sampled_embeddings_np.ndim == 1:
+                     sampled_embeddings_np = np.expand_dims(sampled_embeddings_np, axis=0)
+
+                reduced_embeddings_np: np.ndarray
+                if sampled_embeddings_np.shape[0] == 0:
+                    return {"error": "No data points to reduce after sampling/filtering."}
+                
+                # Handle cases with very few points before attempting complex reduction
+                if sampled_embeddings_np.shape[0] < n_components or sampled_embeddings_np.shape[0] < 2:
+                    self.log.warning(f"Only {sampled_embeddings_np.shape[0]} point(s) available. Dimensionality reduction might be trivial or skipped.")
+                    # Create a simple representation, e.g., pad with zeros or use a fixed layout
+                    if sampled_embeddings_np.shape[0] == 1:
+                         # For a single point, place it at origin or use its first n_components
+                        point_features = sampled_embeddings_np[0, :n_components]
+                        padding_needed = n_components - len(point_features)
+                        if padding_needed > 0:
+                            point_features = np.pad(point_features, (0, padding_needed), 'constant')
+                        reduced_embeddings_np = np.array([point_features])
+                    else: # No points, or not enough for meaningful reduction beyond basic projection
+                        # Project to n_components, padding if necessary
+                        num_features = sampled_embeddings_np.shape[1]
+                        target_features = min(num_features, n_components)
+                        reduced_embeddings_np = sampled_embeddings_np[:, :target_features]
+                        if n_components > target_features:
+                            padding = np.zeros((sampled_embeddings_np.shape[0], n_components - target_features))
+                            reduced_embeddings_np = np.hstack((reduced_embeddings_np, padding))
+                else:
+                    self.log.info(f"Performing {reduction_method} reduction to {n_components} dimensions on {sampled_embeddings_np.shape[0]} points.")
+                    if reduction_method == 'umap':
+                        n_neighbors_val = 15
+                        if sampled_embeddings_np.shape[0] <= n_neighbors_val:
+                            n_neighbors_val = max(1, sampled_embeddings_np.shape[0] - 1) # Ensure n_neighbors < n_samples
+
+                        with warnings.catch_warnings():
+                            warnings.filterwarnings("ignore", category=UserWarning, module="umap.umap_")
+                            reducer = umap.UMAP(n_components=n_components, n_neighbors=n_neighbors_val, 
+                                                min_dist=0.1, random_state=42, metric='cosine')
+                            try:
+                                reduced_embeddings_np = reducer.fit_transform(sampled_embeddings_np)
+                            except Exception as e:
+                                self.log.error(f"UMAP reduction failed: {e} (shape: {sampled_embeddings_np.shape}, n_neighbors: {n_neighbors_val})")
+                                return {"error": f"UMAP reduction failed: {str(e)}"}
+
+                    elif reduction_method == 'pca':
+                        current_n_components = min(n_components, sampled_embeddings_np.shape[0], sampled_embeddings_np.shape[1])
+                        if current_n_components <= 0:
+                             return {"error": "Cannot perform PCA with 0 samples or effective components."}
+                        pca = PCA(n_components=current_n_components)
+                        try:
+                            reduced_embeddings_np = pca.fit_transform(sampled_embeddings_np)
+                            if reduced_embeddings_np.shape[1] < n_components:
+                                padding = np.zeros((reduced_embeddings_np.shape[0], n_components - reduced_embeddings_np.shape[1]))
+                                reduced_embeddings_np = np.hstack((reduced_embeddings_np, padding))
+                        except Exception as e:
+                            self.log.error(f"PCA reduction failed: {e}")
+                            return {"error": f"PCA reduction failed: {str(e)}"}
+                    else:
+                        return {"error": f"Unsupported reduction_method: {reduction_method}. Choose 'umap' or 'pca'."}
+
+                points = reduced_embeddings_np.tolist()
+                texts = [meta['text_label'] for meta in sampled_metadata]
+                doc_ids = [meta['doc_id'] for meta in sampled_metadata]
+                
+                unique_doc_ids = sorted(list(set(doc_ids)))
+                num_unique_docs = len(unique_doc_ids)
+                color_map = {}
+                for i, doc_id_val in enumerate(unique_doc_ids):
+                    hue = i / num_unique_docs if num_unique_docs > 0 else 0
+                    rgb_float = colorsys.hls_to_rgb(hue, 0.5, 0.8) 
+                    color_map[doc_id_val] = [int(c * 255) for c in rgb_float]
+
+                colors = [color_map.get(meta['doc_id'], [128,128,128]) for meta in sampled_metadata] # Default color if doc_id somehow not in map
+                sizes = [5.0] * len(points)
+
+                return {
+                    "points": points,
+                    "texts": texts,
+                    "colors": colors,
+                    "sizes": sizes,
+                    "doc_ids": doc_ids,
+                    "model_name": active_model_name,
+                    "reduction_method": reduction_method,
+                    "num_points_visualized": len(points),
+                    "num_points_available_before_sampling": num_available_points
+                }
+
+            except Exception as e:
+                self.log.error(f"Error in prepare_visualization_data: {e}\n{traceback.format_exc()}")
+                return {"error": f"An unexpected error occurred: {str(e)}"}
+            finally:
+                # Restore original model if it was changed
+                if model_name_override and original_model_info and \
+                   (not self.current_model or original_model_info['model_name'] != self.current_model['model_name']):
+                    self.log.info(f"Restoring original model {original_model_info['model_name']}.")
+                    try:
+                        self.current_model = original_model_info # Restore model definition
+                        self.engine = None # Force re-creation if needed by _load_model_internal
+                        # Attempt to reload the original model's specific SentenceTransformer engine and tensor
+                        self._load_model_internal(original_model_info['model_name'], self.config['embeddings_device'], self.config['embeddings_model_trust_code'])
+                        if original_embeddings_matrix is not None:
+                             self.embeddings_matrix = original_embeddings_matrix
+                        else: # If original was None, try to load from disk
+                             self._load_tensor_internal(model_name=original_model_info['model_name'])
+                    except Exception as e_restore:
+                        self.log.error(f"Failed to fully restore original model state for {original_model_info['model_name']}: {e_restore}")
+                        # Mark current state as potentially unreliable
+                        self.current_model = None 
+                        self.embeddings_matrix = None
+                        self.engine = None
