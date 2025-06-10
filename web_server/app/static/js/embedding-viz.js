@@ -235,6 +235,9 @@ export function initVisualization(dataUrl) {
     loadData(currentDataUrl);
 }
 
+// IMPORTANT: You will need to include oboe.js in your HTML file for this to work.
+// e.g., <script src="https://cdnjs.cloudflare.com/ajax/libs/oboe.js/2.1.5/oboe-browser.min.js"></script>
+
 function loadData(dataUrl) {
     const loadingElement = document.getElementById('loading');
     const progressBar = document.querySelector('.progress-bar');
@@ -243,68 +246,165 @@ function loadData(dataUrl) {
     const loadingTextDiv = loadingElement ? loadingElement.querySelector('div') : null;
     if (loadingTextDiv) loadingTextDiv.textContent = 'Loading visualization data...';
 
-    fetch(dataUrl)
-        .then(response => { // Capture response here for the non-streaming path
-            const outerResponse = response; // Keep a reference
-            if (!outerResponse.ok) {
-                throw new Error(`HTTP error! status: ${outerResponse.status}`);
-            }
+    // This promise will resolve with the parsed data or reject with an error
+    const dataProcessingPromise = new Promise((resolve, reject) => {
+        fetch(dataUrl)
+            .then(response => {
+                const outerResponse = response;
+                if (!outerResponse.ok) {
+                    reject(new Error(`HTTP error! status: ${outerResponse.status}`));
+                    return;
+                }
 
-            const contentLength = outerResponse.headers.get('Content-Length');
-            if (contentLength && parseInt(contentLength) > 10000000) { // Example: 10MB for streaming
-                const reader = outerResponse.body.getReader();
-                const totalLength = parseInt(contentLength);
-                let receivedLength = 0;
-                let chunks = [];
+                const contentLength = outerResponse.headers.get('Content-Length');
+                const totalLength = contentLength ? parseInt(contentLength) : null;
 
-                if (loadingTextDiv) loadingTextDiv.textContent = 'Loading large dataset...';
+                if (!outerResponse.body) {
+                    reject(new Error('Response body is null.'));
+                    return;
+                }
 
-                return reader.read().then(function processText({ done, value }) {
-                    if (done) {
-                        const body = new Uint8Array(receivedLength);
-                        let position = 0;
-                        for (const chunk of chunks) {
-                            body.set(chunk, position);
-                            position += chunk.length;
+                // Use Oboe.js for large files (e.g., > 10MB), standard .json() for smaller files
+                if (totalLength && totalLength > 10000000) {
+                    if (loadingTextDiv) loadingTextDiv.textContent = 'Loading large dataset (Oboe.js streaming parse)...';
+
+                    let oboeInstance = oboe(); // Create an Oboe instance
+                    oboeInstance
+                        .done(data => { // Called when Oboe successfully parses the entire JSON
+                            if (loadingTextDiv) loadingTextDiv.textContent = 'JSON parsing complete. Processing visualization...';
+                            console.log("Oboe.js successfully parsed the root JSON object.");
+                            docData = data; // Store the parsed data
+                            resolve(data);  // Resolve the main promise with the data
+                        })
+                        .fail(errorReport => { // Called if Oboe encounters a parsing error
+                            console.error("Oboe.js parsing error:", errorReport);
+                            if (loadingTextDiv) loadingTextDiv.textContent = 'Error parsing JSON stream.';
+                            const thrownError = errorReport.thrown || {};
+                            reject(new Error(`Oboe.js parsing failed: ${thrownError.message || 'Unknown parsing error'}. Status: ${errorReport.statusCode}, Body: ${errorReport.body}`));
+                        });
+
+                    const reader = outerResponse.body.getReader();
+                    const decoder = new TextDecoder("utf-8", { stream: true }); // Use streaming TextDecoder
+                    let receivedLength = 0;
+
+                    function processStreamedChunks({ done, value }) {
+                        if (oboeInstance.failed) { // If Oboe already failed, stop processing
+                            console.warn("Oboe instance reported failure, cancelling stream read.");
+                            reader.cancel().catch(cancelError => console.error("Error cancelling reader:", cancelError));
+                            return;
                         }
-                        try {
-                            return JSON.parse(new TextDecoder("utf-8").decode(body));
-                        } catch (error) {
-                            console.error("Error parsing JSON from stream:", error);
-                            throw error; // Re-throw to be caught by outer .catch
+
+                        if (done) {
+                            const lastChunkString = decoder.decode(); // Flush any remaining bytes in the decoder
+                            if (lastChunkString) {
+                                try {
+                                    oboeInstance.emit('data', lastChunkString);
+                                } catch (e) {
+                                    // This error should ideally be caught by Oboe's .fail()
+                                    console.error("Error emitting final data chunk to Oboe:", e);
+                                    if (!oboeInstance.failed) reject(e); // Reject if Oboe hasn't already
+                                    return;
+                                }
+                            }
+                            try {
+                                oboeInstance.emit('end'); // Signal end of data stream to Oboe
+                                console.log("Emitted 'end' to Oboe.js");
+                            } catch (e) {
+                                console.error("Error emitting 'end' to Oboe:", e);
+                                if (!oboeInstance.failed) reject(e);
+                            }
+
+                            if (totalLength && receivedLength !== totalLength) {
+                                console.warn(`Stream ended but receivedLength (${receivedLength}) does not match Content-Length (${totalLength}).`);
+                            }
+                            // Oboe's 'done' or 'fail' handlers will resolve/reject the main promise.
+                            return;
                         }
+
+                        // Decode the current chunk and emit it to Oboe
+                        const chunkString = decoder.decode(value, { stream: true });
+                        if (chunkString) {
+                            try {
+                                oboeInstance.emit('data', chunkString);
+                            } catch (e) {
+                                console.error("Error emitting data chunk to Oboe:", e, "Chunk string length:", chunkString.length);
+                                if (!oboeInstance.failed) reject(e);
+                                reader.cancel().catch(cancelError => console.error("Error cancelling reader:", cancelError));
+                                return;
+                            }
+                        }
+
+                        receivedLength += value.length;
+
+                        // Update progress bar
+                        if (progressBar && totalLength) {
+                            const percentage = Math.round((receivedLength / totalLength) * 100);
+                            progressBar.style.width = percentage + '%';
+                            if (loadingTextDiv) loadingTextDiv.textContent = `Loading large dataset... ${percentage}% (${Math.round(receivedLength / 1024 / 1024)}MB / ${Math.round(totalLength / 1024 / 1024)}MB)`;
+                        } else if (loadingTextDiv) {
+                            loadingTextDiv.textContent = `Loading large dataset... ${Math.round(receivedLength / 1024 / 1024)}MB received`;
+                        }
+
+                        // Continue reading the stream
+                        reader.read().then(processStreamedChunks).catch(streamError => {
+                            console.error("Error reading stream:", streamError);
+                            if (!oboeInstance.failed) oboeInstance.emit('error', streamError); // Inform Oboe
+                            reject(streamError); // Reject the main promise
+                        });
                     }
-                    chunks.push(value);
-                    receivedLength += value.length;
-                    if (progressBar && totalLength) {
-                        const percentage = (receivedLength / totalLength * 100).toFixed(0);
-                        progressBar.style.width = percentage + '%';
-                        if (loadingTextDiv) loadingTextDiv.textContent = `Loading large dataset... ${percentage}%`;
-                    }
-                    return reader.read().then(processText);
-                });
-            }
-            return outerResponse.json(); // Use the captured response for .json()
-        })
-        .then(data => {
-            docData = data; // Assign to global
+                    // Start reading the stream
+                    reader.read().then(processStreamedChunks).catch(initialReadError => {
+                        console.error("Error on initial stream read:", initialReadError);
+                        if (!oboeInstance.failed) oboeInstance.emit('error', initialReadError);
+                        reject(initialReadError);
+                    });
+
+                } else {
+                    // For smaller files (or if Content-Length is unknown but assumed small)
+                    if (loadingTextDiv) loadingTextDiv.textContent = 'Loading dataset (standard JSON parse)...';
+                    outerResponse.json()
+                        .then(data => {
+                            docData = data;
+                            resolve(data); // Resolve the main promise
+                        })
+                        .catch(jsonParseError => {
+                            console.error("Standard JSON.parse error:", jsonParseError);
+                            reject(jsonParseError); // Reject the main promise
+                        });
+                }
+            })
+            .catch(fetchError => { // Catch errors from the fetch() call itself
+                console.error("Fetch error:", fetchError);
+                reject(fetchError); // Reject the main promise
+            });
+    });
+
+    // Handle the result of the data processing promise
+    dataProcessingPromise
+        .then(parsedData => {
+            // This block executes if data loading and parsing (either by Oboe or response.json()) was successful
             if (loadingTextDiv) loadingTextDiv.textContent = 'Processing visualization...';
+            else if (loadingElement && loadingElement.querySelector('div')) {
+                loadingElement.querySelector('div').textContent = 'Processing visualization...';
+            }
 
-            setTimeout(() => { // Process on next frame
+            setTimeout(() => { // Process visualization on the next tick to allow UI updates
                 try {
-                    createVisualization(docData); // Pass global docData
+                    createVisualization(parsedData);
                     if (loadingElement) loadingElement.style.display = 'none';
                     updateStats();
                 } catch (error) {
                     if (loadingElement) loadingElement.innerHTML = `<div class="error">Error creating visualization: ${error.message}</div>`;
                     console.error('Visualization error:', error);
+                    if (infoDiv) infoDiv.innerHTML = `<span style="color:red;">Error during visualization. See console.</span>`;
                 }
             }, 10);
         })
         .catch(error => {
-            if (loadingElement) loadingElement.innerHTML = `<div class="error">Error loading data: ${error.message}</div>`;
-            console.error('Error loading data:', error);
-            if (infoDiv) infoDiv.innerHTML = `<span style="color:red;">Failed to load data.</span>`;
+            // This block executes if any error occurred during fetch, streaming, or parsing
+            console.error('Overall error in loadData process:', error);
+            if (loadingElement) loadingElement.innerHTML = `<div class="error">Failed to load or process data: ${error.message}</div>`;
+            if (infoDiv) infoDiv.innerHTML = `<span style="color:red;">Failed to load data. Check console for details.</span>`;
         });
 }
 
