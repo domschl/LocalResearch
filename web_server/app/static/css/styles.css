@@ -187,7 +187,8 @@ body.visualization {
     box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
 }
 
-.controls button {
+.controls button,
+.controls select {
     margin: 5px;
     padding: 5px 10px;
     cursor: pointer;
