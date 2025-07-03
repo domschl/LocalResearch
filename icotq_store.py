@@ -113,6 +113,10 @@ class IcotqConfigurationError(IcotqError):
 class IcoTqStore:
     # Accept config_file_override: str | None
     def __init__(self, config_file_override: str | None = None, config_path_override: str | None = None) -> None:
+        if 'PYTORCH_CUDA_ALLOC_CONF' not in os.environ:
+            os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+            logging.info("Setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to mitigate CUDA memory fragmentation.")
+
         self.log:logging.Logger = logging.getLogger("IcoTqStore")
         # Disable log spam
         tmp = logging.getLogger("transformers_modules")
@@ -2962,7 +2966,7 @@ class IcoTqStore:
                     self.log.warning(f"Only {sampled_embeddings_np.shape[0]} point(s) available. Dimensionality reduction might be trivial or skipped.")
                     # Create a simple representation, e.g., pad with zeros or use a fixed layout
                     if sampled_embeddings_np.shape[0] == 1:
-                         # For a single point, place it at origin or use its first n_components
+                        # For a single point, place it at origin or use its first n_components
                         point_features = sampled_embeddings_np[0, :n_components]
                         padding_needed = n_components - len(point_features)
                         if padding_needed > 0:
