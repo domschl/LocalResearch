@@ -3,7 +3,7 @@ host = "0.0.0.0"
 port = 8000
 
 [resources]
-data_path = "./data" # Path relative to web_server/ or absolute
+data_path = "./data"  # Path to Embeddings
 
 # [tls] # For future use
 # enabled = false
