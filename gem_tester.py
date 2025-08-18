@@ -8,34 +8,34 @@ import logging
 import uuid
 import json # Make sure json is imported
 
-# Assume icotq_store.py is in the same directory or PYTHONPATH
+# Assume vector_store.py is in the same directory or PYTHONPATH
 try:
     # Import necessary components (typing import likely not needed now)
-    from icotq_store import (
-        IcoTqStore,
-        IcotqConfig,
-        TqSource,
-        IcotqError,
-        IcotqCriticalError,
-        IcotqConsistencyError,
-        IcotqConfigurationError
+    from vector_store import (
+        VectorStore,
+        VectorConfig,
+        VecSource,
+        VectorError,
+        VectorCriticalError,
+        VectorConsistencyError,
+        VectorConfigurationError
     )
 except ImportError:
-    print("ERROR: Could not import IcoTqStore. Make sure 'icotq_store.py' is accessible.")
+    print("ERROR: Could not import VectorStore. Make sure 'vector_store.py' is accessible.")
     sys.exit(1)
 
 # --- Configuration ---
 NUM_ITERATIONS = 500
 MAX_FILES = 50
 MIN_FILES = 5
-TEST_DIR_PREFIX = "icotq_test_"
+TEST_DIR_PREFIX = "vector_test_"
 MODEL_NAME = 'all-MiniLM-L6-v2'
 
 # --- Logging Setup ---
 # ... (logging setup remains the same) ...
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
 log = logging.getLogger("TestApp")
-logging.getLogger("IcoTqStore").setLevel(logging.INFO)
+logging.getLogger("VectorStore").setLevel(logging.INFO)
 logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
 logging.getLogger("torch").setLevel(logging.WARNING)
 
@@ -120,24 +120,24 @@ def delete_file(_directory: str, existing_files: list[str]) -> str | None:
 # --- Main Test Function ---
 
 def run_test_loop():
-    """Sets up IcoTqStore and runs the test loop."""
+    """Sets up VectorStore and runs the test loop."""
     sync_errors = 0
     index_errors = 0
     search_errors = 0
     validation_failures = 0
     base_dir: str | None = None # Initialize base_dir
-    store: IcoTqStore | None = None # Changed Optional
+    store: VectorStore | None = None # Changed Optional
 
     try:
         # 1. Setup Temporary Directories
-        base_dir = tempfile.mkdtemp(prefix="icotq_base_")
+        base_dir = tempfile.mkdtemp(prefix="vector_base_")
         source_dir = os.path.join(base_dir, "source_files")
         store_dir = os.path.join(base_dir, "store_data")
         os.makedirs(source_dir)
         os.makedirs(store_dir)
         log.info(f"Created base test directory: {base_dir}")
         log.info(f"Source files directory: {source_dir}")
-        log.info(f"IcoTqStore data directory: {store_dir}")
+        log.info(f"VectorStore data directory: {store_dir}")
 
         # 2. Create Initial Files
         current_files: list[str] = [] # Changed from List[str]
@@ -145,11 +145,11 @@ def run_test_loop():
              new_file = create_file(source_dir, current_files)
              if new_file: current_files.append(new_file)
 
-        # 3. Configure and Initialize IcoTqStore
-        log.info("Initializing IcoTqStore...")
-        temp_config = IcotqConfig({
-            'icotq_path': store_dir,
-            'tq_sources': [TqSource({'name': 'TestSource', 'tqtype': 'folder', 'path': source_dir, 'file_types': ['txt']})],
+        # 3. Configure and Initialize VectorStore
+        log.info("Initializing VectorStore...")
+        temp_config = VectorConfig({
+            'vector_path': store_dir,
+            'vec_sources': [VecSource({'name': 'TestSource', 'vectype': 'folder', 'path': source_dir, 'file_types': ['txt']})],
             'embeddings_model_name': MODEL_NAME, 'embeddings_device': 'auto',
             'embeddings_model_trust_code': True, 'auto_fix_inconsistency': True
         })
@@ -159,35 +159,35 @@ def run_test_loop():
         log.info(f"Created temporary config file: {temp_config_path}")
 
         try:
-            store = IcoTqStore(config_file_override=temp_config_path)
-        except IcotqError as init_e:
-            log.critical(f"IcoTqStore initialization failed: {init_e}", exc_info=True)
+            store = VectorStore(config_file_override=temp_config_path)
+        except VectorError as init_e:
+            log.critical(f"VectorStore initialization failed: {init_e}", exc_info=True)
             raise
 
         # --- Verification after __init__ ---
         if store.current_model and store.engine:
-            log.info(f"IcoTqStore initialized SUCCESSFULLY. Model: {store.current_model['model_name']}")
+            log.info(f"VectorStore initialized SUCCESSFULLY. Model: {store.current_model['model_name']}")
         else:
-            log.critical(f"IcoTqStore init FAILED TO LOAD MODEL.")
+            log.critical(f"VectorStore init FAILED TO LOAD MODEL.")
             log.info("Attempting explicit load_model post-init...")
             load_success = store.load_model(MODEL_NAME, store.config['embeddings_device'], store.config['embeddings_model_trust_code'])
             if load_success and store.current_model and store.engine: 
                 log.info(f"Explicit load_model SUCCEEDED.")
             else: 
                 log.critical("Explicit load_model FAILED. Aborting.")
-                raise IcotqError("Failed to load embedding model.")
+                raise VectorError("Failed to load embedding model.")
 
         # 4. Initial Sync and Index
         log.info("Performing initial sync...")
         try: 
             store.sync_texts()
-        except IcotqError as e: 
+        except VectorError as e: 
             log.critical(f"Initial sync failed: {e}")
             raise
         log.info("Performing initial index...")
         try: 
             store.generate_embeddings(save_every_sec=0)
-        except IcotqError as e: 
+        except VectorError as e: 
             log.critical(f"Initial index generation failed: {e}")
             raise
 
@@ -224,8 +224,8 @@ def run_test_loop():
             log.info("Running sync_texts...")
             try: 
                 store.sync_texts()
-            except (IcotqCriticalError, IcotqConsistencyError) as e: 
-                log.error(f"Sync failed IcotqError: {e}", exc_info=True)
+            except (VectorCriticalError, VectorConsistencyError) as e: 
+                log.error(f"Sync failed VectorError: {e}", exc_info=True)
                 sync_errors += 1
             except Exception as e: 
                 log.error(f"Sync unexpected error: {e}", exc_info=True)
@@ -233,8 +233,8 @@ def run_test_loop():
 
             log.info("Running generate_embeddings...")
             try: store.generate_embeddings(save_every_sec=0)
-            except (IcotqCriticalError, IcotqConsistencyError) as e: 
-                log.error(f"Index failed IcotqError: {e}", exc_info=True)
+            except (VectorCriticalError, VectorConsistencyError) as e: 
+                log.error(f"Index failed VectorError: {e}", exc_info=True)
                 index_errors += 1
             except Exception as e: 
                 log.error(f"Index unexpected error: {e}", exc_info=True)
@@ -244,8 +244,8 @@ def run_test_loop():
                 log.info("Running check_clean(dry_run=False)...")
                 try: 
                     store.check_clean(dry_run=False)
-                except (IcotqCriticalError, IcotqConsistencyError) as e: 
-                    log.error(f"check_clean failed IcotqError: {e}", exc_info=True)
+                except (VectorCriticalError, VectorConsistencyError) as e: 
+                    log.error(f"check_clean failed VectorError: {e}", exc_info=True)
                 except Exception as e: 
                     log.error(f"check_clean unexpected error: {e}", exc_info=True)
 
@@ -268,8 +268,8 @@ def run_test_loop():
                     if not found_expected:
                         log.warning(f"Validation FAILED: Did not find '{expected_desc}' for term '{search_term}'.")
                         validation_failures += 1
-                except IcotqError as e: 
-                    log.error(f"Search failed IcotqError: {e}", exc_info=True)
+                except VectorError as e: 
+                    log.error(f"Search failed VectorError: {e}", exc_info=True)
                     search_errors += 1
                 except Exception as e: 
                     log.error(f"Search unexpected error: {e}", exc_info=True)
@@ -278,8 +278,8 @@ def run_test_loop():
                 log.info("Skipping search validation (no files).")
             time.sleep(0.1)
 
-    except (IcotqCriticalError, IcotqConsistencyError, IcotqConfigurationError) as e:
-        log.critical(f"Test loop aborted critical IcoTqStore error: {e}", exc_info=True)
+    except (VectorCriticalError, VectorConsistencyError, VectorConfigurationError) as e:
+        log.critical(f"Test loop aborted critical VectorStore error: {e}", exc_info=True)
     except Exception as e:
         log.critical(f"Test loop aborted unexpected error: {e}", exc_info=True)
     finally:

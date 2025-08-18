@@ -33,7 +33,7 @@ async def get_models():
             if item.is_dir():
                 # Check if essential files exist for a model to be "valid"
                 vis_data_path = item / "visualization_data.json"
-                # lib_path = item / "icotq_library.json" # For future search
+                # lib_path = item / "vector_library.json" # For future search
                 # tensor_path = item / "embeddings.pt"   # For future search
                 if vis_data_path.exists(): # and lib_path.exists() and tensor_path.exists():
                     models.append(item.name)

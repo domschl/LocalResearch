@@ -8,23 +8,23 @@ This project uses `uv` for library dependencies. Use your package manager to ins
 
 ```bash
 uv sync
-uv run iq.py
+uv run research.py
 ```
-Upon first start of `iq.py`, a configuration file is created at `~/IcoTqStore/config/icotq.json`, and a default list of embeddings model is stores in the same directory at `model_list.json`. Review the content and especially adapt paths to the content you want to index and search in `icotq.json`. When adding models (from Huggingface) to `model_list.json`, make sure that the model you add is trained for text-embedding! Search will not work when using arbitrary chat models!
+Upon first start of `research.py`, a configuration file is created at `~/VectorStore/config/vector.json`, and a default list of embeddings model is stores in the same directory at `model_list.json`. Review the content and especially adapt paths to the content you want to index and search in `vector.json`. When adding models (from Huggingface) to `model_list.json`, make sure that the model you add is trained for text-embedding! Search will not work when using arbitrary chat models!
 
-The indexer stores (potentially large) amounts of data at `~/IcoTqStore` 
+The indexer stores (potentially large) amounts of data at `~/VectorStore` 
 
 ## First use
 
-First step is to `sync` the document sources you defined in `icotq.json`. Supported are text formats (like `.txt`, `.md`, `.py`) and PDFs. Since extracting PDFs is an involved process, text content of PDFs is cached in `PDFTextCache`. Text is extracted via pymudpdf, and if that fails, LLM based OCR is used with pymupdf4llm.
+First step is to `sync` the document sources you defined in `vector.json`. Supported are text formats (like `.txt`, `.md`, `.py`) and PDFs. Since extracting PDFs is an involved process, text content of PDFs is cached in `PDFTextCache`. Text is extracted via pymudpdf, and if that fails, LLM based OCR is used with pymupdf4llm.
 
-Start `iq.py` with `uv run iq.py`, and once the console prompt appears, use `sync` to extract textual information as base for the embeddings index.
+Start `research.py` with `uv run research.py`, and once the console prompt appears, use `sync` to extract textual information as base for the embeddings index.
 
 ```
 sync
 ```
 
-Once `sync` finished do `list sources`, it should show the number of documents available for indexing for each source defined in `icotq.json`.
+Once `sync` finished do `list sources`, it should show the number of documents available for indexing for each source defined in `vector.json`.
 
 Then do `list models` and `select <number>` to select a model from the list for generating the embeddings.
 

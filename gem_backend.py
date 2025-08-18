@@ -8,15 +8,14 @@ import numpy as np
 from aiohttp import web
 import aiohttp_cors
 
-# Assume icotq_store.py contains the updated class
 try:
-    from icotq_store import (
-        IcoTqStore, TqSource, SearchResult as StoreSearchResult,
-        IcotqError,
+    from vector_store import (
+        VectorStore, VecSource, SearchResult as StoreSearchResult,
+        VectorError,
         ModelInfo
     )
 except ImportError:
-    print("ERROR: Could not import IcoTqStore. Make sure 'icotq_store.py' is accessible.")
+    print("ERROR: Could not import VectorStore. Make sure 'vector_store.py' is accessible.")
     sys.exit(1)
 
 # --- Configuration ---
@@ -25,36 +24,36 @@ PORT = 8000
 # Determine store path (e.g., relative to this script or from environment)
 # For simplicity, let's assume a 'store_data' directory exists sibling to this script
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_STORE_PATH = os.path.expanduser("~/IcoTqStore")
+DEFAULT_STORE_PATH = os.path.expanduser("~/VectorStore")
 # Allow overriding via environment variable
 STORE_DATA_PATH = DEFAULT_STORE_PATH # os.environ.get("ICOTQ_STORE_PATH", DEFAULT_STORE_PATH)
 config_path = os.path.join(STORE_DATA_PATH, "config")
-CONFIG_FILE_PATH = os.path.expanduser(os.path.join(config_path, "icotq.json"))  # join(STORE_DATA_PATH, "icotq_config_aiohttp.json") # Use a dedicated config
+CONFIG_FILE_PATH = os.path.expanduser(os.path.join(config_path, "vector.json"))  # join(STORE_DATA_PATH, "vector_config_aiohttp.json") # Use a dedicated config
 
 # --- Logging ---
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(name)s - %(message)s'
 )
-log = logging.getLogger("IcoTqBackend")
-logging.getLogger("IcoTqStore").setLevel(logging.INFO) # Adjust as needed
+log = logging.getLogger("VectorBackend")
+logging.getLogger("VectorStore").setLevel(logging.INFO) # Adjust as needed
 
 # --- Data Structures for API (using TypedDict) ---
 
-# Reusing TypedDicts from icotq_store where possible.
+# Reusing TypedDicts from vector_store where possible.
 # Define specific API response structures if they differ significantly.
 
 class StatusResponse(TypedDict):
     library_size: int
     current_model_name: str | None
     available_models: list[str]
-    sources: list[TqSource]
+    sources: list[VecSource]
     # Add other relevant status info
 
 # For adding/updating sources via API (example)
 class SourceApiData(TypedDict):
     name: str
-    tqtype: str # 'folder' or 'calibre_library'
+    vectype: str # 'folder' or 'calibre_library'
     path: str
     file_types: list[str]
 
@@ -76,12 +75,12 @@ class ModelInfo(TypedDict): # For listing models
 # --- Global Store Instance ---
 # This holds the state. For multi-process, this needs rethinking (e.g., shared memory, separate service).
 # For local single-process server, this is okay.
-store: IcoTqStore | None = None
+store: VectorStore | None = None
 
 async def initialize_store(app: web.Application):
-    """Initialize the IcoTqStore instance."""
+    """Initialize the VectorStore instance."""
     global store
-    log.info(f"Using IcoTqStore data path: {STORE_DATA_PATH}")
+    log.info(f"Using VectorStore data path: {STORE_DATA_PATH}")
     log.info(f"Using config file: {CONFIG_FILE_PATH}")
 
     # Ensure store path exists for config file
@@ -95,15 +94,15 @@ async def initialize_store(app: web.Application):
 
     try:
         # Pass the specific config file path to the store
-        store = IcoTqStore(config_file_override=CONFIG_FILE_PATH)
-        log.info("IcoTqStore initialized successfully.")
+        store = VectorStore(config_file_override=CONFIG_FILE_PATH)
+        log.info("VectorStore initialized successfully.")
         app['store'] = store # Make store accessible in handlers via app instance
-    except IcotqError as e:
-        log.critical(f"Failed to initialize IcoTqStore: {e}", exc_info=True)
+    except VectorError as e:
+        log.critical(f"Failed to initialize VectorStore: {e}", exc_info=True)
         # Allow app to start but log critical failure
         app['store'] = None
     except Exception as e:
-         log.critical(f"Unexpected error initializing IcoTqStore: {e}", exc_info=True)
+         log.critical(f"Unexpected error initializing VectorStore: {e}", exc_info=True)
          app['store'] = None
 
 
@@ -139,7 +138,7 @@ def get_int_query_param(request: web.Request, param_name: str, default: int) -> 
 
 async def get_status_handler(request: web.Request) -> web.Response:
     """Returns current status of the store."""
-    store_instance: IcoTqStore | None = request.app.get('store')
+    store_instance: VectorStore | None = request.app.get('store')
     if store_instance is None:
          return web.json_response({"error": "Store not initialized"}, status=503) # Service Unavailable
 
@@ -160,7 +159,7 @@ async def get_status_handler(request: web.Request) -> web.Response:
 
 async def trigger_sync_handler(request: web.Request) -> web.Response:
     """Triggers the sync_texts operation."""
-    store_instance: IcoTqStore | None = request.app.get('store')
+    store_instance: VectorStore | None = request.app.get('store')
     if store_instance is None: return web.json_response({"error": "Store not initialized"}, status=503)
 
     log.info("API: Received request to trigger sync...")
@@ -170,7 +169,7 @@ async def trigger_sync_handler(request: web.Request) -> web.Response:
         store_instance.sync_texts()
         log.info("API: sync_texts completed.")
         return web.json_response({"message": "Sync completed successfully."})
-    except IcotqError as e:
+    except VectorError as e:
         log.error(f"API: Sync error: {e}", exc_info=True)
         return web.json_response({"error": f"Sync failed: {str(e)}"}, status=500)
     except Exception as e:
@@ -180,7 +179,7 @@ async def trigger_sync_handler(request: web.Request) -> web.Response:
 
 async def trigger_index_handler(request: web.Request) -> web.Response:
     """Triggers the generate_embeddings operation."""
-    store_instance: IcoTqStore | None = request.app.get('store')
+    store_instance: VectorStore | None = request.app.get('store')
     if store_instance is None: return web.json_response({"error": "Store not initialized"}, status=503)
 
     purge = get_bool_query_param(request, 'purge', False)
@@ -190,7 +189,7 @@ async def trigger_index_handler(request: web.Request) -> web.Response:
         store_instance.generate_embeddings(purge=purge)
         log.info(f"API: generate_embeddings (purge={purge}) completed.")
         return web.json_response({"message": f"Index generation (purge={purge}) completed."})
-    except IcotqError as e:
+    except VectorError as e:
         log.error(f"API: Index error: {e}", exc_info=True)
         return web.json_response({"error": f"Index generation failed: {str(e)}"}, status=500)
     except Exception as e:
@@ -200,7 +199,7 @@ async def trigger_index_handler(request: web.Request) -> web.Response:
 
 async def trigger_check_handler(request: web.Request) -> web.Response:
     """Triggers the check_clean operation."""
-    store_instance: IcoTqStore | None = request.app.get('store')
+    store_instance: VectorStore | None = request.app.get('store')
     if store_instance is None: return web.json_response({"error": "Store not initialized"}, status=503)
 
     dry_run = get_bool_query_param(request, 'dry_run', True)
@@ -211,7 +210,7 @@ async def trigger_check_handler(request: web.Request) -> web.Response:
         store_instance.check_clean(dry_run=dry_run)
         log.info(f"API: check_clean (dry_run={dry_run}) completed.")
         return web.json_response({"message": f"Check/Clean operation (dry_run={dry_run}) completed. Check server logs for details."})
-    except IcotqError as e:
+    except VectorError as e:
         log.error(f"API: Check/clean error: {e}", exc_info=True)
         return web.json_response({"error": f"Check/clean failed: {str(e)}"}, status=500)
     except Exception as e:
@@ -221,7 +220,7 @@ async def trigger_check_handler(request: web.Request) -> web.Response:
 
 async def get_models_handler(request: web.Request) -> web.Response:
     """Lists available models known to the store."""
-    store_instance: IcoTqStore | None = request.app.get('store')
+    store_instance: VectorStore | None = request.app.get('store')
     if store_instance is None: return web.json_response({"error": "Store not initialized"}, status=503)
 
     try:
@@ -234,7 +233,7 @@ async def get_models_handler(request: web.Request) -> web.Response:
 
 async def load_model_handler(request: web.Request) -> web.Response:
     """Loads a specified model."""
-    store_instance: IcoTqStore | None = request.app.get('store')
+    store_instance: VectorStore | None = request.app.get('store')
     if store_instance is None: return web.json_response({"error": "Store not initialized"}, status=503)
 
     try:
@@ -271,7 +270,7 @@ async def load_model_handler(request: web.Request) -> web.Response:
         else:
             # Check logs for specific failure reason
             return web.json_response({"error": f"Failed to load model '{model_name}'. See server logs."}, status=500) # Use 500 as it's a server-side load fail
-    except IcotqError as e:
+    except VectorError as e:
          log.error(f"API: Load model error: {e}", exc_info=True)
          return web.json_response({"error": str(e)}, status=500)
     except Exception as e:
@@ -281,7 +280,7 @@ async def load_model_handler(request: web.Request) -> web.Response:
 
 async def search_api_handler(request: web.Request) -> web.Response:
     """Handles search requests."""
-    store_instance: IcoTqStore | None = request.app.get('store')
+    store_instance: VectorStore | None = request.app.get('store')
     if store_instance is None: return web.json_response({"error": "Store not initialized"}, status=503)
 
     try:
@@ -358,7 +357,7 @@ async def search_api_handler(request: web.Request) -> web.Response:
 
         return web.json_response(cast(list[dict[str, Any]], api_results))  # pyright:ignore[reportExplicitAny]
 
-    except IcotqError as e:
+    except VectorError as e:
          log.error(f"API: Search error: {e}", exc_info=True)
          return web.json_response({"error": f"Search failed: {str(e)}"}, status=500)
     except Exception as e:
@@ -429,7 +428,7 @@ def main():
         cors.add(route)  # pyright:ignore[reportUnknownMemberType]
     # ----------------------
 
-    log.info(f"Starting IcoTq backend server on http://{HOST}:{PORT}")
+    log.info(f"Starting Vector backend server on http://{HOST}:{PORT}")
     web.run_app(app, host=HOST, port=PORT, access_log=log) # Use built-in runner
 
 if __name__ == "__main__":

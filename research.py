@@ -4,16 +4,14 @@ import sys
 import argparse
 from argparse import ArgumentParser
 from rich.console import Console
-from icotq_store import IcoTqStore, SearchResult
+from vector_store import VectorStore, SearchResult
 from typing import cast, TypedDict, Any
-import numpy as np
 import json
 import shutil
 import pathlib
 import argparse # Ensure argparse is imported
-import torch
 
-def iq_info(its: IcoTqStore, _logger:logging.Logger) -> None:
+def vec_info(its: VectorStore, _logger:logging.Logger) -> None:
     its.list_sources()
     print()
     print("Use 'list models' for an overview of available models and their index status")
@@ -21,14 +19,14 @@ def iq_info(its: IcoTqStore, _logger:logging.Logger) -> None:
     print("Use 'index' to index using the current model (Use 'sync' first to load new/updated documents)")
     print("Use 'search <search phrase>' to search using the current model's index")
 
-def iq_index(its: IcoTqStore, _logger:logging.Logger, param:str):
+def vec_index(its: VectorStore, _logger:logging.Logger, param:str):
     if param == 'purge':
         purge = True
     else:
         purge = False
     its.generate_embeddings(purge=purge)
 
-def iq_search(its: IcoTqStore, logger:logging.Logger, search_spec: str):
+def vec_search(its: VectorStore, logger:logging.Logger, search_spec: str):
     max_results = 8
     context_length = 32
     context_steps = 4
@@ -112,7 +110,7 @@ def iq_search(its: IcoTqStore, logger:logging.Logger, search_spec: str):
     else:
         print("No search result available!")
     
-def iq_sync(its: IcoTqStore, _logger:logging.Logger, max_imports_str:str|None=None):
+def vec_sync(its: VectorStore, _logger:logging.Logger, max_imports_str:str|None=None):
     if max_imports_str is not None:
         try:
             max_imports = int(max_imports_str)
@@ -124,7 +122,7 @@ def iq_sync(its: IcoTqStore, _logger:logging.Logger, max_imports_str:str|None=No
     print()
     print("Use 'index' to update the current model's index, use 'list models' for an overview of models and indices available")
 
-def iq_select(its: IcoTqStore, _logger:logging.Logger, model_id:str):
+def vec_select(its: VectorStore, _logger:logging.Logger, model_id:str):
     try:
         ind = int(model_id)
         if ind > 0 and ind <= len(its.model_list):
@@ -157,7 +155,7 @@ def write_chunked(**cmd: Any):  # pyright: ignore[reportExplicitAny, reportAny]
         _ = sys.stdout.flush()
         cmd.clear()
 
-def iq_list(its: IcoTqStore, _logger:logging.Logger, param:str):
+def vec_list(its: VectorStore, _logger:logging.Logger, param:str):
     sub_params = param.split(' ')
     if param == 'models':
         class ModelInfo(TypedDict):
@@ -192,12 +190,12 @@ def iq_list(its: IcoTqStore, _logger:logging.Logger, param:str):
         print("Use 'sync' to update new or changed documents from document sources ('list sources'), after syncing, the index needs to be updated with 'index'.")
 
     elif param == 'sources':
-        for ind, source in enumerate(its.config["tq_sources"]):
+        for ind, source in enumerate(its.config["vec_sources"]):
             cnt = 0
             for entry in its.lib:
                 if entry['source_name'] == source['name']:
                     cnt += 1
-            print(f"{ind+1}: {source['name']} at {source['path']} ({source['tqtype']}), {cnt} docs")
+            print(f"{ind+1}: {source['name']} at {source['path']} ({source['vectype']}), {cnt} docs")
         print("\nUse 'list models' for the current index status, use 'sync' to synchronized new or changed documents.")
     elif sub_params[0] == 'docs':            
         for ind, entry in enumerate(its.lib):
@@ -222,19 +220,19 @@ def iq_list(its: IcoTqStore, _logger:logging.Logger, param:str):
     else:
         print("Usage either 'list models', 'list sources', or 'list docs'.")
 
-def iq_check(its: IcoTqStore, _logger:logging.Logger, param:str=""):
+def vec_check(its: VectorStore, _logger:logging.Logger, param:str=""):
     if param == "" or "pdf" in param:
         its.check_clean(dry_run=True)
 
-def iq_clean(its: IcoTqStore, _logger:logging.Logger, param:str=""):
+def vec_clean(its: VectorStore, _logger:logging.Logger, param:str=""):
     if param == "" or "pdf" in param:
         its.check_clean(dry_run=False)
 
-def iq_export(its: IcoTqStore, logger: logging.Logger, params_str: str):
+def vec_export(its: VectorStore, logger: logging.Logger, params_str: str):
     parser = argparse.ArgumentParser(description="Export data for web server.")
     parser.add_argument("output_dir", help="Base directory to export the data to.")
     parser.add_argument("--max_points", type=int, help="Maximum number of points for visualization.", default=None)
-    # No --model_name argument, will use current model from IcoTqStore
+    # No --model_name argument, will use current model from VectorStore
 
     try:
         args = parser.parse_args(params_str.split())
@@ -259,12 +257,12 @@ def iq_export(its: IcoTqStore, logger: logging.Logger, params_str: str):
 
     logger.info(f"Exporting data for current model: {current_model_name} to {args.output_dir}")
 
-    # 1. Copy shared icotq_library.json to the root of output_dir
+    # 1. Copy shared vector_library.json to the root of output_dir
     try:
         library_source_path_str = its._get_library_path()
         if library_source_path_str:
             library_source_path = pathlib.Path(library_source_path_str)
-            library_dest_path = output_base_dir / "icotq_library.json"
+            library_dest_path = output_base_dir / "vector_library.json"
             shutil.copy2(library_source_path, library_dest_path)
             logger.info(f"Exported shared library to {library_dest_path}")
             print(f"Exported shared library to {library_dest_path}")
@@ -328,7 +326,7 @@ def iq_export(its: IcoTqStore, logger: logging.Logger, params_str: str):
     logger.info(f"Export completed for model {current_model_name}. Files are in {output_base_dir} and {model_export_dir}")
     print(f"Export completed for model {current_model_name}. Files are in {output_base_dir} and {model_export_dir.resolve()}")
 
-def iq_help(parser:argparse.ArgumentParser, valid_actions:list[tuple[str, str]]):
+def vec_help(parser:argparse.ArgumentParser, valid_actions:list[tuple[str, str]]):
     parser.print_help()
     print()
     print("Command can either be provided as command-line arguments or at the '> ' prompt.")
@@ -338,7 +336,7 @@ def iq_help(parser:argparse.ArgumentParser, valid_actions:list[tuple[str, str]])
     print()
     print("To exit, use ^D, 'exit', or 'quit'")
 
-def parse_cmd(its: IcoTqStore, logger: logging.Logger, args):
+def parse_cmd(its: VectorStore, logger: logging.Logger, args):
     """Parse and execute a command with arguments"""
     if not args:
         return
@@ -348,13 +346,13 @@ def parse_cmd(its: IcoTqStore, logger: logging.Logger, args):
     
     # Command mapping
     cmd_map = {
-        "info": lambda: iq_info(its, logger),
-        "index": lambda: iq_index(its, logger, param),
-        "search": lambda: iq_search(its, logger, param),
-        "sync": lambda: iq_sync(its, logger, param if param else None),
-        "select": lambda: iq_select(its, logger, param),
-        "export": lambda: iq_export(its, logger, param),
-        "list": lambda: iq_list(its, logger, param),
+        "info": lambda: vec_info(its, logger),
+        "index": lambda: vec_index(its, logger, param),
+        "search": lambda: vec_search(its, logger, param),
+        "sync": lambda: vec_sync(its, logger, param if param else None),
+        "select": lambda: vec_select(its, logger, param),
+        "export": lambda: vec_export(its, logger, param),
+        "list": lambda: vec_list(its, logger, param),
         # Add other commands here
     }
     
@@ -378,10 +376,10 @@ def main() -> None:
     args, remaining_args = parser.parse_known_args()
     
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-    logger = logging.getLogger("iq")
+    logger = logging.getLogger("vec")
     
     try:
-        its = IcoTqStore(config_file_override=args.config, config_path_override=args.config_path)
+        its = VectorStore(config_file_override=args.config, config_path_override=args.config_path)
         
         # Removed EmbeddingVisServer instantiation and start/stop logic
         
@@ -392,7 +390,7 @@ def main() -> None:
             # Interactive mode
             while True:
                 try:
-                    user_input = input("iq> ")
+                    user_input = input("vec> ")
                     if user_input.lower() in ["exit", "quit", "q"]:
                         break
                     parse_cmd(its, logger, user_input.split())

@@ -341,7 +341,7 @@ def read_response(proc: subprocess.Popen[bytes] | None) -> tuple[dict[str, Any] 
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="MCP Client to test the IcoTq MCP Server (JSON-RPC Compliant).")
+    parser = argparse.ArgumentParser(description="MCP Client to test the Vector MCP Server (JSON-RPC Compliant).")
     _ = parser.add_argument(
         "server_script",
         help="Path to the mcp_server.py script."

@@ -1,6 +1,6 @@
 import logging
 import asyncio
-from icotq_store import SearchRequest, SearchResult
+from vector_store import SearchRequest, SearchResult
 from typing import cast
 
 import mcp.types as types
@@ -71,7 +71,7 @@ async def arun():
 def main() -> None:
     logger.info("Starting...")
      
-    # its = IcoTqStore()
+    # its = VectorStore()
     # anyio.run(arun)
     logger.info("Starting STDIO based IQ-MCP server...")
     asyncio.run(arun())

@@ -149,7 +149,7 @@ def handle_initialize(params: InitializeParams | None, req_id: str | int | None)
     client_info = params.get("clientInfo", {}) if params else {}    # pyright: ignore[reportUnknownVariableType]
     log.info(f"Client protocol version: {client_protocol}, ClientInfo: {client_info}")
 
-    server_info = ServerInfo(name="IcoTq MCP Search Provider", version="0.1.5") # Bump version
+    server_info = ServerInfo(name="Vector MCP Search Provider", version="0.1.5") # Bump version
     server_caps = ServerCapabilities() # Empty dict {}
     result = InitializeResult(
         protocolVersion=MCP_PROTOCOL_VERSION,
