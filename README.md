@@ -1,6 +1,9 @@
-## [WIP] implementation of a vector search tool for local notes, libraries, and Calibre books
+**DEVELOPMENT MOVED TO:** <https://codeberg.org/domschl/LocalResearch>
 
-**Note:** This is work-in-progress!
+
+## [OBSOLETE] implementation of a vector search tool for local notes, libraries, and Calibre books
+
+**Note:** Obsolete, see above!
 
 ## Preparations
 
