@@ -23,7 +23,8 @@ from collections.abc import Generator
 import pymupdf  # pyright: ignore[reportMissingTypeStubs]
 
 try:
-    import pymupdf4llm  # pyright: ignore[reportMissingTypeStubs]
+    import pymupdf4llm  # pyright: ignore[reportMissingTypeStubs]  # XXX currently locked to 0.19, otherwise export returns empty docs, requires investigation!
+    # c.f. <https://github.com/pymupdf/RAG/issues/289>, `ignore_images` option.
     PYMUPDF4LLM_AVAILABLE:bool = True
 except ImportError:
     PYMUPDF4LLM_AVAILABLE = False  # pyright: ignore[reportConstantRedefinition]
