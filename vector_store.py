@@ -383,15 +383,7 @@ class VectorStore:
                 'max_input_token': 512, # Use underlying model's limit or common practice
                 'chunk_size': 1024,     # Adjust based on token limit and desired context
                 'chunk_overlap': 1024 // 3
-            },
-            {
-                'model_hf_name': 'Qwen/Qwen3-Embedding-0.6B',
-                'model_name': 'Qwen3-Embedding-0.6B',
-                'emb_dim': 1024,
-                'max_input_token': 512,
-                'chunk_size': 1024,     # Adjust based on token limit and desired context
-                'chunk_overlap': 1024 // 3
-            },
+            }
         ]
 
     def _ensure_storage_dirs(self):
