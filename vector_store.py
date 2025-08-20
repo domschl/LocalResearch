@@ -383,7 +383,15 @@ class VectorStore:
                 'max_input_token': 512, # Use underlying model's limit or common practice
                 'chunk_size': 1024,     # Adjust based on token limit and desired context
                 'chunk_overlap': 1024 // 3
-            }
+            },
+            {
+                'model_hf_name': 'Qwen/Qwen3-Embedding-0.6B',
+                'model_name': 'Qwen3-Embedding-0.6B',
+                'emb_dim': 1024,
+                'max_input_token': 512,
+                'chunk_size': 1024,     # Adjust based on token limit and desired context
+                'chunk_overlap': 1024 // 3
+            },
         ]
 
     def _ensure_storage_dirs(self):
@@ -1464,11 +1472,14 @@ class VectorStore:
             try:
                  _ = self._load_tensor_internal(target_model_name, check_consistency=False)
                  if self.current_model and self.current_model['model_name'] == target_model_name: 
-                    local_embeddings_matrix = self.embeddings_matrix
+                    if self.embeddings_matrix is not None:
+                        local_embeddings_matrix = self.embeddings_matrix.to('cpu')
+                    else:
+                        local_embeddings_matrix = None
                  else:
                     temp_tensor_path = self._get_tensor_path(target_model_name)
                     if os.path.exists(temp_tensor_path):
-                        temp_device = self.resolve_device(self.config['embeddings_device'])
+                        temp_device = 'cpu' # self.resolve_device(self.config['embeddings_device'])
                         local_embeddings_matrix = cast(torch.Tensor, torch.load(temp_tensor_path, map_location=torch.device(temp_device)))
                     else: 
                         local_embeddings_matrix = None
@@ -1480,7 +1491,10 @@ class VectorStore:
             model_to_use = self.current_model
             target_model_name = model_to_use['model_name']
             local_engine = self.engine
-            local_embeddings_matrix = self.embeddings_matrix
+            if self.embeddings_matrix is not None:
+                local_embeddings_matrix = self.embeddings_matrix.to('cpu')
+            else:
+                local_embeddings_matrix = None
             self.log.info(f"Generating embeddings for current model: '{target_model_name}'")
         else:
             raise VectorError("Cannot generate embeddings: No current embeddings model loaded.")
@@ -1589,7 +1603,7 @@ class VectorStore:
             print(" Done.")
             self.log.info(f"Embedding generation for '{target_model_name}' completed. Processed {processed_count} entries.")
             if self.current_model and self.current_model['model_name'] == target_model_name:
-                self.embeddings_matrix = local_embeddings_matrix
+                self.embeddings_matrix = local_embeddings_matrix.to(self.resolve_device(self.config['embeddings_device']))
                 self.log.info(f"Current model's ({target_model_name}) in-memory tensor updated.")
         except VectorCriticalError as e: 
             print("\nCRITICAL ERROR during final save.")
