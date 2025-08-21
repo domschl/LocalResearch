@@ -230,8 +230,8 @@ def vec_clean(its: VectorStore, _logger:logging.Logger, param:str=""):
 
 def vec_export(its: VectorStore, logger: logging.Logger, params_str: str):
     parser = argparse.ArgumentParser(description="Export data for web server.")
-    parser.add_argument("output_dir", help="Base directory to export the data to.")
-    parser.add_argument("--max_points", type=int, help="Maximum number of points for visualization.", default=None)
+    _ = parser.add_argument("output_dir", default="web_server/data", help="Base directory to export the data to.")
+    _ = parser.add_argument("--max_points", type=int, help="Maximum number of points for visualization.", default=None)
     # No --model_name argument, will use current model from VectorStore
 
     try:
