@@ -1,6 +1,7 @@
 import logging
 import warnings
 import os
+import gc
 import json
 import uuid
 import time
@@ -1518,6 +1519,11 @@ class VectorStore:
         total_entries = len(self.lib)
         processed_count = 0
 
+        # Safe GPU Vram
+        if local_embeddings_matrix is not None and self.embeddings_matrix is not None:
+            del self.embeddings_matrix
+            self.embeddings_matrix = None
+
         for ind, entry in enumerate(self.lib):
             print(f"\rEmbedding Progress ({target_model_name}): {ind+1}/{total_entries} ({processed_count} processed)", end="", flush=True)
             if 'emb_ptrs' not in entry: 
@@ -1554,6 +1560,7 @@ class VectorStore:
                      continue
 
                 emb_matrix_chunk = torch.stack(embeddings).to(local_embeddings_matrix.device if local_embeddings_matrix is not None else torch.device(self.resolve_device(self.config['embeddings_device'])))
+                del embeddings
 
                 if local_embeddings_matrix is None: 
                     start_ptr = 0
@@ -1574,6 +1581,11 @@ class VectorStore:
                     del self.lib[ind]['emb_ptrs'][target_model_name]
                     lib_changed_since_last_save = True
 
+            if ind % 10 == 0:
+                _ = gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                
             current_time = time.time()
             if save_every_sec > 0 and (current_time - last_save_time > save_every_sec):
                 print(f"\nPerforming periodic save ({target_model_name})...", end="", flush=True)
@@ -2342,13 +2354,13 @@ class VectorStore:
         os.makedirs(output_dir, exist_ok=True)
         
         # Prepare the data
-        print("Preparing embedding visualization data...")
+        self.log.info("Preparing embedding visualization data...")
         
         # Extract embeddings
         start_time = time.time()
         embeddings = self.embeddings_matrix.cpu().numpy()
         num_embeddings = embeddings.shape[0]
-        print(f"Extracted {num_embeddings} embeddings in {time.time() - start_time:.2f}s")
+        self.log.info(f"Extracted {num_embeddings} embeddings in {time.time() - start_time:.2f}s")
         
         # Limit points if needed
         if max_points and num_embeddings > max_points:
@@ -2386,11 +2398,11 @@ class VectorStore:
                     )
                     chunk_texts.append(chunk_text[:200])  # Limit text size
         
-        print(f"Processed {len(doc_mapping)} document mappings in {time.time() - start_time:.2f}s")
+        self.log.info(f"Processed {len(doc_mapping)} document mappings in {time.time() - start_time:.2f}s")
         
         # Dimensionality reduction
         start_time = time.time()
-        print("Performing dimensionality reduction...")
+        self.log.info("Performing dimensionality reduction...")
         
         from sklearn.decomposition import PCA
         import umap
@@ -2399,13 +2411,13 @@ class VectorStore:
         if embeddings.shape[1] > 50:
             pca = PCA(n_components=50)
             embeddings_reduced = pca.fit_transform(embeddings)
-            print(f"PCA reduction completed in {time.time() - start_time:.2f}s")
+            self.log.info(f"PCA reduction completed in {time.time() - start_time:.2f}s")
             start_time = time.time()
         else:
             embeddings_reduced = embeddings
         
         # Use UMAP with parallelization
-        print("Using parallel UMAP with all CPU cores")
+        self.log.info("Using parallel UMAP with all CPU cores")
         reducer = umap.UMAP(
             n_components=3, 
             metric='cosine', 
@@ -2416,7 +2428,7 @@ class VectorStore:
             low_memory=False # Faster but more memory-intensive or slower, less memory-intensive
         )
         embeddings_3d = reducer.fit_transform(embeddings_reduced)
-        print(f"UMAP reduction completed in {time.time() - start_time:.2f}s")
+        self.log.info(f"UMAP reduction completed in {time.time() - start_time:.2f}s")
         
         # Assign colors
         start_time = time.time()
@@ -2431,7 +2443,7 @@ class VectorStore:
             doc_color_map[doc_id_val] = [float(c) for c in rgb]
         
         colors = [doc_color_map[doc_id] for doc_id in doc_ids]
-        print(f"Color assignment completed in {time.time() - start_time:.2f}s")
+        self.log.info(f"Color assignment completed in {time.time() - start_time:.2f}s")
         
         # Prepare output data
         start_time = time.time()

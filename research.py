@@ -238,13 +238,13 @@ def vec_export(its: VectorStore, logger: logging.Logger, params_str: str):
         args = parser.parse_args(params_str.split())
     except SystemExit:
         logger.error("Invalid export parameters.")
-        print("Invalid export parameters. Use 'export <output_dir> [--max_points N]'")
+        # print("Invalid export parameters. Use 'export <output_dir> [--max_points N]'")
         return
 
     current_model_name = its.get_current_model_name()
     if not current_model_name:
         logger.error("No model is currently active. Please select a model using 'select <model_id>' first.")
-        print("No model is currently active. Please select a model using 'select <model_id>' first.")
+        # print("No model is currently active. Please select a model using 'select <model_id>' first.")
         return
 
     output_base_dir = pathlib.Path(args.output_dir)
@@ -252,7 +252,7 @@ def vec_export(its: VectorStore, logger: logging.Logger, params_str: str):
         output_base_dir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
         logger.error(f"Error creating base directory {output_base_dir}: {e}")
-        print(f"Error creating base directory {output_base_dir}: {e}")
+        # print(f"Error creating base directory {output_base_dir}: {e}")
         return
 
     logger.info(f"Exporting data for current model: {current_model_name} to {args.output_dir}")
@@ -265,13 +265,13 @@ def vec_export(its: VectorStore, logger: logging.Logger, params_str: str):
             library_dest_path = output_base_dir / "vector_library.json"
             shutil.copy2(library_source_path, library_dest_path)
             logger.info(f"Exported shared library to {library_dest_path}")
-            print(f"Exported shared library to {library_dest_path}")
+            # print(f"Exported shared library to {library_dest_path}")
         else:
             logger.warning("Could not determine library path. Skipping library export.")
-            print("Could not determine library path. Skipping library export.")
+            # print("Could not determine library path. Skipping library export.")
     except Exception as e:
         logger.error(f"Error exporting shared library: {e}")
-        print(f"Error exporting shared library: {e}")
+        # print(f"Error exporting shared library: {e}")
 
     # Create model-specific subdirectory
     model_export_dir = output_base_dir / current_model_name
@@ -279,7 +279,7 @@ def vec_export(its: VectorStore, logger: logging.Logger, params_str: str):
         model_export_dir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
         logger.error(f"Error creating model directory {model_export_dir}: {e}")
-        print(f"Error creating model directory {model_export_dir}: {e}")
+        # print(f"Error creating model directory {model_export_dir}: {e}")
         return
 
     # 2. Prepare and save model-specific visualization_data.json
@@ -294,13 +294,13 @@ def vec_export(its: VectorStore, logger: logging.Logger, params_str: str):
             with open(vis_data_path, 'w') as f:
                 json.dump(vis_data, f)
             logger.info(f"Exported visualization data to {vis_data_path}")
-            print(f"Exported visualization data to {vis_data_path}")
+            # print(f"Exported visualization data to {vis_data_path}")
         else:
             logger.error("Failed to generate visualization data.")
-            print("Failed to generate visualization data.")
+            # print("Failed to generate visualization data.")
     except Exception as e:
         logger.error(f"Error preparing or saving visualization data: {e}")
-        print(f"Error preparing or saving visualization data: {e}")
+        # print(f"Error preparing or saving visualization data: {e}")
 
     # 3. Copy model-specific embeddings tensor
     try:
@@ -310,21 +310,21 @@ def vec_export(its: VectorStore, logger: logging.Logger, params_str: str):
             # Ensure the source tensor file exists
             if not tensor_source_path.is_file():
                 logger.error(f"Embeddings tensor file not found at {tensor_source_path}")
-                print(f"Embeddings tensor file not found at {tensor_source_path}")
+                # print(f"Embeddings tensor file not found at {tensor_source_path}")
             else:
                 tensor_dest_path = model_export_dir / "embeddings.pt" # Generic name within model folder
                 shutil.copy2(tensor_source_path, tensor_dest_path)
                 logger.info(f"Exported embeddings tensor to {tensor_dest_path}")
-                print(f"Exported embeddings tensor to {tensor_dest_path}")
+                # print(f"Exported embeddings tensor to {tensor_dest_path}")
         else:
             logger.warning(f"Could not determine tensor path for model {current_model_name}. Skipping tensor export.")
-            print(f"Could not determine tensor path for model {current_model_name}. Skipping tensor export.")
+            # print(f"Could not determine tensor path for model {current_model_name}. Skipping tensor export.")
     except Exception as e:
         logger.error(f"Error exporting embeddings tensor: {e}")
-        print(f"Error exporting embeddings tensor: {e}")
+        # print(f"Error exporting embeddings tensor: {e}")
 
     logger.info(f"Export completed for model {current_model_name}. Files are in {output_base_dir} and {model_export_dir}")
-    print(f"Export completed for model {current_model_name}. Files are in {output_base_dir} and {model_export_dir.resolve()}")
+    # print(f"Export completed for model {current_model_name}. Files are in {output_base_dir} and {model_export_dir.resolve()}")
 
 def vec_help(parser:argparse.ArgumentParser, valid_actions:list[tuple[str, str]]):
     parser.print_help()
