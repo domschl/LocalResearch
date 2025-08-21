@@ -12,6 +12,7 @@ dependencies = [
     "flet>=0.27.6",
     "huggingface-hub[hf-xet]>=0.30.1",
     "mcp[cli]>=1.4.1",
+    "megablocks>=0.10.0",
     "pillow>=11.1.0",
     "pymupdf>=1.25.3",
     "pymupdf4llm==0.0.19",
