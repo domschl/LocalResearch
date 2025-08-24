@@ -486,6 +486,9 @@ class VectorStore:
                 except OSError as rm_e: self.log.error(f"Failed to remove leftover temp tensor file {temp_path} in finally: {rm_e}")
 
 
+    def get_library_path(self) -> str:
+        return self._get_library_path()
+    
     # === Core State Management (Internal, Assumes Lock Held) ===
 
     def _get_library_path(self) -> str:
@@ -1464,24 +1467,24 @@ class VectorStore:
             target_model_name = model_to_use['model_name']
             self.log.info(f"Generating embeddings specifically for model: '{target_model_name}'")
             if not self.current_model or self.current_model['model_name'] != target_model_name:
-                 self.log.warning(f"Temporarily loading model '{target_model_name}'.")
-                 try:
-                     temp_engine = SentenceTransformer(model_to_use['model_hf_name'], trust_remote_code=self.config.get('embeddings_model_trust_code', True)) 
-                     temp_device = self.resolve_device(self.config['embeddings_device'])
-                     local_engine = temp_engine.to(torch.device(temp_device))
-                 except Exception as e: 
+                self.log.warning(f"Temporarily loading model '{target_model_name}'.")
+                try:
+                    temp_engine = SentenceTransformer(model_to_use['model_hf_name'], trust_remote_code=self.config.get('embeddings_model_trust_code', True)) 
+                    temp_device = self.resolve_device(self.config['embeddings_device'])
+                    local_engine = temp_engine.to(torch.device(temp_device))
+                except Exception as e: 
                     raise VectorError(f"Failed to temporarily load model '{target_model_name}': {e}") from e
             else: 
                 local_engine = self.engine
 
             try:
-                 _ = self._load_tensor_internal(target_model_name, check_consistency=False)
-                 if self.current_model and self.current_model['model_name'] == target_model_name: 
-                    if self.embeddings_matrix is not None:
-                        local_embeddings_matrix = self.embeddings_matrix.to('cpu')
-                    else:
-                        local_embeddings_matrix = None
-                 else:
+                _ = self._load_tensor_internal(target_model_name, check_consistency=False)
+                if self.current_model and self.current_model['model_name'] == target_model_name: 
+                   if self.embeddings_matrix is not None:
+                       local_embeddings_matrix = self.embeddings_matrix.to('cpu')
+                   else:
+                       local_embeddings_matrix = None
+                else:
                     temp_tensor_path = self._get_tensor_path(target_model_name)
                     if os.path.exists(temp_tensor_path):
                         temp_device = 'cpu' # self.resolve_device(self.config['embeddings_device'])
@@ -1500,7 +1503,7 @@ class VectorStore:
                 local_embeddings_matrix = self.embeddings_matrix.to('cpu')
             else:
                 local_embeddings_matrix = None
-            self.log.info(f"Generating embeddings for current model: '{target_model_name}'")
+                self.log.info(f"Generating embeddings for current model: '{target_model_name}'")
         else:
             raise VectorError("Cannot generate embeddings: No current embeddings model loaded.")
 
@@ -1515,7 +1518,8 @@ class VectorStore:
                 self.log.info(f"Library saved after purging pointers for {target_model_name}.")
             except VectorCriticalError as e: 
                 raise VectorCriticalError("Failed to save library after purging pointers.") from e
-
+            return
+        
         # start_time = time.time()
         last_save_time = time.time()
         lib_changed_since_last_save = False
@@ -1528,8 +1532,8 @@ class VectorStore:
             del self.embeddings_matrix
             self.embeddings_matrix = None
 
+        batch_size = 8
         for ind, entry in enumerate(self.lib):
-            print(f"\rEmbedding Progress ({target_model_name}): {ind+1}/{total_entries} ({processed_count} processed)", end="", flush=True)
             if 'emb_ptrs' not in entry: 
                 self.lib[ind]['emb_ptrs'] = {}
                 lib_changed_since_last_save = True
@@ -1540,56 +1544,61 @@ class VectorStore:
             text_to_embed = entry.get('text')
             if not text_to_embed:
                  if target_model_name in self.lib[ind]['emb_ptrs']: 
-                    del self.lib[ind]['emb_ptrs'][target_model_name]
-                    lib_changed_since_last_save = True
+                     del self.lib[ind]['emb_ptrs'][target_model_name]
+                     lib_changed_since_last_save = True
                  continue
 
             try:
                 text_chunks = self.get_chunks(text_to_embed, model_to_use['chunk_size'], model_to_use['chunk_overlap'])
                 if not text_chunks:
                      if target_model_name in self.lib[ind]['emb_ptrs']: 
-                        del self.lib[ind]['emb_ptrs'][target_model_name]
-                        lib_changed_since_last_save = True
+                         del self.lib[ind]['emb_ptrs'][target_model_name]
+                         lib_changed_since_last_save = True
                      continue
 
-                embeddings: list[torch.Tensor] = local_engine.encode(  # pyright:ignore[reportUnknownMemberType, reportOptionalMemberAccess]
-                    sentences=text_chunks, show_progress_bar=False, convert_to_numpy=False, batch_size=32
-                 )
+                emb_len = 0
+                for chunk_ind in range(0, len(text_chunks), batch_size):
+                    print(f"\rEmbedding Progress ({target_model_name}): {ind+1}/{total_entries} chunk: {chunk_ind}/{len(text_chunks)}     ", end="", flush=True)
+                    embeddings = local_engine.encode(  # pyright:ignore[reportUnknownMemberType, reportOptionalMemberAccess]
+                        sentences=text_chunks[chunk_ind : chunk_ind+batch_size], show_progress_bar=False, convert_to_numpy=False, batch_size=batch_size
+                    )
 
-                if not embeddings:
-                     self.log.warning(f"Encoding produced no embeddings for {entry['desc_filename']}")
-                     if target_model_name in self.lib[ind]['emb_ptrs']: 
-                        del self.lib[ind]['emb_ptrs'][target_model_name]
-                        lib_changed_since_last_save = True
-                     continue
+                    if not embeddings:
+                        self.log.warning(f"Encoding produced no embeddings for {entry['desc_filename']}")
+                        if target_model_name in self.lib[ind]['emb_ptrs']: 
+                            del self.lib[ind]['emb_ptrs'][target_model_name]
+                            lib_changed_since_last_save = True
+                        continue
 
-                emb_matrix_chunk = torch.stack(embeddings).to('cpu')
-                del embeddings
+                     # Typing information for embeddings is simply wrong, its a list of tensors...
+                    emb_matrix_chunk = torch.stack(embeddings).to('cpu')
+                    del embeddings
 
-                if local_embeddings_matrix is None: 
-                    start_ptr = 0
-                    local_embeddings_matrix = emb_matrix_chunk
-                else: 
-                    start_ptr = local_embeddings_matrix.shape[0]
-                    local_embeddings_matrix = torch.cat([local_embeddings_matrix, emb_matrix_chunk])
+                    if local_embeddings_matrix is None: 
+                        start_ptr = 0
+                        local_embeddings_matrix = emb_matrix_chunk
+                    else: 
+                        start_ptr = local_embeddings_matrix.shape[0]
+                        local_embeddings_matrix = torch.cat([local_embeddings_matrix, emb_matrix_chunk])
 
-                emb_len = emb_matrix_chunk.shape[0]
-                del emb_matrix_chunk
-                self.lib[ind]['emb_ptrs'][target_model_name] = (start_ptr, emb_len)
-                lib_changed_since_last_save = True
-                tensor_changed_since_last_save = True
+                    emb_len += emb_matrix_chunk.shape[0]
+                    del emb_matrix_chunk
+                    self.lib[ind]['emb_ptrs'][target_model_name] = (start_ptr, emb_len)
+                    lib_changed_since_last_save = True
+                    tensor_changed_since_last_save = True
 
             except Exception as e:
-                 self.log.error(f"\nFailed to generate embeddings for {entry['desc_filename']}: {e}", exc_info=True)
-                 if target_model_name in self.lib[ind]['emb_ptrs']: 
-                    del self.lib[ind]['emb_ptrs'][target_model_name]
-                    lib_changed_since_last_save = True
+                self.log.error(f"\nFailed to generate embeddings for {entry['desc_filename']}: {e}", exc_info=True)
+                return
+             # if target_model_name in self.lib[ind]['emb_ptrs']:
+             #    del self.lib[ind]['emb_ptrs'][target_model_name]
+             #    lib_changed_since_last_save = True
 
             if ind % 10 == 0:
                 _ = gc.collect()
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-                
+                    
             current_time = time.time()
             if save_every_sec > 0 and (current_time - last_save_time > save_every_sec):
                 print(f"\nPerforming periodic save ({target_model_name})...", end="", flush=True)
@@ -1601,8 +1610,8 @@ class VectorStore:
                         tensor_path = self._get_tensor_path(target_model_name)
                         self._atomic_save_tensor(local_embeddings_matrix, tensor_path)
                         tensor_changed_since_last_save = False
-                    last_save_time = current_time
-                    print(" Done.")
+                        last_save_time = current_time
+                        print(" Done.")
                 except VectorCriticalError as e: 
                     print("\nCRITICAL ERROR during periodic save.")
                     raise VectorCriticalError("Aborting due to periodic save failure.") from e
@@ -1616,8 +1625,8 @@ class VectorStore:
                 self._write_library_internal()
             if tensor_changed_since_last_save: 
                 self._atomic_save_tensor(local_embeddings_matrix, self._get_tensor_path(target_model_name))
-            print(" Done.")
-            self.log.info(f"Embedding generation for '{target_model_name}' completed. Processed {processed_count} entries.")
+                print(" Done.")
+                self.log.info(f"Embedding generation for '{target_model_name}' completed. Processed {processed_count} entries.")
             if self.current_model and self.current_model['model_name'] == target_model_name:
                 self.embeddings_matrix = local_embeddings_matrix.to(self.resolve_device(self.config['embeddings_device']))
                 self.log.info(f"Current model's ({target_model_name}) in-memory tensor updated.")

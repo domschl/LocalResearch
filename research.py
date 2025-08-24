@@ -230,7 +230,7 @@ def vec_clean(its: VectorStore, _logger:logging.Logger, param:str=""):
 
 def vec_export(its: VectorStore, logger: logging.Logger, params_str: str):
     parser = argparse.ArgumentParser(description="Export data for web server.")
-    _ = parser.add_argument("output_dir", default="web_server/data", help="Base directory to export the data to.")
+    _ = parser.add_argument("--output_dir", default="web_server/data", help="Base directory to export the data to.")
     _ = parser.add_argument("--max_points", type=int, help="Maximum number of points for visualization.", default=None)
     # No --model_name argument, will use current model from VectorStore
 
@@ -247,7 +247,7 @@ def vec_export(its: VectorStore, logger: logging.Logger, params_str: str):
         # print("No model is currently active. Please select a model using 'select <model_id>' first.")
         return
 
-    output_base_dir = pathlib.Path(args.output_dir)
+    output_base_dir = pathlib.Path(cast(str, args.output_dir))
     try:
         output_base_dir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
@@ -255,15 +255,15 @@ def vec_export(its: VectorStore, logger: logging.Logger, params_str: str):
         # print(f"Error creating base directory {output_base_dir}: {e}")
         return
 
-    logger.info(f"Exporting data for current model: {current_model_name} to {args.output_dir}")
+    logger.info(f"Exporting data for current model: {current_model_name} to {output_base_dir}")
 
     # 1. Copy shared vector_library.json to the root of output_dir
     try:
-        library_source_path_str = its._get_library_path()
+        library_source_path_str = its.get_library_path()
         if library_source_path_str:
             library_source_path = pathlib.Path(library_source_path_str)
             library_dest_path = output_base_dir / "vector_library.json"
-            shutil.copy2(library_source_path, library_dest_path)
+            _ = shutil.copy2(library_source_path, library_dest_path)
             logger.info(f"Exported shared library to {library_dest_path}")
             # print(f"Exported shared library to {library_dest_path}")
         else:
@@ -284,10 +284,9 @@ def vec_export(its: VectorStore, logger: logging.Logger, params_str: str):
 
     # 2. Prepare and save model-specific visualization_data.json
     try:
-        logger.info(f"Preparing visualization data for {current_model_name} with max_points={args.max_points}...")
+        logger.info(f"Preparing visualization data for {current_model_name} with max_points={cast(int, args.max_points)}...")
         vis_data = its.prepare_visualization_data(
-            model_name_override=current_model_name, # Corrected parameter name
-            max_points=args.max_points
+            max_points=cast(int, args.max_points)
         )
         if vis_data:
             vis_data_path = model_export_dir / "visualization_data.json"
