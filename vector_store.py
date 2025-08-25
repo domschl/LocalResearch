@@ -361,7 +361,7 @@ class VectorStore:
                         descriptor = "{" + source['name'] + "}" + relative_path                        
                         sha256_hash = VectorStore._get_sha256(full_path)
 
-                        print("\r{descriptor:80s}", end="")
+                        print(f"\r{descriptor:80s}", end="")
                         
                         if descriptor in self.library:
                             existing_entry: LibraryEntry | None = self.library[descriptor]
