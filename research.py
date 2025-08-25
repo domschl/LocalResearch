@@ -48,7 +48,7 @@ def repl(its: VectorStore, log: logging.Logger):
                 if ind != -1:
                     its.select(ind)
                 else:
-                    log.error("Invalid index {arguments}, integer required, use 'list models' for valid range")
+                    log.error(f"Invalid index {arguments}, integer required, use 'list models' for valid range")
             elif command == 'exit':
                 break
 

@@ -247,7 +247,7 @@ class VectorStore:
         image.save(img_byte_arr, format=output_format)
         return img_byte_arr.getvalue()
 
-    def get_pdf_text(self, desc:str, full_path:str, sha256_hash: str) -> tuple[str | None, bool]:
+    def get_pdf_text(self, descriptor:str, full_path:str, sha256_hash: str) -> tuple[str | None, bool]:
         pdf_text: str | None = None
         index_changed: bool = False
         current_file_size: int = -1
@@ -257,12 +257,13 @@ class VectorStore:
             return None, False
         current_file_size = os.path.getsize(full_path)
         
-        if desc in self.pdf_index:
-            cached_info = self.pdf_index[desc]
-            if ((sha256_hash != cached_info['sha256_hash'] or current_file_size == cached_info['file_size']) and cached_info['previous_failure']):
-                self.log.debug(f"Skipping PDF {desc}: Size matches and previously failed extraction.")
+        if descriptor in self.pdf_index:
+            cached_info = self.pdf_index[descriptor]
+            if sha256_hash == cached_info['sha256_hash'] and current_file_size == cached_info['file_size'] and cached_info['previous_failure']:
+                print()
+                self.log.debug(f"Skipping PDF {descriptor}: Size matches and previously failed extraction.")
                 return None, False
-            elif current_file_size == cached_info['file_size'] and not cached_info['previous_failure']:
+            elif (sha256_hash == cached_info['sha256_hash'] and current_file_size == cached_info['file_size']) and (cached_info['previous_failure'] is False):
                 cache_filename = os.path.join(self.pdf_cache_path, cached_info['filename'])
                 if os.path.exists(cache_filename):
                     try:
@@ -270,13 +271,17 @@ class VectorStore:
                             pdf_text = f.read()
                         return pdf_text, False # Return cached text, index not changed
                     except Exception as e:
-                        self.log.warning(f"Failed to read PDF cache file {cache_filename} for {desc}: {e}. Re-extracting.")
+                        print()
+                        self.log.warning(f"Failed to read PDF cache file {cache_filename} for {descriptor}: {e}. Re-extracting.")
                 else:
-                     self.log.warning(f"PDF cache index points to non-existent file {cache_filename} for {desc}. Re-extracting.")
-            elif current_file_size != cached_info['file_size']:
-                self.log.info(f"PDF file size changed for {desc} at {full_path}, re-importing text.")
+                    print()
+                    self.log.warning(f"PDF cache index points to non-existent file {cache_filename} for {descriptor}. Re-extracting.")
+            elif sha256_hash != cached_info['sha256_hash'] or current_file_size != cached_info['file_size']:
+                print()
+                self.log.info(f"PDF file size changed for {descriptor} at {full_path}, re-importing text.")
             else: # Size matches, not failed, but filename missing? Inconsistent.
-                self.log.warning(f"Inconsistent PDF cache state for {desc}. Re-extracting.")
+                print()
+                self.log.warning(f"Inconsistent PDF cache state for {descriptor}. Re-extracting.")
 
         if pdf_text is None:
             extracted_text: str | None = None
@@ -295,7 +300,7 @@ class VectorStore:
                 if combined_text.strip() != "" and len(combined_text.strip()) > 7:
                     extracted_text = combined_text
             except Exception as e:
-                self.log.info(f"Failed pymupdf extraction for {desc}: {e}", exc_info=True)
+                self.log.info(f"Failed pymupdf extraction for {descriptor}: {e}", exc_info=True)
                 
             if extracted_text is None:
                 try:
@@ -303,25 +308,25 @@ class VectorStore:
                     if md_text and md_text.strip():
                         extracted_text = md_text # Use the markdown text
                 except Exception as e:
-                    self.log.error(f"Failed pymupdf4llm fallback extraction for {desc}: {e}", exc_info=True)
+                    self.log.error(f"Failed pymupdf4llm fallback extraction for {descriptor}: {e}", exc_info=True)
 
             if extracted_text is None:
-                if desc in self.pdf_index:
-                    self.pdf_index[desc]["previous_failure"] = True
+                if descriptor in self.pdf_index:
+                    self.pdf_index[descriptor]["previous_failure"] = True
                 else:
                     cache_entry = PDFIndex({'filename': "", 'file_size': current_file_size, 'sha256_hash': sha256_hash, 'previous_failure': True})
-                    self.pdf_index[desc] = cache_entry
+                    self.pdf_index[descriptor] = cache_entry
                     index_changed = True
                 return None, index_changed
             else:
                 pdf_text = extracted_text
 
             cache_entry: PDFIndex
-            if desc in self.pdf_index:
-                cache_entry = self.pdf_index[desc]
-                self.pdf_index[desc]['file_size'] = current_file_size
-                self.pdf_index[desc]['sha256_hash'] = sha256_hash
-                self.pdf_index[desc]['previous_failure'] = False                
+            if descriptor in self.pdf_index:
+                cache_entry = self.pdf_index[descriptor]
+                cache_entry['file_size'] = current_file_size
+                cache_entry['sha256_hash'] = sha256_hash
+                cache_entry['previous_failure'] = False
             else:
                 cache_entry = PDFIndex({
                     'filename': str(uuid.uuid4()) + ".txt",
@@ -329,12 +334,11 @@ class VectorStore:
                     'sha256_hash': sha256_hash,
                     'previous_failure': False
                 })
-                self.pdf_index[desc] = cache_entry
+            self.pdf_index[descriptor] = cache_entry
 
             cache_filename = os.path.join(self.pdf_cache_path, cache_entry['filename'])
             with open(cache_filename, 'w') as f:
                 _ = f.write(pdf_text)
-            self.pdf_index[desc] = cache_entry
             index_changed = True
 
         return pdf_text, index_changed
@@ -347,6 +351,7 @@ class VectorStore:
 
             existing_descriptors: list[str] = list(self.library.keys())
             abort_scan = False
+            pdf_cache_hits = 0
             for source in self.config['vector_sources']:
                 if abort_scan: 
                     break
@@ -417,10 +422,11 @@ class VectorStore:
                             print(" TEXT   ", end="")
                         elif ext == 'pdf':
                             current_text, pdf_index_changed_during_get = self.get_pdf_text(descriptor, full_path, sha256_hash)
-                            if pdf_index_changed_during_get:
+                            if pdf_index_changed_during_get is True:
                                 pdf_index_changed = True
                                 print(" NEW PDF", end="")
                             else:
+                                pdf_cache_hits += 1
                                 print(" CACHED ", end="")
 
                         icon:str = ""
@@ -448,33 +454,46 @@ class VectorStore:
             new_library_size = len(list(self.library.keys()))
             if library_changed is True or pdf_index_changed is True:
                 self.save_library()
-                self.log.info(f"Library size {old_library_size} -> {new_library_size}")
+                self.log.info(f"Library size {old_library_size} -> {new_library_size}, {pdf_cache_hits} PDF cache hits")
             else:
-                self.log.info("No changes")
+                self.log.info(f"No changes, {pdf_cache_hits} PDF cache hits")
 
     def check_pdf_cache(self):
         failure_count = 0
         entry_count = 0
+        orphan_count = 0
+        missing_count = 0
         for cache_entry_descriptor in self.pdf_index:
             cache_entry = self.pdf_index[cache_entry_descriptor]
             entry_count += 1
             if cache_entry['previous_failure'] is True:
                 failure_count += 1
-        print(f"PDF cache entries: {entry_count}")
-        print(f"PDF failures:      {failure_count}")
+            if cache_entry_descriptor not in self.library:
+                orphan_count += 1
+            if os.path.exists(os.path.join(self.pdf_cache_path, cache_entry['filename'])) is False:
+                missing_count += 1
+        print(f"PDF cache entries:   {entry_count}")
+        print(f"PDF failures:        {failure_count}")
+        print(f"PDF cache orphans:   {orphan_count}")
+        print(f"Missing cache files: {missing_count}")
         
     def check(self, mode: str | None = None):
         if mode is None or 'pdf' in mode.lower():
             self.check_pdf_cache()
+        else:
+            self.log.error(f"Use 'check <mode>', valid modes are: 'pdf'")
         
     def list(self, mode: str):
         if mode == 'models':
+            print()
+            print("Index | Model")
+            print("------+--------------------------------------")
             for ind, model in enumerate(self.model_list):
                 if model['model_name'] == self.config['embeddings_model_name']:
-                    sel = '*'
+                    print(f" >{ind+1}<  | {model['model_name']}")
                 else:
-                    sel = ' '
-                print(f"{sel} {ind+1} {model['model_name']}")
+                    print(f"  {ind+1}   | {model['model_name']}")
+            print("  Use 'select <index>' to change the active model")
 
     def select(self, ind: int):
         if ind<1 or ind>len(self.model_list):
