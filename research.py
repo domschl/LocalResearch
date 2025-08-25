@@ -23,12 +23,33 @@ def repl(its: VectorStore, log: logging.Logger):
     while True:
         try:
             # Get user input with a prompt
-            line = input(">>> ")
-            if line.lower() == 'sync':
+            line: str = input(">>> ")
+            ind = line.find(' ')
+            if ind != -1:
+                command = line[:ind].lower()
+                arguments = line[ind+1:]
+            else:
+                command = line.lower()
+                arguments = ""
+            
+            if command == 'sync':
                 log.info("Starting sync...")
                 its.sync_texts()
-                
-            if line.lower() == 'exit':
+            elif command == 'check':
+                its.check(arguments)
+            elif command == 'list':
+                its.list(arguments)
+            elif command == 'select':
+                ind: int = -1
+                try:
+                    ind = int(arguments)
+                except:
+                    pass
+                if ind != -1:
+                    its.select(ind)
+                else:
+                    log.error("Invalid index {arguments}, integer required, use 'list models' for valid range")
+            elif command == 'exit':
                 break
 
         except (KeyboardInterrupt, EOFError):

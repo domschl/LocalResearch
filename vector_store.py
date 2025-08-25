@@ -1,8 +1,10 @@
 
+
 import os
 import logging
 import json
 import uuid
+import time
 import hashlib
 import zlib
 from typing import TypedDict, cast
@@ -55,6 +57,11 @@ class EmbeddingModel(TypedDict):
 class VectorStore:
     def __init__(self):
         self.log: logging.Logger = logging.getLogger("VectorStore")
+        self.config_changed:bool = False
+        self.config_dir: str = os.path.expanduser("~/.config/vector_store")
+        if os.path.isdir(self.config_dir) is False:
+            os.makedirs(self.config_dir)            
+        self.config_file:str = os.path.join(self.config_dir, "vector_store.json")
         self.config: VectorConfig = self.get_config()
         self.library: dict[str, LibraryEntry] = {}
         self.pdf_index:dict[str, PDFIndex] = {}
@@ -68,21 +75,30 @@ class VectorStore:
             os.makedirs(self.pdf_cache_path, exist_ok=True)
         self.pdf_index_file: str = os.path.join(self.pdf_cache_path, "pdf_index.json")
 
+        self.embeddings_path:str = os.path.join(self.storage_path, "embeddings")
+        if os.path.isdir(self.embeddings_path) is False:
+            os.makedirs(self.embeddings_path, exist_ok=True)
+
         self.icon_width:int = 240
         self.icon_height:int = 320
         
         self.model_list: list[EmbeddingModel]
         self.get_model_list()
+
+        for model in self.model_list:
+            model_path = self.model_embedding_path(model['model_name'])
+            if os.path.isdir(model_path) is False:
+                os.makedirs(model_path, exist_ok=True)
+            
         self.load_library()
         self.log.info("VectorStore initialized")
 
+    def model_embedding_path(self, model_name: str) -> str:
+        return os.path.join(self.embeddings_path, model_name)
+        
     def get_config(self) -> VectorConfig:
-        config_dir = os.path.expanduser("~/.config/vector_store")
-        if os.path.isdir(config_dir) is False:
-            os.makedirs(config_dir)            
-        config_file = os.path.join(config_dir, "vector_store.json")
-        if os.path.exists(config_file):
-            with open(config_file, "r") as f:
+        if os.path.exists(self.config_file):
+            with open(self.config_file, "r") as f:
                 config: VectorConfig = cast(VectorConfig, json.load(f))
         else:
             config = VectorConfig({
@@ -100,16 +116,20 @@ class VectorStore:
                         'file_types': ['md']
                     })
                 ],
-                'embeddings_model_name': 'ibm-granite/granite-embedding-107m-multilingual',
+                'embeddings_model_name': 'granite-embedding-107m-multilingual',
                 'embeddings_device': 'auto',
                 'embeddings_model_trust_code': True,
             }
             )
-            with open(config_file, "w") as f:
-                json.dump(config, f)
-            self.log.warning(f"Default configuration created at {config_file}, please review!")
+            self.save_config()
+            self.log.warning(f"Default configuration created at {self.config_file}, please review!")
+        self.config_changed = False
         return config
 
+    def save_config(self):
+        with open(self.config_file, "w") as f:
+            json.dump(self.config, f)
+        
     def get_model_list(self):
         self.model_list = [
             { # granite-107m
@@ -160,6 +180,7 @@ class VectorStore:
         ]
 
     def load_library(self):
+        print("Loading library data...", end="", flush=True)
         if os.path.exists(self.library_file):
             with open(self.library_file, "r") as f:
                 self.library = json.load(f)
@@ -170,12 +191,15 @@ class VectorStore:
                 self.pdf_index = json.load(f)
         else:
             self.pdf_index = {}
+        print(" Done.")
 
     def save_library(self):
+        print("Saving library data...", end="", flush=True)
         with open(self.library_file, "w") as f:
             json.dump(self.library, f)
         with open(self.pdf_index_file, "w") as f:
             json.dump(self.pdf_index, f)
+        print(" Done.")
 
     @staticmethod
     def _get_sha256(file_path: str) -> str:
@@ -203,7 +227,7 @@ class VectorStore:
                 elif height is None:
                     aspect_ratio = img.height / img.width
                     height = int(width * aspect_ratio)
-                img = img.resize((width, height), Image.LANCZOS)  # pyright: ignore[reportArgumentType, reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
+                img = img.resize((width, height), Image.LANCZOS)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
             buffer = io.BytesIO()
             img_format = img.format if img.format else 'PNG'
             img.save(buffer, format=img_format)
@@ -262,15 +286,13 @@ class VectorStore:
                 for page_num, page in enumerate(doc):  # pyright:ignore[reportArgumentType, reportUnknownVariableType]
                     try:
                         page_text = page.get_text()  # pyright:ignore[reportUnknownMemberType, reportUnknownVariableType]
-                        if isinstance(page_text, str): 
+                        if isinstance(page_text, str) and len(page_text)>7: 
                             extracted_pages.append(page_text)  # pyright: ignore[reportUnknownMemberType]
-                        else: 
-                            self.log.warning(f"Non-string text on page {page_num+1} of {full_path}.")
                     except Exception as page_e: 
                         self.log.warning(f"Failed extraction on page {page_num+1} of {full_path}: {page_e}")
                 doc.close()
                 combined_text = "\n".join(extracted_pages)  # pyright:ignore[reportUnknownArgumentType]
-                if combined_text.strip() != "":
+                if combined_text.strip() != "" and len(combined_text.strip()) > 7:
                     extracted_text = combined_text
             except Exception as e:
                 self.log.info(f"Failed pymupdf extraction for {desc}: {e}", exc_info=True)
@@ -297,13 +319,13 @@ class VectorStore:
             cache_entry: PDFIndex
             if desc in self.pdf_index:
                 cache_entry = self.pdf_index[desc]
-                self.pdf_index[desc]['file_size'] = len(pdf_text)
+                self.pdf_index[desc]['file_size'] = current_file_size
                 self.pdf_index[desc]['sha256_hash'] = sha256_hash
                 self.pdf_index[desc]['previous_failure'] = False                
             else:
                 cache_entry = PDFIndex({
                     'filename': str(uuid.uuid4()) + ".txt",
-                    'file_size': len(pdf_text),
+                    'file_size': current_file_size,
                     'sha256_hash': sha256_hash,
                     'previous_failure': False
                 })
@@ -321,7 +343,7 @@ class VectorStore:
             library_changed = False
             pdf_index_changed = False
             old_library_size = len(list(self.library.keys()))
-            counter = 0
+            last_saved = time.time()
 
             existing_descriptors: list[str] = list(self.library.keys())
             abort_scan = False
@@ -417,14 +439,54 @@ class VectorStore:
                         self.library[descriptor] = LibraryEntry({'source_name': source['name'], 'filename': filename, 'sha256_hash': sha256_hash, 'icon': icon, 'text': current_text})
                         library_changed = True
 
-                        counter += 1
-                        if counter % 10 == 0:
+                        
+                        if time.time() - last_saved > 180:
                             self.save_library()
                             library_changed = False
-            print()
+                            last_saved =  time.time()
+                print()
             new_library_size = len(list(self.library.keys()))
             if library_changed is True or pdf_index_changed is True:
                 self.save_library()
                 self.log.info(f"Library size {old_library_size} -> {new_library_size}")
             else:
                 self.log.info("No changes")
+
+    def check_pdf_cache(self):
+        failure_count = 0
+        entry_count = 0
+        for cache_entry_descriptor in self.pdf_index:
+            cache_entry = self.pdf_index[cache_entry_descriptor]
+            entry_count += 1
+            if cache_entry['previous_failure'] is True:
+                failure_count += 1
+        print(f"PDF cache entries: {entry_count}")
+        print(f"PDF failures:      {failure_count}")
+        
+    def check(self, mode: str | None = None):
+        if mode is None or 'pdf' in mode.lower():
+            self.check_pdf_cache()
+        
+    def list(self, mode: str):
+        if mode == 'models':
+            for ind, model in enumerate(self.model_list):
+                if model['model_name'] == self.config['embeddings_model_name']:
+                    sel = '*'
+                else:
+                    sel = ' '
+                print(f"{sel} {ind+1} {model['model_name']}")
+
+    def select(self, ind: int):
+        if ind<1 or ind>len(self.model_list):
+            self.log.error(f"Invalid model index {ind}, use 'list models' to get valid indices")
+            return
+        new_model = self.model_list[ind-1]['model_name']
+        if new_model == self.config['embeddings_model_name']:
+            self.log.info("Model {new_model} was already active")
+            return
+        self.log.info(f"Model {new_model} active")
+        self.config['embeddings_model_name'] = new_model
+        self.config_changed = True
+        self.save_config()
+        
+        
