@@ -238,9 +238,7 @@ class VectorStore:
             if ((sha256_hash != cached_info['sha256_hash'] or current_file_size == cached_info['file_size']) and cached_info['previous_failure']):
                 self.log.debug(f"Skipping PDF {desc}: Size matches and previously failed extraction.")
                 return None, False
-            elif (current_file_size == cached_info['file_size'] and
-                not cached_info['previous_failure'] and
-                cached_info.get('filename')):
+            elif current_file_size == cached_info['file_size'] and not cached_info['previous_failure']:
                 cache_filename = os.path.join(self.pdf_cache_path, cached_info['filename'])
                 if os.path.exists(cache_filename):
                     try:
@@ -323,6 +321,7 @@ class VectorStore:
             library_changed = False
             pdf_index_changed = False
             old_library_size = len(list(self.library.keys()))
+            counter = 0
 
             existing_descriptors: list[str] = list(self.library.keys())
             abort_scan = False
@@ -334,7 +333,24 @@ class VectorStore:
                 is_calibre: bool = False
                 if source['vectype'] == 'calibre_library':
                     is_calibre = True
-
+                source_file_count = 0
+                for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: self.log.warning(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
+                    for filename in files:
+                        base, ext_with_dot = os.path.splitext(filename)
+                        ext = ext_with_dot[1:].lower() if ext_with_dot else ""
+                        if ext not in source['file_types']: 
+                            continue
+                        preferred_ext_exists = False
+                        preferred_order = ['txt', 'md']
+                        if ext == 'pdf':
+                             for pref_ext in preferred_order:
+                                 if os.path.exists(os.path.join(root, base + '.' + pref_ext)):
+                                     preferred_ext_exists = True
+                                     break
+                        if preferred_ext_exists:
+                            continue
+                        source_file_count += 1
+                file_count = 0
                 for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: self.log.warning(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
                     if abort_scan: 
                         break
@@ -356,12 +372,13 @@ class VectorStore:
                         if preferred_ext_exists:
                             continue
 
+                        file_count += 1
                         full_path = os.path.join(root, filename)
                         relative_path = os.path.relpath(full_path, source_path)
                         descriptor = "{" + source['name'] + "}" + relative_path                        
                         sha256_hash = VectorStore._get_sha256(full_path)
 
-                        print(f"\r{descriptor:80s}", end="")
+                        print(f"\r {file_count}/{source_file_count} | {descriptor[:80]:80s}", end="")
                         
                         if descriptor in self.library:
                             existing_entry: LibraryEntry | None = self.library[descriptor]
@@ -375,11 +392,14 @@ class VectorStore:
                         if ext in ['md', 'txt']:
                             with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
                                 current_text = f.read()
+                            print(" TEXT   ", end="")
                         elif ext == 'pdf':
-                            # PDF handling might add complexity, ensure it works if used
                             current_text, pdf_index_changed_during_get = self.get_pdf_text(descriptor, full_path, sha256_hash)
                             if pdf_index_changed_during_get:
                                 pdf_index_changed = True
+                                print(" NEW PDF", end="")
+                            else:
+                                print(" CACHED ", end="")
 
                         icon:str = ""
                         if is_calibre is True:
@@ -396,6 +416,11 @@ class VectorStore:
                         
                         self.library[descriptor] = LibraryEntry({'source_name': source['name'], 'filename': filename, 'sha256_hash': sha256_hash, 'icon': icon, 'text': current_text})
                         library_changed = True
+
+                        counter += 1
+                        if counter % 10 == 0:
+                            self.save_library()
+                            library_changed = False
             print()
             new_library_size = len(list(self.library.keys()))
             if library_changed is True or pdf_index_changed is True:
