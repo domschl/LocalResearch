@@ -5,7 +5,7 @@ import json
 import uuid
 import hashlib
 import zlib
-from typing import TypedDict, cast, Literal
+from typing import TypedDict, cast
 import io
 import base64
         
@@ -33,7 +33,6 @@ class LibraryEntry(TypedDict):
     sha256_hash: str
     icon: str
     text: str
-    emb_ptrs: dict[str, tuple[int, int]]
 
 
 class PDFIndex(TypedDict):
@@ -204,7 +203,7 @@ class VectorStore:
                 elif height is None:
                     aspect_ratio = img.height / img.width
                     height = int(width * aspect_ratio)
-                img = img.resize((width, height), Image.LANCZOS)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
+                img = img.resize((width, height), Image.LANCZOS)  # pyright: ignore[reportArgumentType, reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
             buffer = io.BytesIO()
             img_format = img.format if img.format else 'PNG'
             img.save(buffer, format=img_format)
@@ -242,17 +241,16 @@ class VectorStore:
             elif (current_file_size == cached_info['file_size'] and
                 not cached_info['previous_failure'] and
                 cached_info.get('filename')):
-                basename = os.path.basename(cached_info['filename'])
-                local_path = os.path.join(self.pdf_cache_path, basename)
-                if os.path.exists(local_path):
+                cache_filename = os.path.join(self.pdf_cache_path, cached_info['filename'])
+                if os.path.exists(cache_filename):
                     try:
-                        with open(local_path, 'r', encoding='utf-8') as f:
+                        with open(cache_filename, 'r', encoding='utf-8') as f:
                             pdf_text = f.read()
                         return pdf_text, False # Return cached text, index not changed
                     except Exception as e:
-                        self.log.warning(f"Failed to read PDF cache file {local_path} for {desc}: {e}. Re-extracting.")
+                        self.log.warning(f"Failed to read PDF cache file {cache_filename} for {desc}: {e}. Re-extracting.")
                 else:
-                     self.log.warning(f"PDF cache index points to non-existent file {local_path} for {desc}. Re-extracting.")
+                     self.log.warning(f"PDF cache index points to non-existent file {cache_filename} for {desc}. Re-extracting.")
             elif current_file_size != cached_info['file_size']:
                 self.log.info(f"PDF file size changed for {desc} at {full_path}, re-importing text.")
             else: # Size matches, not failed, but filename missing? Inconsistent.
@@ -298,37 +296,40 @@ class VectorStore:
             else:
                 pdf_text = extracted_text
 
+            cache_entry: PDFIndex
             if desc in self.pdf_index:
                 cache_entry = self.pdf_index[desc]
                 self.pdf_index[desc]['file_size'] = len(pdf_text)
                 self.pdf_index[desc]['sha256_hash'] = sha256_hash
                 self.pdf_index[desc]['previous_failure'] = False                
             else:
-                cache_entry: PDFIndex = {
+                cache_entry = PDFIndex({
                     'filename': str(uuid.uuid4()) + ".txt",
                     'file_size': len(pdf_text),
                     'sha256_hash': sha256_hash,
                     'previous_failure': False
-                }
+                })
                 self.pdf_index[desc] = cache_entry
 
-            with open(cache_entry['filename'], 'w') as f:
+            cache_filename = os.path.join(self.pdf_cache_path, cache_entry['filename'])
+            with open(cache_filename, 'w') as f:
                 _ = f.write(pdf_text)
             self.pdf_index[desc] = cache_entry
             index_changed = True
 
         return pdf_text, index_changed
 
-    def sync_texts(self, max_imports: int | None = None):
+    def sync_texts(self):
             library_changed = False
             pdf_index_changed = False
+            old_library_size = len(list(self.library.keys()))
 
             existing_descriptors: list[str] = list(self.library.keys())
             abort_scan = False
             for source in self.config['vector_sources']:
                 if abort_scan: 
                     break
-                source_path = source['path']
+                source_path = os.path.expanduser(source['path'])
                 self.log.info(f"Scanning source '{source['name']}' at '{source_path}'...")
                 is_calibre: bool = False
                 if source['vectype'] == 'calibre_library':
@@ -360,6 +361,8 @@ class VectorStore:
                         descriptor = "{" + source['name'] + "}" + relative_path                        
                         sha256_hash = VectorStore._get_sha256(full_path)
 
+                        print("\r{descriptor:80s}", end="")
+                        
                         if descriptor in self.library:
                             existing_entry: LibraryEntry | None = self.library[descriptor]
                             if sha256_hash == existing_entry['sha256_hash']:
@@ -367,14 +370,16 @@ class VectorStore:
                                 continue
                         else:
                             existing_entry = None
-                                                            
+
+                        current_text: str | None = None
                         if ext in ['md', 'txt']:
                             with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
                                 current_text = f.read()
                         elif ext == 'pdf':
                             # PDF handling might add complexity, ensure it works if used
                             current_text, pdf_index_changed_during_get = self.get_pdf_text(descriptor, full_path, sha256_hash)
-                            if pdf_index_changed_during_get: pdf_index_changed = True
+                            if pdf_index_changed_during_get:
+                                pdf_index_changed = True
 
                         icon:str = ""
                         if is_calibre is True:
@@ -384,301 +389,17 @@ class VectorStore:
                             else:
                                 self.log.warning(f"Calibre icon file {calibre_icon_path} not found.")
 
-                        needs_update = False
-                        
-                        if existing_entry:
-                            # Update handling
-                            old_pointers_to_collect: dict[str, tuple[int, int]] = {}
-
-                            if icon != existing_entry.get('icon'):
-                                self.log.info(f"Updating icon for {desc_path}")
-                                # needs_update = True
-                                existing_entry['icon'] = icon
-                                lib_changed = True
-                                # old_pointers_to_collect = existing_entry.get('emb_ptrs', {}).copy()
-                            if current_text is not None and existing_entry.get('text') != current_text:
-                                self.log.info(f"Updating text for {desc_path}")
-                                needs_update = True
-                                if old_pointers_to_collect == {}:
-                                    old_pointers_to_collect = existing_entry.get('emb_ptrs', {}).copy()
-                                existing_entry['text'] = current_text
-                            elif current_text is None: #  and existing_entry.get('text') is not None:
-                                self.log.warning(f"Text unreadable for {desc_path}. Clearing.")
-                                needs_update = True
-                                if old_pointers_to_collect == {}:
-                                    old_pointers_to_collect = existing_entry.get('emb_ptrs', {}).copy()
-                                existing_entry['text'] = ""
-
-                            if needs_update:
-                                existing_entry['emb_ptrs'] = {} # Clear pointers *after* copying
-                                lib_changed = True
-                                # --- Collect debris immediately ---
-                                if old_pointers_to_collect:
-                                     self.log.info(f"DEBUG Pass 1 Update: Collecting pointers {old_pointers_to_collect} for {desc_path}")
-                                     for model_name, ptr_info in old_pointers_to_collect.items():
-                                         if model_name not in tensor_debris: 
-                                            tensor_debris[model_name] = []
-                                         # Avoid adding duplicates if somehow processed twice
-                                         if ptr_info not in tensor_debris[model_name]:
-                                             tensor_debris[model_name].append(ptr_info)
-
-                            if existing_entry['filename'] != full_path:
-                                existing_entry['filename'] = full_path
-                                lib_changed = True
-
-                            new_lib.append(existing_entry) # Add (potentially modified) entry to new list
-
-                        elif current_text is not None:
-                            # Add handling
-                            self.log.info(f"Adding new entry for {desc_path}")
-                            entry: LibEntry = LibEntry({'source_name': source['name'], 'desc_filename': desc_path, 'filename': full_path, 'text': current_text, 'emb_ptrs': {}, 'icon': icon})
-                            new_lib.append(entry)
-                            lib_changed = True
-                        else:
-                            self.log.debug(f"Skipping add for new file {desc_path} as text is not available.")
-
-            if max_imports is not None and len(new_lib) > max_imports:
-                 self.log.warning(f"Library size ({len(new_lib)}) exceeds max_imports ({max_imports}). Pruning...")
-                 entries_to_prune = new_lib[max_imports:]
-                 new_lib = new_lib[:max_imports]
-                 for entry in entries_to_prune: 
-                    processed_desc_paths.discard(entry['desc_filename'])
-                 lib_changed = True
-
-            # --- Pass 2: Identify Debris (Simplified: Only Deletions/Pruning now) ---
-            self.log.debug("Sync Pass 2: Identifying deleted/pruned entries...")
-            debris_lib_entries: list[LibEntry] = []
-            debris_pdf_indices: list[str] = []
-            # tensor_debris already initialized and populated for updates in Pass 1.
-
-            original_lib_descs = set(lib_map.keys())
-            current_lib_descs = {entry['desc_filename'] for entry in new_lib}
-            deleted_or_pruned_descs = original_lib_descs - current_lib_descs
-
-            for desc_path in deleted_or_pruned_descs:
-                entry = lib_map[desc_path] # Get original entry state
-                self.log.info(f"Detected deleted/pruned library entry: {desc_path}")
-                debris_lib_entries.append(entry) # Keep track for potential PDF cache cleanup
-                # Collect pointers for deletion cleanup
-                for model_name, ptr_info in entry.get('emb_ptrs', {}).items():
-                     if model_name not in tensor_debris: 
-                        tensor_debris[model_name] = []
-                     # Avoid adding duplicates if it was updated then deleted
-                     if ptr_info not in tensor_debris[model_name]:
-                          self.log.info(f"DEBUG Pass 2 Deletion: Collecting pointers {ptr_info} for {desc_path}")
-                          tensor_debris[model_name].append(ptr_info)
-                     else:
-                          self.log.info(f"DEBUG Pass 2 Deletion: Pointers {ptr_info} for {desc_path} already collected (from prior update).")
-                lib_changed = True
-
-            # PDF index check (remains the same)
-            all_current_lib_descs = {entry['desc_filename'] for entry in new_lib}
-            for desc_path in list(self.pdf_index.keys()):
-                 if desc_path not in all_current_lib_descs:
-                     self.log.info(f"Detected orphaned PDF cache index entry: {desc_path}")
-                     debris_pdf_indices.append(desc_path)
-                     pdf_index_changed = True
-
-            # --- Pass 3: Execute Cleanup ---
-            self.log.debug("Sync Pass 3: Executing cleanup...")
-            self.log.info(f"DEBUG: Entering Pass 3. tensor_debris keys: {list(tensor_debris.keys())}, debris_lib_entries: {len(debris_lib_entries)}, debris_pdf_indices: {len(debris_pdf_indices)}")
-            if tensor_debris: 
-                self.log.info(f"DEBUG: tensor_debris content: {tensor_debris}")
-
-            if tensor_debris or debris_lib_entries or debris_pdf_indices: # Check if *any* cleanup needed
-                # Make sure the self.lib = new_lib assignment happens *before* saving
-                # and *after* pointer adjustments are applied to new_lib
-                modified_tensors: dict[str, torch.Tensor] = {}
-                new_pointer_maps: dict[str, dict[int, tuple[int, int]]] = {}
-                all_models_processed_ok = True
-
-                for model_name, removals in tensor_debris.items():
-                    if not removals: continue
-                    self.log.info(f"Calculating cleanup for tensor '{model_name}' ({len(removals)} chunks to remove).")
-                    try:
-                        # --- Load Tensor ---
-                        temp_tensor_path = self._get_tensor_path(model_name)
-                        if not os.path.exists(temp_tensor_path):
-                            # ... (handling for missing tensor remains the same) ...
+                        if current_text is None:
+                            self.log.error(f"{full_path} has no content or doesnt exist!")
+                            existing_descriptors.remove(descriptor)
                             continue
-
-                        # temp_device = self.resolve_device(self.config['embeddings_device'])
-                        original_tensor: torch.Tensor = cast(torch.Tensor, torch.load(temp_tensor_path, map_location="cpu")) 
-                        num_rows = original_tensor.shape[0]
-
-                        # --- Calculate Boolean Keep Mask (still needed for offset calculation) ---
-                        keep_mask = torch.ones(num_rows, dtype=torch.bool, device=original_tensor.device)
-                        self.log.info(f"DEBUG Cleanup {model_name}: Original rows={num_rows}, removing {len(removals)} chunk(s).") # Simplified log
-                        removed_indices_count = 0
-                        sorted_removals_for_mask = sorted(removals, key=lambda x: x[0], reverse=True)
-
-                        for start, length in sorted_removals_for_mask:
-                            if start < 0 or start + length > num_rows:
-                                self.log.error(f"Invalid removal range [{start}:{start+length}]. Skipping.")
-                                continue
-                            # Check for overlap is less critical now, but warning is ok
-                            if torch.any(keep_mask[start : start + length] == False):
-                                self.log.warning(f"Overlapping removal detected near index {start}.")
-                            keep_mask[start : start + length] = False
-                            removed_indices_count += length
-
-                        self.log.debug(f"DEBUG Cleanup {model_name}: Marked {removed_indices_count} rows for removal.")
-
-                        # --- START: Efficient Tensor Creation using Integer Indexing ---
-                        # Get the integer indices of rows to keep
-                        keep_indices = torch.nonzero(keep_mask).squeeze(dim=1) # Squeeze to make it 1D
-
-                        # Index the original tensor using the integer indices
-                        # This is generally more memory-efficient than boolean mask indexing
-                        modified_tensor = original_tensor.index_select(dim=0, index=keep_indices)
-                        # Alternative (often equivalent): modified_tensor = original_tensor[keep_indices]
-                        # index_select might sometimes be slightly more optimized.
-
-                        # Free memory potentially held by the indices tensor if large (optional)
-                        # del keep_indices
-                        # --- END: Efficient Tensor Creation using Integer Indexing ---
-
-
-                        self.log.info(f"DEBUG Cleanup {model_name}: Calculated modified tensor shape: {modified_tensor.shape}")
-                        # Sanity check shape
-                        expected_final_rows = num_rows - removed_indices_count
-                        if modified_tensor.shape[0] != expected_final_rows:
-                            self.log.error(f"DEBUG Cleanup {model_name}: MISMATCH between calculated shape {modified_tensor.shape[0]} and expected rows {expected_final_rows}!")
-                            raise VectorCriticalError(f"Tensor shape mismatch after indexing for {model_name}. Aborting cleanup.")
-                        modified_tensors[model_name] = modified_tensor
-
-                        # --- Calculate Pointer Adjustments (using keep_mask) ---
-                        # This part remains the same as it needs the original indexing context
-                        removed_lengths_cumsum = torch.cumsum(~keep_mask, dim=0)
-                        current_model_pointers: dict[int, tuple[int,int]] = {}
-                        # ... (rest of pointer adjustment logic using removed_lengths_cumsum remains the same) ...
-                        for entry in new_lib: # Iterate over the *target* library state
-                            if model_name in entry.get('emb_ptrs', {}):
-                                old_start, old_length = entry['emb_ptrs'][model_name]
-                                if old_start < 0 or old_start >= num_rows:
-                                    self.log.error(f"Entry '{entry['desc_filename']}' invalid old start pointer {old_start}. Removing."); del entry['emb_ptrs'][model_name]; lib_changed = True; continue
-
-                                # Check if this entry's original range survived (using keep_mask)
-                                if not torch.all(keep_mask[old_start : old_start + old_length]):
-                                     self.log.error(f"Logic Error: Entry '{entry['desc_filename']}' (in new_lib) points to rows [{old_start}:{old_start+old_length}] marked for removal. Removing pointer.")
-                                     del entry['emb_ptrs'][model_name]
-                                     lib_changed = True
-                                     continue
-
-                                offset: int = int(removed_lengths_cumsum[old_start - 1].item()) if old_start > 0 else 0
-                                new_start = old_start - offset
-                                if new_start < 0:
-                                    self.log.critical(f"CRITICAL ERROR pointer adjustment for '{entry['desc_filename']}' model '{model_name}': New start negative ({new_start}).")
-                                    raise VectorCriticalError(f"Pointer adjustment failed critically for {model_name}.")
-                                current_model_pointers[old_start] = (new_start, old_length)
-                        new_pointer_maps[model_name] = current_model_pointers
-
-                    except VectorCriticalError: 
-                        all_models_processed_ok = False
-                        raise
-                    except Exception as e: 
-                        all_models_processed_ok = False
-                        raise VectorCriticalError(f"Failure during tensor processing for {model_name}.") from e
-
-                # --- Commit Phase ---
-                if all_models_processed_ok:
-                    # Save modified tensors
-                    for model_name, tensor_data in modified_tensors.items():
-                        try:
-                            self._atomic_save_tensor(tensor_data, self._get_tensor_path(model_name))
-                            self.log.info(f"Atomically saved cleaned tensor for '{model_name}'. Shape: {tensor_data.shape}")
-                        except VectorCriticalError as e:
-                            raise VectorCriticalError(f"Failed to commit cleaned tensor for {model_name}.") from e
-
-                    # Apply pointer adjustments to new_lib (before assigning to self.lib)
-                    for model_name, ptr_map in new_pointer_maps.items():
-                        for i, entry in enumerate(new_lib):
-                             if model_name in entry.get('emb_ptrs', {}):
-                                 old_start = entry['emb_ptrs'][model_name][0]
-                                 if old_start in ptr_map:
-                                     new_ptr_tuple = ptr_map[old_start]
-                                     if new_lib[i]['emb_ptrs'][model_name] != new_ptr_tuple:
-                                         new_lib[i]['emb_ptrs'][model_name] = new_ptr_tuple
-                                         lib_changed = True
-                                 else:
-                                     # This entry's original start wasn't in the map - should not happen if it wasn't deleted
-                                     self.log.error(f"Pointer consistency error: Old start {old_start} for {entry['desc_filename']} model {model_name} not found in adjustment map after cleanup. Removing pointer.")
-                                     del new_lib[i]['emb_ptrs'][model_name]
-                                     lib_changed = True
-
-                    # Update in-memory library *now*
-                    self.lib = new_lib
-
-                    for desc_path in debris_pdf_indices:
-                         if desc_path in self.pdf_index:
-                             pdf_info = self.pdf_index[desc_path]
-                             cache_filename = pdf_info.get('filename')
-                             if cache_filename:
-                                 cache_file_path = os.path.join(self.pdf_cache_path, os.path.basename(cache_filename))
-                                 if os.path.exists(cache_file_path):
-                                     try: 
-                                        os.remove(cache_file_path)
-                                        self.log.info(f"Removed orphaned PDF cache file: {cache_file_path}")
-                                     except OSError as e: 
-                                        self.log.warning(f"Failed to remove orphaned PDF cache file {cache_file_path}: {e}")
-                             del self.pdf_index[desc_path]
-                             pdf_index_changed = True
-
-                    # Save final library and PDF index state
-                    if lib_changed or pdf_index_changed:
-                        self.log.info("Saving updated library and PDF index after cleanup...")
-                        self._write_library_internal()
-
-                    if self.current_model and self.current_model['model_name'] in modified_tensors:
-                        current_model_name = self.current_model['model_name']
-                        self.log.info(f"Updating current model's ({current_model_name}) in-memory tensor after cleanup.")
-
-                        # --- Assign directly instead of reloading ---
-                        self.embeddings_matrix = modified_tensors[current_model_name]
-                        # --- End Assignment ---
-
-                        # Optional: Perform consistency check on the new in-memory matrix
-                        try:
-                            expected_rows = sum(entry['emb_ptrs'][current_model_name][1] for entry in self.lib if current_model_name in entry.get('emb_ptrs', {}))
-                            actual_rows = self.embeddings_matrix.shape[0]
-                            if actual_rows != expected_rows:
-                                # This would be a critical logic error if it happens here
-                                consistency_msg = f"CRITICAL Inconsistency *after* direct assignment! Lib expects {expected_rows}, matrix has {actual_rows}."
-                                self.log.critical(consistency_msg)
-                                self.embeddings_matrix = None # Safety
-                                raise VectorCriticalError(consistency_msg)
-                            else:
-                                self.log.info(f"In-memory tensor for '{current_model_name}' updated and passed consistency check ({actual_rows} rows).")
-                        except Exception as check_e:
-                             # Handle potential errors during the check itself
-                             self.log.critical(f"CRITICAL Error during post-assignment consistency check for {current_model_name}: {check_e}")
-                             self.embeddings_matrix = None # Safety
-                             # Re-raise as critical? Or just log and clear matrix? Re-raise seems safer.
-                             raise VectorCriticalError(f"Post-assignment check failed for {current_model_name}") from check_e
-
-                    # Reload current tensor if modified
-                    # if self.current_model and self.current_model['model_name'] in modified_tensors:
-                    #      self.log.info(f"Reloading current model's ({self.current_model['model_name']}) tensor after cleanup.")
-                    #      try:
-                    #          # Check consistency *after* reload
-                    #          _ = self._load_tensor_internal(self.current_model['model_name'], check_consistency=True)
-                    #      except (VectorConsistencyError, VectorCriticalError) as e:
-                    #          # This is where the previous crash happened - need to ensure it passes now
-                    #          self.log.critical(f"CRITICAL: Consistency error *after* cleanup reload for {self.current_model['model_name']}: {e}")
-                    #          self.embeddings_matrix = None # Safety
-                    #          raise VectorCriticalError("Consistency check failed immediately after cleanup. Logic error suspected.") from e
-
-                    self.log.info(f"Synchronization and cleanup completed. Library size: {len(self.lib)}")
-                else:
-                     self.log.error("Sync aborted due to errors during tensor processing.")
-
-            elif lib_changed or pdf_index_changed:
-                # Only library/pdf index changed (adds/simple updates), no tensor cleanup needed
-                # Assign new_lib to self.lib before saving
-                self.lib = new_lib
-                self.log.info("Saving updated library and PDF index (no tensor cleanup required)...")
-                self._write_library_internal()
-                self.log.info(f"Synchronization completed. Library size: {len(self.lib)}")
+                        
+                        self.library[descriptor] = LibraryEntry({'source_name': source['name'], 'filename': filename, 'sha256_hash': sha256_hash, 'icon': icon, 'text': current_text})
+                        library_changed = True
+            print()
+            new_library_size = len(list(self.library.keys()))
+            if library_changed is True or pdf_index_changed is True:
+                self.save_library()
+                self.log.info(f"Library size {old_library_size} -> {new_library_size}")
             else:
-                self.log.info("No changes detected during synchronization.")
-
+                self.log.info("No changes")
