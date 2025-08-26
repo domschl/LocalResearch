@@ -48,6 +48,8 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     log.error(f"Invalid index {arguments}, integer required, use 'list models' for valid range")
             elif command == 'index':
                 vs.index(ds.library)
+            elif command == 'search':
+                vs.search(arguments, ds.library)
             elif command == 'help':
                 print("Use 'list [models|sources]', 'sync', 'check [pdf]', 'select [model-index]'")
             elif command == 'exit' or command == 'quit':

@@ -342,7 +342,36 @@ class VectorStore:
             self.save_embeddings_tensor(library[hash]['text'], filename)
         print(" "*80)
         self.log.info("Index completed")
-        
+
+    def search(self, search_text:str, library:dict[str,LibraryEntry]):
+        self.load_model()
+        if self.model is None or self.engine is None:
+            self.log.error("Failed to load model, cannot index!")
+            return
+        device = torch.device(self.resolve_device())
+        search_tensor = self.engine.encode([search_text], convert_to_tensor=True, show_progress_bar=False).to(device)  # pyright:ignore[reportUnknownMemberType]
+        path = self.model_embedding_path(self.model['model_name'])
+        tensor_file_list = get_files_of_extensions(path, ['pt'])
+        best_cosine: float | None = None
+        best_chunk: int | None = None
+        best_doc: LibraryEntry | None = None
+        for tensor_file in tensor_file_list:
+            tensor_path = os.path.join(path, tensor_file)
+            tensor:torch.Tensor = cast(torch.Tensor, torch.load(tensor_path)).to(device)
+            cosines = torch.matmul(search_tensor, tensor.T).T
+            max_ind:int = int(torch.argmax(cosines).item())
+            cosine:float = cosines[max_ind].item()
+            if best_cosine is None or cosine > best_cosine:
+                best_cosine = cosine
+                hash = os.path.splitext(tensor_file)[0]
+                best_chunk = max_ind
+                best_doc = library[hash]
+                print(f"\r{best_cosine:.4f} {best_doc['source_path'][-80:]:80s}, best_chunk: {best_chunk}")
+        print()
+        if best_doc is not None and best_chunk is not None:
+            result_text = self.get_chunk(best_doc['text'], best_chunk, self.model['chunk_size'], self.model['chunk_overlap'])
+            print(result_text)
+            
     
 class DocumentStore:
     def __init__(self):

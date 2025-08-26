@@ -149,6 +149,7 @@ name = "localresearch"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "numpy" },
     { name = "pillow" },
     { name = "pymupdf" },
     { name = "pymupdf4llm" },
@@ -158,6 +159,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "numpy", specifier = ">=2.3.2" },
     { name = "pillow", specifier = ">=11.3.0" },
     { name = "pymupdf", specifier = ">=1.26.3" },
     { name = "pymupdf4llm", specifier = "==0.0.19" },
