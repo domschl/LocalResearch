@@ -55,6 +55,21 @@ class EmbeddingModel(TypedDict):
     batch_multiplier: int
 
 
+def get_files_of_extensions(path:str, extensions: list[str]):
+    result: list[str] = []
+    if os.path.isdir(path) is False:
+        return result
+    for file in os.listdir(path):
+        if not os.path.isdir(file):
+            ext = os.path.splitext(file)[1]
+            if ext and len(ext)>1:
+                ext = ext[1:]
+            else:
+                continue
+            if ext in extensions:
+                result.append(file)
+    return result
+
 class VectorStore:
     def __init__(self, storage_path:str, config_path:str):
         self.log: logging.Logger = logging.getLogger("VectorStore")
@@ -159,13 +174,15 @@ class VectorStore:
 
     def list_models(self, current_model: str|None = None):
         print()
-        print("Index | Model")
-        print("------+--------------------------------------")
+        print("Index | Embbedings | Model")
+        print("------+------------+--------------------------------------")
         for ind, model in enumerate(self.model_list):
+            path = self.model_embedding_path(model['model_name'])
+            cnt = len(get_files_of_extensions(path, ['pt']))
             if model['model_name'] == current_model:
-                print(f" >{ind+1}<  | {model['model_name']}")
+                print(f" >{ind+1}<  | {cnt:10d} | {model['model_name']}")
             else:
-                print(f"  {ind+1}   | {model['model_name']}")
+                print(f"  {ind+1}   | {cnt:10d} | {model['model_name']}")
         print("  Use 'select <index>' to change the active model")
 
     def list(self, mode: str):
@@ -733,6 +750,8 @@ class DocumentStore:
             for ext in exts:
                 print("-------+", end="")
             print("----------------------------------+")
+            sum_ext_cnts: dict[str,int] = {}
+            sum_cnt = 0
             for source in self.config['document_sources']:
                 source_name = source['name']
                 cnt = 0
@@ -740,6 +759,7 @@ class DocumentStore:
                 for hsh in self.library:
                     if self.library[hsh]['source_name'] == source_name:
                         cnt += 1
+                        sum_cnt += 1
                         ext = os.path.splitext(self.library[hsh]['source_path'].lower())[1]
                         if ext and len(ext) > 0:
                             ext = ext[1:]
@@ -748,6 +768,10 @@ class DocumentStore:
                                 ext_cnts[ext] += 1
                             else:
                                 ext_cnts[ext] = 1
+                            if ext in sum_ext_cnts:
+                                sum_ext_cnts[ext] += 1
+                            else:
+                                sum_ext_cnts[ext] = 1
                 print(f"{source_name[:8]:8s} | {cnt:5d} |", end="")
                 for ext in exts:
                     if ext in ext_cnts:
@@ -755,5 +779,14 @@ class DocumentStore:
                     else:
                         print(f" {0:5d} |", end="")
                 print(f" {source['path'][-32:]:32s} |")
-
-        
+            print("---------+-------+", end="")
+            for ext in exts:
+                print("-------+", end="")
+            print("----------------------------------+")
+            print(f"Total    | {sum_cnt:5d} |", end="")
+            for ext in exts:
+                if ext in sum_ext_cnts:
+                    print(f" {sum_ext_cnts[ext]:5d} |", end="")
+                else:
+                    print(f" {0:5d} |", end="")
+            print(f"                                  |")
