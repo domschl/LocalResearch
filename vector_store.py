@@ -391,14 +391,12 @@ class VectorStore:
                         full_path = os.path.join(root, filename)
                         sha256_hash = VectorStore._get_sha256(full_path)
 
-                        if sha256_hash in self.library and full_path != self.library[sha256_hash]:
+                        if sha256_hash in self.library and full_path != self.library[sha256_hash]['source_path']:
                             print()
-                            self.log.warning(f"File {full_path} is a duplicate of {self.library[sha256_hash]}, ignoring this copy.")
+                            self.log.warning(f"File {full_path} is a duplicate of {self.library[sha256_hash]['source_path']}, ignoring this copy.")
                             duplicate_count += 1
                             continue
-                        
-                        print(f"\r {file_count}/{source_file_count} | {full_path[-80:]:80s}", end="")
-                        
+                                                
                         if sha256_hash in existing_hashes:
                             existing_hashes.remove(sha256_hash)
 
@@ -406,15 +404,16 @@ class VectorStore:
                         if ext in ['md', 'txt']:
                             with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
                                 current_text = f.read()
-                            print(" TEXT   ", end="")
+                            print(f"\r {file_count}/{source_file_count} | {full_path[-80:]:80s} Text       ", end="")
+                            
                         elif ext == 'pdf':
+                            print(f"\r {file_count}/{source_file_count} | {full_path[-80:]:80s} Scanning...", end="")
                             current_text, pdf_index_changed_during_get = self.get_pdf_text(full_path, sha256_hash)
                             if pdf_index_changed_during_get is True:
                                 pdf_index_changed = True
-                                print(" NEW PDF", end="")
                             else:
                                 pdf_cache_hits += 1
-                                print(" CACHED ", end="")
+                            print(f"\r {file_count}/{source_file_count} | {full_path[-80:]:80s} PDF        ", end="")
 
                         icon:str = ""
                         if is_calibre is True:
