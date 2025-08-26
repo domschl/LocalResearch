@@ -17,7 +17,7 @@ import pymupdf4llm  # pyright: ignore[reportMissingTypeStubs]  # XXX currently l
 
 class VectorSource(TypedDict):
     name: str
-    vectype: str
+    type: str
     path: str
     file_types: list[str]
 
@@ -102,13 +102,13 @@ class VectorStore:
                 'vector_sources': [
                     VectorSource({
                         'name': 'Calibre',
-                        'vectype': 'calibre_library',
+                        'type': 'calibre_library',
                         'path': '~/ReferenceLibrary/Calibre Library',
                         'file_types': ['txt', 'pdf']
                     }),
                     VectorSource({
                         'name': 'Notes',
-                        'vectype': 'folder',
+                        'type': 'folder',
                         'path': '~/Notes',
                         'file_types': ['md']
                     })
@@ -389,7 +389,7 @@ class VectorStore:
             source_path = os.path.expanduser(source['path'])
             self.log.info(f"Scanning source '{source['name']}' at '{source_path}'...")
             is_calibre: bool = False
-            if source['vectype'] == 'calibre_library':
+            if source['type'] == 'calibre_library':
                 is_calibre = True
             source_file_count = 0
             for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: self.log.warning(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
@@ -516,13 +516,14 @@ class VectorStore:
         print(f"Missing cache files: {missing_count}")
         
     def check(self, mode: str | None = None):
-        if mode is None or 'pdf' in mode.lower():
+        if mode is None or mode == "" or 'pdf' in mode.lower():
+            self.log.info("Checking PDF cache consistency")
             self.check_pdf_cache()
         else:
             self.log.error(f"Use 'check <mode>', valid modes are: 'pdf'")
         
     def list(self, mode: str):
-        if mode == 'models':
+        if mode == "" or 'models' in mode:
             print()
             print("Index | Model")
             print("------+--------------------------------------")
@@ -532,6 +533,39 @@ class VectorStore:
                 else:
                     print(f"  {ind+1}   | {model['model_name']}")
             print("  Use 'select <index>' to change the active model")
+        if mode == "" or 'sources' in mode:
+            exts = ['pdf', 'txt', 'md']
+            print()
+            print("Source   | Docs  |", end="")
+            for ext in exts:
+                print(f" {ext:5s} |", end="")
+            print()
+            print("---------+-------+", end="")
+            for ext in exts:
+                print("-------+", end="")
+            print()
+            for source in self.config['vector_sources']:
+                source_name = source['name']
+                cnt = 0
+                ext_cnts: dict[str,int] = {}
+                for hsh in self.library:
+                    if self.library[hsh]['source_name'] == source_name:
+                        cnt += 1
+                        ext = os.path.splitext(self.library[hsh]['source_path'].lower())[1]
+                        if ext and len(ext) > 0:
+                            ext = ext[1:]
+                        if ext and ext in exts:
+                            if ext in ext_cnts:
+                                ext_cnts[ext] += 1
+                            else:
+                                ext_cnts[ext] = 1
+                print(f"{source_name[:8]:8s} | {cnt:5d} |", end="")
+                for ext in exts:
+                    if ext in ext_cnts:
+                        print(f" {ext_cnts[ext]:5d} |", end="")
+                    else:
+                        print(f" {0:5d} |", end="")
+                print()
 
     def select(self, ind: int):
         if ind<1 or ind>len(self.model_list):
