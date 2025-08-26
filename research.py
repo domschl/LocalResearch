@@ -2,9 +2,9 @@ import logging
 import readline
 import os
 import atexit
-from vector_store import VectorStore
+from vector_store import DocumentStore, VectorStore
 
-def repl(its: VectorStore, log: logging.Logger):
+def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
     history_file = os.path.join(os.path.expanduser("~/.config/vector_store"), "repl_history")
     try:
         readline.read_history_file(history_file)
@@ -26,11 +26,12 @@ def repl(its: VectorStore, log: logging.Logger):
             
             if command == 'sync':
                 log.info("Starting sync...")
-                its.sync_texts()
+                ds.sync_texts()
             elif command == 'check':
-                its.check(arguments)
+                ds.check(arguments)
             elif command == 'list':
-                its.list(arguments)
+                ds.list(arguments)
+                vs.list(arguments)
             elif command == 'select':
                 ind: int = -1
                 try:
@@ -38,9 +39,15 @@ def repl(its: VectorStore, log: logging.Logger):
                 except:
                     pass
                 if ind != -1:
-                    its.select(ind)
+                    new_model = vs.select(ind)
+                    if new_model is None:
+                        log.info("Model unchanged.")
+                    else:
+                        log.info(f"New active model is {new_model}")
                 else:
                     log.error(f"Invalid index {arguments}, integer required, use 'list models' for valid range")
+            elif command == 'index':
+                vs.index(ds.library)
             elif command == 'help':
                 print("Use 'list [models|sources]', 'sync', 'check [pdf]', 'select [model-index]'")
             elif command == 'exit' or command == 'quit':
@@ -53,10 +60,11 @@ def repl(its: VectorStore, log: logging.Logger):
 
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-    log = logging.getLogger("VectorCLI")
+    log = logging.getLogger("ResearchCLI")
 
-    its = VectorStore()
-    repl(its, log)
+    ds = DocumentStore()
+    vs = VectorStore(ds.storage_path, ds.config_path)
+    repl(ds, vs, log)
     
 if __name__ == "__main__":
     main()

@@ -6,7 +6,6 @@ import json
 import time
 import hashlib
 import tempfile
-import zlib
 from typing import TypedDict, cast
 import io
 import base64
@@ -14,16 +13,22 @@ import base64
 from PIL import Image
 import pymupdf  # pyright: ignore[reportMissingTypeStubs]
 import pymupdf4llm  # pyright: ignore[reportMissingTypeStubs]  # XXX currently locked to 0.19, otherwise export returns empty docs, requires investigation!
+import torch
+from sentence_transformers import SentenceTransformer
 
-class VectorSource(TypedDict):
+
+class DocumentSource(TypedDict):
     name: str
     type: str
     path: str
     file_types: list[str]
 
-    
+
+class DocumentConfig(TypedDict):
+    document_sources: list[DocumentSource]
+
+
 class VectorConfig(TypedDict):
-    vector_sources: list[VectorSource]
     embeddings_model_name: str
     embeddings_device: str
     embeddings_model_trust_code: bool
@@ -52,88 +57,31 @@ class EmbeddingModel(TypedDict):
 
 
 class VectorStore:
-    def __init__(self):
+    def __init__(self, storage_path:str, config_path:str):
         self.log: logging.Logger = logging.getLogger("VectorStore")
-        self.config_changed:bool = False
-        self.config_dir: str = os.path.expanduser("~/.config/vector_store")
-        if os.path.isdir(self.config_dir) is False:
-            os.makedirs(self.config_dir)            
-        self.config_file:str = os.path.join(self.config_dir, "vector_store.json")
+        self.storage_path:str = storage_path
+        self.config_path:str = config_path
+        if os.path.isdir(self.config_path) is False:
+            os.makedirs(self.config_path)
+        self.config_changed: bool = False
+        self.config_file:str = os.path.join(self.config_path, "vector_store.json")
         self.config: VectorConfig = self.get_config()
-        self.library: dict[str, LibraryEntry] = {}
-        self.pdf_index:dict[str, PDFIndex] = {}
-
-        self.storage_path: str = os.path.join(os.path.expanduser("~/.local/share"), "vector_store")
-        if os.path.isdir(self.storage_path) is False:
-            os.makedirs(self.storage_path)
-        self.library_file:str = os.path.join(self.storage_path, "vector_library.json")
-        self.pdf_cache_path: str = os.path.join(self.storage_path, "pdf_cache")
-        if os.path.isdir(self.pdf_cache_path) is False:
-            os.makedirs(self.pdf_cache_path, exist_ok=True)
-        self.pdf_index_file: str = os.path.join(self.pdf_cache_path, "pdf_index.json")
-
         self.embeddings_path:str = os.path.join(self.storage_path, "embeddings")
         if os.path.isdir(self.embeddings_path) is False:
             os.makedirs(self.embeddings_path, exist_ok=True)
-
-        self.icon_width:int = 240
-        self.icon_height:int = 320
-        
         self.model_list: list[EmbeddingModel]
         self.get_model_list()
-
         for model in self.model_list:
             model_path = self.model_embedding_path(model['model_name'])
             if os.path.isdir(model_path) is False:
                 os.makedirs(model_path, exist_ok=True)
+        self.model: EmbeddingModel | None = None
+        self.engine: SentenceTransformer | None = None
+        self.device: torch.device = torch.device(self.resolve_device())
             
-        self.load_library()
-        self.log.info("VectorStore initialized")
-
     def model_embedding_path(self, model_name: str) -> str:
         return os.path.join(self.embeddings_path, model_name)
-        
-    def get_config(self) -> VectorConfig:
-        if os.path.exists(self.config_file):
-            with open(self.config_file, "r") as f:
-                config: VectorConfig = cast(VectorConfig, json.load(f))
-        else:
-            config = VectorConfig({
-                'vector_sources': [
-                    VectorSource({
-                        'name': 'Calibre',
-                        'type': 'calibre_library',
-                        'path': '~/ReferenceLibrary/Calibre Library',
-                        'file_types': ['txt', 'pdf']
-                    }),
-                    VectorSource({
-                        'name': 'Notes',
-                        'type': 'folder',
-                        'path': '~/Notes',
-                        'file_types': ['md']
-                    })
-                ],
-                'embeddings_model_name': 'granite-embedding-107m-multilingual',
-                'embeddings_device': 'auto',
-                'embeddings_model_trust_code': True,
-            }
-            )
-            self.save_config(config)
-            self.log.warning(f"Default configuration created at {self.config_file}, please review!")
-        self.config_changed = False
-        return config
 
-    def save_config(self, config: VectorConfig):
-        temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.config_file))
-        try:
-            with os.fdopen(temp_fd, 'w') as temp_file:            
-                json.dump(config, temp_file)
-            os.replace(temp_path, self.config_file)  # atomic update
-        except Exception as e:
-            self.log.error("Config-file update interrupted, not updated.")
-            os.remove(temp_path)
-            raise e
-        
     def get_model_list(self):
         self.model_list = [
             { # granite-107m
@@ -183,6 +131,263 @@ class VectorStore:
             },
         ]
 
+    def get_config(self) -> VectorConfig:
+        if os.path.exists(self.config_file):
+            with open(self.config_file, "r") as f:
+                config: VectorConfig = cast(VectorConfig, json.load(f))
+        else:
+            config = VectorConfig({
+                'embeddings_model_name': 'granite-embedding-107m-multilingual',
+                'embeddings_device': 'auto',
+                'embeddings_model_trust_code': True,
+            })
+            self.save_config(config)
+            self.log.warning(f"Default configuration created at {self.config_file}, please review!")
+        self.config_changed = False
+        return config
+
+    def save_config(self, config: VectorConfig):
+        temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.config_file))
+        try:
+            with os.fdopen(temp_fd, 'w') as temp_file:            
+                json.dump(config, temp_file)
+            os.replace(temp_path, self.config_file)  # atomic update
+        except Exception as e:
+            self.log.error("Config-file update interrupted, not updated.")
+            os.remove(temp_path)
+            raise e
+
+    def list_models(self, current_model: str|None = None):
+        print()
+        print("Index | Model")
+        print("------+--------------------------------------")
+        for ind, model in enumerate(self.model_list):
+            if model['model_name'] == current_model:
+                print(f" >{ind+1}<  | {model['model_name']}")
+            else:
+                print(f"  {ind+1}   | {model['model_name']}")
+        print("  Use 'select <index>' to change the active model")
+
+    def list(self, mode: str):
+        if mode == "" or 'models' in mode:
+            self.list_models(self.config['embeddings_model_name'])
+
+    def select(self, ind: int) -> str | None:
+        if ind<1 or ind>len(self.model_list):
+            self.log.error(f"Invalid model index {ind}, use 'list models' to get valid indices")
+            return None
+        new_model = self.model_list[ind-1]['model_name']
+        if new_model == self.config['embeddings_model_name']:
+            self.log.info("Model {new_model} was already active")
+            return None
+        if self.model is not None:
+            del self.model
+            self.model = None
+        if self.engine is not None:
+            del self.engine
+            self.engine = None
+        self.log.info(f"Model {new_model} active")
+        self.config['embeddings_model_name'] = new_model
+        self.config_changed = True
+        self.save_config(self.config)
+        return new_model
+
+    def get_embedding_filename(self, hash:str) -> str:
+        current_embeddings_path = os.path.join(self.embeddings_path, self.config['embeddings_model_name'])
+        return os.path.join(current_embeddings_path, hash+".pt")
+
+    def resolve_device(self) -> str:
+        dev = self.config.get('embeddings_device', 'auto')
+        if dev == 'auto':
+            if torch.cuda.is_available(): 
+                return 'cuda'
+            elif torch.backends.mps.is_available(): 
+                return 'mps'
+            else: 
+                return 'cpu'
+        elif dev in ['cuda', 'mps', 'cpu']:
+            if dev == 'cuda' and not torch.cuda.is_available(): 
+                self.log.warning("CUDA requested but not available, fallback CPU.")
+                return 'cpu'
+            if dev == 'mps' and not torch.backends.mps.is_available(): 
+                self.log.warning("MPS requested but not available, fallback CPU.")
+                return 'cpu'
+            return dev
+        else:
+            self.log.warning(f"Undefined device {dev}, using 'cpu' fallback")
+            return 'cpu'
+
+    def load_model(self):
+        if self.model is None:
+            for model in self.model_list:
+                if model['model_name'] == self.config['embeddings_model_name']:
+                    self.model = model
+        if self.model is None:
+            self.log.error(f"Invalid model {self.config['embeddings_model_name']} could not be identified, load_model failed!")
+            return
+        if self.engine is None:
+            self.engine = SentenceTransformer(self.model['model_hf_name'], trust_remote_code=self.config['embeddings_model_trust_code']).to(self.device)          
+
+    @staticmethod
+    def get_chunk_ptr(index: int, chunk_size: int, chunk_overlap: int) -> int:
+        """Calculates the start character index of a chunk."""
+        index = max(0, index)
+        overlap = min(chunk_overlap, chunk_size - 1)
+        step = chunk_size - overlap
+        if step <= 0: 
+            step = chunk_size
+        return index * step
+
+    @staticmethod
+    def get_chunk(text: str, index: int, chunk_size: int, chunk_overlap: int ) -> str:
+        """Extracts a single text chunk based on index."""
+        if not text: 
+            return ""
+        chunk_start = VectorStore.get_chunk_ptr(index, chunk_size, chunk_overlap)
+        return text[chunk_start : chunk_start + chunk_size]
+
+    @staticmethod
+    def get_span_chunk(text:str, index: int, count:int, chunk_size: int, chunk_overlap: int):
+        """Extracts a span of text covering 'count' base chunks."""
+        if not text or count < 1: 
+            return ""
+        overlap = min(chunk_overlap, chunk_size - 1)
+        step = chunk_size - overlap
+        if step <= 0: 
+            step = chunk_size
+        chunk_start = VectorStore.get_chunk_ptr(index, chunk_size, chunk_overlap)
+        chunk_end = chunk_start + chunk_size + step * (count - 1)
+        return text[chunk_start : chunk_end]
+
+    @staticmethod
+    def get_chunks(text:str, chunk_size: int, chunk_overlap: int):
+        overlap = min(chunk_overlap, chunk_size - 1)
+        step = chunk_size - overlap
+        if step <= 0: 
+            step = chunk_size
+        text_len = len(text)
+        chunks: list[str] = []
+        for i in range(0, text_len, step):
+             chunk = text[i : i + chunk_size]
+             if not chunk: 
+                break
+             chunks.append(chunk)
+             if i + chunk_size >= text_len: 
+                break
+        return chunks
+
+    def save_tensor(self, tensor:torch.Tensor, filename:str):
+        temp_path: str | None = None
+        temp_fd: int | None = None
+        try:
+            (temp_fd, temp_path) = tempfile.mkstemp(dir=os.path.dirname(filename))
+            os.close(temp_fd)
+            torch.save(tensor, temp_path)
+            os.replace(temp_path, filename)
+            temp_path = None # Prevent removal
+        except (IOError, OSError, RuntimeError) as e:
+            self.log.error(f"Error during atomic tensor save to {filename}: {e}")
+            if temp_path and os.path.exists(temp_path):
+                try: os.remove(temp_path)
+                except OSError as rm_e: self.log.error(f"Failed to remove temporary tensor file {temp_path} after save error: {rm_e}")
+            raise e
+        finally:
+             if temp_fd is not None:
+                 try: os.close(temp_fd)
+                 except OSError: pass
+             if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                    self.log.warning(f"Removed leftover temp tensor file in finally: {temp_path}")
+                except OSError as rm_e: self.log.error(f"Failed to remove leftover temp tensor file {temp_path} in finally: {rm_e}")
+        
+    def save_embeddings_tensor(self, text:str, filename:str):
+        if self.model is None or self.engine is None:
+            return
+        chunks: list[str] = VectorStore.get_chunks(text, self.model['chunk_size'], self.model['chunk_overlap'])
+        embeddings_tensor = self.engine.encode(chunks, convert_to_tensor=True)  # pyright:ignore[reportUnknownMemberType]
+        self.save_tensor(embeddings_tensor, filename)        
+    
+    def index(self, library:dict[str,LibraryEntry]):
+        self.load_model()
+        if self.model is None or self.engine is None:
+            self.log.error("Failed to load model, cannot index!")
+            return
+        
+        for hash in library:
+            filename = self.get_embedding_filename(hash)
+            if os.path.exists(filename):
+                continue
+            print(f"\rIndexing: {filename[-80:]:80s}", end="")
+            self.save_embeddings_tensor(library[hash]['text'], filename)
+        print(" "*80)
+        self.log.info("Index completed")
+        
+    
+class DocumentStore:
+    def __init__(self):
+        self.log: logging.Logger = logging.getLogger("DocumentStore")
+        self.config_changed:bool = False
+        self.config_path: str = os.path.expanduser("~/.config/local_research")
+        if os.path.isdir(self.config_path) is False:
+            os.makedirs(self.config_path)            
+        self.config_file:str = os.path.join(self.config_path, "document_store.json")
+        self.config: DocumentConfig = self.get_config()
+        self.library: dict[str, LibraryEntry] = {}
+        self.pdf_index:dict[str, PDFIndex] = {}
+
+        self.storage_path: str = os.path.join(os.path.expanduser("~/.local/share"), "local_research")
+        if os.path.isdir(self.storage_path) is False:
+            os.makedirs(self.storage_path)
+        self.library_file:str = os.path.join(self.storage_path, "document_library.json")
+        self.pdf_cache_path: str = os.path.join(self.storage_path, "pdf_cache")
+        if os.path.isdir(self.pdf_cache_path) is False:
+            os.makedirs(self.pdf_cache_path, exist_ok=True)
+        self.pdf_index_file: str = os.path.join(self.pdf_cache_path, "pdf_index.json")
+
+        self.icon_width:int = 240
+        self.icon_height:int = 320
+        
+        self.load_library()
+        self.log.info("DocumentStore initialized")
+
+    def get_config(self) -> DocumentConfig:
+        if os.path.exists(self.config_file):
+            with open(self.config_file, "r") as f:
+                config: DocumentConfig = cast(DocumentConfig, json.load(f))
+        else:
+            config = DocumentConfig({
+                'document_sources': [
+                    DocumentSource({
+                        'name': 'Calibre',
+                        'type': 'calibre_library',
+                        'path': '~/ReferenceLibrary/Calibre Library',
+                        'file_types': ['txt', 'pdf']
+                    }),
+                    DocumentSource({
+                        'name': 'Notes',
+                        'type': 'folder',
+                        'path': '~/Notes',
+                        'file_types': ['md']
+                    })
+                ]            
+                })
+            self.save_config(config)
+            self.log.warning(f"Default configuration created at {self.config_file}, please review!")
+        self.config_changed = False
+        return config
+
+    def save_config(self, config: DocumentConfig):
+        temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.config_file))
+        try:
+            with os.fdopen(temp_fd, 'w') as temp_file:            
+                json.dump(config, temp_file)
+            os.replace(temp_path, self.config_file)  # atomic update
+        except Exception as e:
+            self.log.error("Config-file update interrupted, not updated.")
+            os.remove(temp_path)
+            raise e
+        
     def load_library(self):
         print("Loading library data...", end="", flush=True)
         if os.path.exists(self.library_file):
@@ -229,14 +434,6 @@ class VectorStore:
         return sha256.hexdigest()
 
     @staticmethod
-    def _get_crc32(file_path: str) -> int:
-        crc32 = 0
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(4096), b""):
-                crc32 = crc32 ^ zlib.crc32(chunk)
-        return crc32
-
-    @staticmethod
     def _encode_image_to_base64(image_path: str, width: int | None = None, height: int | None = None) -> str:
         with Image.open(image_path) as img:
             if width is not None or height is not None:
@@ -246,7 +443,7 @@ class VectorStore:
                 elif height is None:
                     aspect_ratio = img.height / img.width
                     height = int(width * aspect_ratio)
-                img = img.resize((width, height), Image.LANCZOS)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
+                img = img.resize((width, cast(int, height)), Image.LANCZOS)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
             buffer = io.BytesIO()
             img_format = img.format if img.format else 'PNG'
             img.save(buffer, format=img_format)
@@ -352,7 +549,6 @@ class VectorStore:
 
         return pdf_text, index_changed
 
-
     def skip_file_in_sync(self, root_path:str, filename:str, valid_types:list[str]) -> bool:
         base, ext_with_dot = os.path.splitext(filename)
         ext = ext_with_dot[1:].lower() if ext_with_dot else ""
@@ -383,7 +579,7 @@ class VectorStore:
         duplicate_count = 0
         nl_required = False
         last_status = time.time()
-        for source in self.config['vector_sources']:
+        for source in self.config['document_sources']:
             if abort_scan: 
                 break
             source_path = os.path.expanduser(source['path'])
@@ -409,7 +605,7 @@ class VectorStore:
 
                     file_count += 1
                     full_path = os.path.join(root, filename)
-                    sha256_hash = VectorStore._get_sha256(full_path)
+                    sha256_hash = DocumentStore._get_sha256(full_path)
                     ext_with_dot = os.path.splitext(filename)[1]
                     ext = ext_with_dot[1:].lower() if ext_with_dot else ""
 
@@ -455,7 +651,7 @@ class VectorStore:
                     if is_calibre is True:
                         calibre_icon_path = os.path.join(root, 'cover.jpg')
                         if os.path.exists(calibre_icon_path):
-                            icon = VectorStore._encode_image_to_base64(calibre_icon_path, self.icon_width, self.icon_height)
+                            icon = DocumentStore._encode_image_to_base64(calibre_icon_path, self.icon_width, self.icon_height)
                         else:
                             self.log.warning(f"Calibre icon file {calibre_icon_path} not found.")
 
@@ -523,16 +719,6 @@ class VectorStore:
             self.log.error(f"Use 'check <mode>', valid modes are: 'pdf'")
         
     def list(self, mode: str):
-        if mode == "" or 'models' in mode:
-            print()
-            print("Index | Model")
-            print("------+--------------------------------------")
-            for ind, model in enumerate(self.model_list):
-                if model['model_name'] == self.config['embeddings_model_name']:
-                    print(f" >{ind+1}<  | {model['model_name']}")
-                else:
-                    print(f"  {ind+1}   | {model['model_name']}")
-            print("  Use 'select <index>' to change the active model")
         if mode == "" or 'sources' in mode:
             exts = ['pdf', 'txt', 'md']
             print()
@@ -544,7 +730,7 @@ class VectorStore:
             for ext in exts:
                 print("-------+", end="")
             print("----------------------------------+")
-            for source in self.config['vector_sources']:
+            for source in self.config['document_sources']:
                 source_name = source['name']
                 cnt = 0
                 ext_cnts: dict[str,int] = {}
@@ -567,17 +753,4 @@ class VectorStore:
                         print(f" {0:5d} |", end="")
                 print(f" {source['path'][-32:]:32s} |")
 
-    def select(self, ind: int):
-        if ind<1 or ind>len(self.model_list):
-            self.log.error(f"Invalid model index {ind}, use 'list models' to get valid indices")
-            return
-        new_model = self.model_list[ind-1]['model_name']
-        if new_model == self.config['embeddings_model_name']:
-            self.log.info("Model {new_model} was already active")
-            return
-        self.log.info(f"Model {new_model} active")
-        self.config['embeddings_model_name'] = new_model
-        self.config_changed = True
-        self.save_config(self.config)
-        
         
