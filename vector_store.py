@@ -5,6 +5,7 @@ import logging
 import json
 import time
 import hashlib
+import tempfile
 import zlib
 from typing import TypedDict, cast
 import io
@@ -123,8 +124,15 @@ class VectorStore:
         return config
 
     def save_config(self, config: VectorConfig):
-        with open(self.config_file, "w") as f:
-            json.dump(config, f)
+        temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.config_file))
+        try:
+            with os.fdopen(temp_fd, 'w') as temp_file:            
+                json.dump(config, temp_file)
+            os.replace(temp_path, self.config_file)               
+        except Exception as e:
+            self.log.error("Config-file update interrupted, not updated.")
+            os.remove(temp_path)
+            raise e
         
     def get_model_list(self):
         self.model_list = [
@@ -191,10 +199,25 @@ class VectorStore:
 
     def save_library(self):
         print("Saving library data...", end="", flush=True)
-        with open(self.library_file, "w") as f:
-            json.dump(self.library, f)
-        with open(self.pdf_index_file, "w") as f:
-            json.dump(self.pdf_index, f)
+        temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.library_file))
+        try:
+            with os.fdopen(temp_fd, 'w') as temp_file:            
+                json.dump(self.library, temp_file)
+            os.replace(temp_path, self.library_file)               
+        except Exception as e:
+            self.log.error("Library update was interrupted, atomic file update cancelled.")
+            os.remove(temp_path)
+            raise e
+
+        temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.pdf_index_file))
+        try:
+            with os.fdopen(temp_fd, 'w') as temp_file:            
+                json.dump(self.pdf_index, temp_file)
+            os.replace(temp_path, self.pdf_index_file)               
+        except Exception as e:
+            self.log.error("PDF Index update was interrupted, atomic file update cancelled.")
+            os.remove(temp_path)
+            raise e
         print(" Done.")
 
     @staticmethod
