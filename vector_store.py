@@ -381,6 +381,8 @@ class VectorStore:
         abort_scan = False
         pdf_cache_hits = 0
         duplicate_count = 0
+        nl_required = False
+        last_status = time.time()
         for source in self.config['vector_sources']:
             if abort_scan: 
                 break
@@ -408,25 +410,35 @@ class VectorStore:
                     file_count += 1
                     full_path = os.path.join(root, filename)
                     sha256_hash = VectorStore._get_sha256(full_path)
+                    ext_with_dot = os.path.splitext(filename)[1]
+                    ext = ext_with_dot[1:].lower() if ext_with_dot else ""
 
                     if sha256_hash in self.library and full_path != self.library[sha256_hash]['source_path']:
-                        print()
+                        if nl_required:
+                            print()
+                            nl_required = False
                         self.log.warning(f"File {full_path} is a duplicate of {self.library[sha256_hash]['source_path']}, ignoring this copy.")
                         duplicate_count += 1
                         continue
 
                     if sha256_hash in existing_hashes:
                         existing_hashes.remove(sha256_hash)
+                        if time.time() - last_status > 1 or file_count==source_file_count:
+                            if file_count == source_file_count:
+                                print(f"\rChecked  {file_count}/{source_file_count}   ", end="", flush=True)
+                            else:
+                                print(f"\rChecking {file_count}/{source_file_count}...", end="", flush=True)
+                            last_status = time.time()
+                            nl_required = True
+                        continue
 
                     current_text: str | None = None
                     
-                    ext_with_dot = os.path.splitext(filename)[1]
-                    ext = ext_with_dot[1:].lower() if ext_with_dot else ""
                     if ext in ['md', 'txt']:
                         with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
                             current_text = f.read()
                         print(f"\r {file_count}/{source_file_count} | {full_path[-80:]:80s} Text       ", end="")
-
+                        nl_required = True
                     elif ext == 'pdf':
                         print(f"\r {file_count}/{source_file_count} | {full_path[-80:]:80s} Scanning...", end="")
                         current_text, pdf_index_changed_during_get = self.get_pdf_text(full_path, sha256_hash)
@@ -435,6 +447,9 @@ class VectorStore:
                         else:
                             pdf_cache_hits += 1
                         print(f"\r {file_count}/{source_file_count} | {full_path[-80:]:80s} PDF        ", end="")
+                        nl_required = True
+                    else:
+                        self.log.error(f"Handling for file-type {ext} not implemented!")
 
                     icon:str = ""
                     if is_calibre is True:
@@ -456,7 +471,9 @@ class VectorStore:
                         self.save_library()
                         library_changed = False
                         last_saved =  time.time()
-            print()
+            if nl_required is True:
+                print()
+                nl_required = False
         new_library_size = len(list(self.library.keys()))
         if duplicate_count > 0:
             self.log.warning(f"{duplicate_count} duplicates were ignored during import, please re-run sync.")
@@ -474,9 +491,9 @@ class VectorStore:
                 
         if library_changed is True or pdf_index_changed is True:
             self.save_library()
-            self.log.info(f"Library size {old_library_size} -> {new_library_size}, {pdf_cache_hits} PDF cache hits")
+            self.log.info(f"Library size {old_library_size} -> {new_library_size}")
         else:
-            self.log.info(f"No changes, {pdf_cache_hits} PDF cache hits")
+            self.log.info(f"No changes")
 
     def check_pdf_cache(self):
         failure_count = 0
