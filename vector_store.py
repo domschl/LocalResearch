@@ -128,7 +128,7 @@ class VectorStore:
         try:
             with os.fdopen(temp_fd, 'w') as temp_file:            
                 json.dump(config, temp_file)
-            os.replace(temp_path, self.config_file)               
+            os.replace(temp_path, self.config_file)  # atomic update
         except Exception as e:
             self.log.error("Config-file update interrupted, not updated.")
             os.remove(temp_path)
@@ -353,120 +353,130 @@ class VectorStore:
         return pdf_text, index_changed
 
 
+    def skip_file_in_sync(self, root_path:str, filename:str, valid_types:list[str]) -> bool:
+        base, ext_with_dot = os.path.splitext(filename)
+        ext = ext_with_dot[1:].lower() if ext_with_dot else ""
+        if '.caltrash' in root_path:
+            return True
+        if ext not in valid_types: 
+            return True
+        preferred_ext_exists = False
+        preferred_order = ['txt', 'md']
+        if ext == 'pdf':
+             for pref_ext in preferred_order:
+                 if os.path.exists(os.path.join(root_path, base + '.' + pref_ext)):
+                     preferred_ext_exists = True
+                     break
+        if preferred_ext_exists:
+            return True
+        return False
+    
     def sync_texts(self):
-            library_changed = False
-            pdf_index_changed = False
-            old_library_size = len(list(self.library.keys()))
-            last_saved = time.time()
+        library_changed = False
+        pdf_index_changed = False
+        old_library_size = len(list(self.library.keys()))
+        last_saved = time.time()
 
-            existing_hashes: list[str] = list(self.library.keys())
-            abort_scan = False
-            pdf_cache_hits = 0
-            duplicate_count = 0
-            for source in self.config['vector_sources']:
+        existing_hashes: list[str] = list(self.library.keys())
+        abort_scan = False
+        pdf_cache_hits = 0
+        duplicate_count = 0
+        for source in self.config['vector_sources']:
+            if abort_scan: 
+                break
+            source_path = os.path.expanduser(source['path'])
+            self.log.info(f"Scanning source '{source['name']}' at '{source_path}'...")
+            is_calibre: bool = False
+            if source['vectype'] == 'calibre_library':
+                is_calibre = True
+            source_file_count = 0
+            for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: self.log.warning(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
+                for filename in files:
+                    if self.skip_file_in_sync(root, filename, source['file_types']) is True:
+                        continue
+                    source_file_count += 1
+            file_count = 0
+            for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: self.log.warning(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
                 if abort_scan: 
                     break
-                source_path = os.path.expanduser(source['path'])
-                self.log.info(f"Scanning source '{source['name']}' at '{source_path}'...")
-                is_calibre: bool = False
-                if source['vectype'] == 'calibre_library':
-                    is_calibre = True
-                source_file_count = 0
-                for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: self.log.warning(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
-                    for filename in files:
-                        base, ext_with_dot = os.path.splitext(filename)
-                        ext = ext_with_dot[1:].lower() if ext_with_dot else ""
-                        if ext not in source['file_types']: 
-                            continue
-                        preferred_ext_exists = False
-                        preferred_order = ['txt', 'md']
-                        if ext == 'pdf':
-                             for pref_ext in preferred_order:
-                                 if os.path.exists(os.path.join(root, base + '.' + pref_ext)):
-                                     preferred_ext_exists = True
-                                     break
-                        if preferred_ext_exists:
-                            continue
-                        source_file_count += 1
-                file_count = 0
-                for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: self.log.warning(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
+                for filename in files:
                     if abort_scan: 
                         break
-                    for filename in files:
-                        if abort_scan: 
-                            break
-                        base, ext_with_dot = os.path.splitext(filename)
-                        ext = ext_with_dot[1:].lower() if ext_with_dot else ""
-                        if ext not in source['file_types']: 
-                            continue
+                    if self.skip_file_in_sync(root, filename, source['file_types']) is True:
+                        continue
 
-                        preferred_ext_exists = False
-                        preferred_order = ['txt', 'md']
-                        if ext == 'pdf':
-                             for pref_ext in preferred_order:
-                                 if os.path.exists(os.path.join(root, base + '.' + pref_ext)):
-                                     preferred_ext_exists = True
-                                     break
-                        if preferred_ext_exists:
-                            continue
+                    file_count += 1
+                    full_path = os.path.join(root, filename)
+                    sha256_hash = VectorStore._get_sha256(full_path)
 
-                        file_count += 1
-                        full_path = os.path.join(root, filename)
-                        sha256_hash = VectorStore._get_sha256(full_path)
+                    if sha256_hash in self.library and full_path != self.library[sha256_hash]['source_path']:
+                        print()
+                        self.log.warning(f"File {full_path} is a duplicate of {self.library[sha256_hash]['source_path']}, ignoring this copy.")
+                        duplicate_count += 1
+                        continue
 
-                        if sha256_hash in self.library and full_path != self.library[sha256_hash]['source_path']:
-                            print()
-                            self.log.warning(f"File {full_path} is a duplicate of {self.library[sha256_hash]['source_path']}, ignoring this copy.")
-                            duplicate_count += 1
-                            continue
-                                                
-                        if sha256_hash in existing_hashes:
-                            existing_hashes.remove(sha256_hash)
+                    if sha256_hash in existing_hashes:
+                        existing_hashes.remove(sha256_hash)
 
-                        current_text: str | None = None
-                        if ext in ['md', 'txt']:
-                            with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
-                                current_text = f.read()
-                            print(f"\r {file_count}/{source_file_count} | {full_path[-80:]:80s} Text       ", end="")
-                            
-                        elif ext == 'pdf':
-                            print(f"\r {file_count}/{source_file_count} | {full_path[-80:]:80s} Scanning...", end="")
-                            current_text, pdf_index_changed_during_get = self.get_pdf_text(full_path, sha256_hash)
-                            if pdf_index_changed_during_get is True:
-                                pdf_index_changed = True
-                            else:
-                                pdf_cache_hits += 1
-                            print(f"\r {file_count}/{source_file_count} | {full_path[-80:]:80s} PDF        ", end="")
+                    current_text: str | None = None
+                    
+                    ext_with_dot = os.path.splitext(filename)[1]
+                    ext = ext_with_dot[1:].lower() if ext_with_dot else ""
+                    if ext in ['md', 'txt']:
+                        with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+                            current_text = f.read()
+                        print(f"\r {file_count}/{source_file_count} | {full_path[-80:]:80s} Text       ", end="")
 
-                        icon:str = ""
-                        if is_calibre is True:
-                            calibre_icon_path = os.path.join(root, 'cover.jpg')
-                            if os.path.exists(calibre_icon_path):
-                                icon = VectorStore._encode_image_to_base64(calibre_icon_path, self.icon_width, self.icon_height)
-                            else:
-                                self.log.warning(f"Calibre icon file {calibre_icon_path} not found.")
+                    elif ext == 'pdf':
+                        print(f"\r {file_count}/{source_file_count} | {full_path[-80:]:80s} Scanning...", end="")
+                        current_text, pdf_index_changed_during_get = self.get_pdf_text(full_path, sha256_hash)
+                        if pdf_index_changed_during_get is True:
+                            pdf_index_changed = True
+                        else:
+                            pdf_cache_hits += 1
+                        print(f"\r {file_count}/{source_file_count} | {full_path[-80:]:80s} PDF        ", end="")
 
-                        if current_text is None:
-                            self.log.error(f"{full_path} has no content or doesnt exist!")
-                            existing_hashes.remove(sha256_hash)
-                            continue
-                        
-                        self.library[sha256_hash] = LibraryEntry({'source_name': source['name'], 'source_path': full_path, 'icon': icon, 'text': current_text})
-                        library_changed = True
-                        
-                        if time.time() - last_saved > 180:
-                            self.save_library()
-                            library_changed = False
-                            last_saved =  time.time()
-                print()
-            new_library_size = len(list(self.library.keys()))
-            if duplicate_count > 0:
-                self.log.warning(f"{duplicate_count} duplicates were ignored during import")
-            if library_changed is True or pdf_index_changed is True:
-                self.save_library()
-                self.log.info(f"Library size {old_library_size} -> {new_library_size}, {pdf_cache_hits} PDF cache hits")
-            else:
-                self.log.info(f"No changes, {pdf_cache_hits} PDF cache hits")
+                    icon:str = ""
+                    if is_calibre is True:
+                        calibre_icon_path = os.path.join(root, 'cover.jpg')
+                        if os.path.exists(calibre_icon_path):
+                            icon = VectorStore._encode_image_to_base64(calibre_icon_path, self.icon_width, self.icon_height)
+                        else:
+                            self.log.warning(f"Calibre icon file {calibre_icon_path} not found.")
+
+                    if current_text is None:
+                        self.log.error(f"{full_path} has no content or doesnt exist!")
+                        existing_hashes.remove(sha256_hash)
+                        continue
+
+                    self.library[sha256_hash] = LibraryEntry({'source_name': source['name'], 'source_path': full_path, 'icon': icon, 'text': current_text})
+                    library_changed = True
+
+                    if time.time() - last_saved > 180:
+                        self.save_library()
+                        library_changed = False
+                        last_saved =  time.time()
+            print()
+        new_library_size = len(list(self.library.keys()))
+        if duplicate_count > 0:
+            self.log.warning(f"{duplicate_count} duplicates were ignored during import, please re-run sync.")
+            
+        if len(existing_hashes) > 0:
+            self.log.warning(f"{len(existing_hashes)} debris entries")
+            for debris in existing_hashes:
+                if debris in self.library:
+                    self.log.info(f"Deleting library entry {self.library[debris]['source_path']}")
+                    del self.library[debris]
+                    library_changed = True
+                if debris in self.pdf_index:
+                    del self.pdf_index[debris]
+                    pdf_index_changed = True
+                
+        if library_changed is True or pdf_index_changed is True:
+            self.save_library()
+            self.log.info(f"Library size {old_library_size} -> {new_library_size}, {pdf_cache_hits} PDF cache hits")
+        else:
+            self.log.info(f"No changes, {pdf_cache_hits} PDF cache hits")
 
     def check_pdf_cache(self):
         failure_count = 0
