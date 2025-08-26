@@ -1,5 +1,3 @@
-
-
 import os
 import logging
 import json
@@ -32,6 +30,7 @@ class VectorConfig(TypedDict):
     embeddings_model_name: str
     embeddings_device: str
     embeddings_model_trust_code: bool
+    batch_base_multiplier: int
 
 
 class LibraryEntry(TypedDict):
@@ -140,6 +139,7 @@ class VectorStore:
                 'embeddings_model_name': 'granite-embedding-107m-multilingual',
                 'embeddings_device': 'auto',
                 'embeddings_model_trust_code': True,
+                'batch_base_multiplier': 2,
             })
             self.save_config(config)
             self.log.warning(f"Default configuration created at {self.config_file}, please review!")
@@ -304,9 +304,11 @@ class VectorStore:
     def save_embeddings_tensor(self, text:str, filename:str):
         if self.model is None or self.engine is None:
             return
+        batch_size = self.config['batch_base_multiplier'] * self.model['batch_multiplier']
         chunks: list[str] = VectorStore.get_chunks(text, self.model['chunk_size'], self.model['chunk_overlap'])
-        embeddings_tensor = self.engine.encode(chunks, convert_to_tensor=True)  # pyright:ignore[reportUnknownMemberType]
-        self.save_tensor(embeddings_tensor, filename)        
+        embeddings_tensor = self.engine.encode(chunks, convert_to_tensor=True, show_progress_bar=False, batch_size=batch_size)  # pyright:ignore[reportUnknownMemberType]
+        self.save_tensor(embeddings_tensor, filename)
+        del embeddings_tensor
     
     def index(self, library:dict[str,LibraryEntry]):
         self.load_model()
@@ -316,9 +318,10 @@ class VectorStore:
         
         for hash in library:
             filename = self.get_embedding_filename(hash)
+            name = library[hash]['source_path']
             if os.path.exists(filename):
                 continue
-            print(f"\rIndexing: {filename[-80:]:80s}", end="")
+            print(f"\rIndexing: {name[-80:]:80s}", end="")
             self.save_embeddings_tensor(library[hash]['text'], filename)
         print(" "*80)
         self.log.info("Index completed")
