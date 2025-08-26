@@ -30,7 +30,7 @@ class VectorConfig(TypedDict):
 
 class LibraryEntry(TypedDict):
     source_name: str
-    filename: str
+    source_path: str
     icon: str
     text: str
 
@@ -329,6 +329,7 @@ class VectorStore:
 
         return pdf_text, index_changed
 
+
     def sync_texts(self):
             library_changed = False
             pdf_index_changed = False
@@ -338,6 +339,7 @@ class VectorStore:
             existing_hashes: list[str] = list(self.library.keys())
             abort_scan = False
             pdf_cache_hits = 0
+            duplicate_count = 0
             for source in self.config['vector_sources']:
                 if abort_scan: 
                     break
@@ -389,9 +391,15 @@ class VectorStore:
                         full_path = os.path.join(root, filename)
                         sha256_hash = VectorStore._get_sha256(full_path)
 
+                        if sha256_hash in self.library and full_path != self.library[sha256_hash]:
+                            print()
+                            self.log.warning(f"File {full_path} is a duplicate of {self.library[sha256_hash]}, ignoring this copy.")
+                            duplicate_count += 1
+                            continue
+                        
                         print(f"\r {file_count}/{source_file_count} | {full_path[-80:]:80s}", end="")
                         
-                        if sha256_hash in self.library:
+                        if sha256_hash in existing_hashes:
                             existing_hashes.remove(sha256_hash)
 
                         current_text: str | None = None
@@ -421,7 +429,7 @@ class VectorStore:
                             existing_hashes.remove(sha256_hash)
                             continue
                         
-                        self.library[sha256_hash] = LibraryEntry({'source_name': source['name'], 'filename': filename, 'icon': icon, 'text': current_text})
+                        self.library[sha256_hash] = LibraryEntry({'source_name': source['name'], 'source_path': full_path, 'icon': icon, 'text': current_text})
                         library_changed = True
                         
                         if time.time() - last_saved > 180:
@@ -430,6 +438,8 @@ class VectorStore:
                             last_saved =  time.time()
                 print()
             new_library_size = len(list(self.library.keys()))
+            if duplicate_count > 0:
+                self.log.warning(f"{duplicate_count} duplicates were ignored during import")
             if library_changed is True or pdf_index_changed is True:
                 self.save_library()
                 self.log.info(f"Library size {old_library_size} -> {new_library_size}, {pdf_cache_hits} PDF cache hits")
