@@ -41,6 +41,8 @@ def repl(its: VectorStore, log: logging.Logger):
                     its.select(ind)
                 else:
                     log.error(f"Invalid index {arguments}, integer required, use 'list models' for valid range")
+            elif command == 'help':
+                print("Use 'list [models|sources]', 'sync', 'check [pdf]', 'select [model-index]'")
             elif command == 'exit' or command == 'quit':
                 break
 

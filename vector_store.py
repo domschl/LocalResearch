@@ -539,11 +539,11 @@ class VectorStore:
             print("Source   | Docs  |", end="")
             for ext in exts:
                 print(f" {ext:5s} |", end="")
-            print()
+            print(" Path                             |")
             print("---------+-------+", end="")
             for ext in exts:
                 print("-------+", end="")
-            print()
+            print("----------------------------------+")
             for source in self.config['vector_sources']:
                 source_name = source['name']
                 cnt = 0
@@ -565,7 +565,7 @@ class VectorStore:
                         print(f" {ext_cnts[ext]:5d} |", end="")
                     else:
                         print(f" {0:5d} |", end="")
-                print()
+                print(f" {source['path'][-32:]:32s} |")
 
     def select(self, ind: int):
         if ind<1 or ind>len(self.model_list):
