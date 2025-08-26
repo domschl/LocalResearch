@@ -2,14 +2,6 @@ import logging
 import readline
 import os
 import atexit
-
-
-# Set the maximum number of lines to be saved in the history file
-
-print("Welcome to the simple Python REPL!")
-print("Enter 'exit' to quit.")
-
-
 from vector_store import VectorStore
 
 def repl(its: VectorStore, log: logging.Logger):
@@ -49,7 +41,7 @@ def repl(its: VectorStore, log: logging.Logger):
                     its.select(ind)
                 else:
                     log.error(f"Invalid index {arguments}, integer required, use 'list models' for valid range")
-            elif command == 'exit':
+            elif command == 'exit' or command == 'quit':
                 break
 
         except (KeyboardInterrupt, EOFError):

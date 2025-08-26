@@ -3,7 +3,6 @@
 import os
 import logging
 import json
-import uuid
 import time
 import hashlib
 import zlib
@@ -32,16 +31,13 @@ class VectorConfig(TypedDict):
 class LibraryEntry(TypedDict):
     source_name: str
     filename: str
-    sha256_hash: str
     icon: str
     text: str
 
 
 class PDFIndex(TypedDict):
     previous_failure: bool
-    filename: str
     file_size: int
-    sha256_hash: str
 
 
 class EmbeddingModel(TypedDict):
@@ -121,14 +117,14 @@ class VectorStore:
                 'embeddings_model_trust_code': True,
             }
             )
-            self.save_config()
+            self.save_config(config)
             self.log.warning(f"Default configuration created at {self.config_file}, please review!")
         self.config_changed = False
         return config
 
-    def save_config(self):
+    def save_config(self, config: VectorConfig):
         with open(self.config_file, "w") as f:
-            json.dump(self.config, f)
+            json.dump(config, f)
         
     def get_model_list(self):
         self.model_list = [
@@ -247,7 +243,11 @@ class VectorStore:
         image.save(img_byte_arr, format=output_format)
         return img_byte_arr.getvalue()
 
-    def get_pdf_text(self, descriptor:str, full_path:str, sha256_hash: str) -> tuple[str | None, bool]:
+    def get_pdf_cache_filename(self, sha256_hash:str) -> str:
+        basename = sha256_hash+".txt"
+        return os.path.join(self.pdf_cache_path, basename)
+    
+    def get_pdf_text(self, full_path:str, sha256_hash: str) -> tuple[str | None, bool]:
         pdf_text: str | None = None
         index_changed: bool = False
         current_file_size: int = -1
@@ -257,31 +257,25 @@ class VectorStore:
             return None, False
         current_file_size = os.path.getsize(full_path)
         
-        if descriptor in self.pdf_index:
-            cached_info = self.pdf_index[descriptor]
-            if sha256_hash == cached_info['sha256_hash'] and current_file_size == cached_info['file_size'] and cached_info['previous_failure']:
+        if sha256_hash in self.pdf_index:
+            cached_info = self.pdf_index[sha256_hash]
+            if cached_info['previous_failure']:
                 print()
-                self.log.debug(f"Skipping PDF {descriptor}: Size matches and previously failed extraction.")
+                self.log.debug(f"Skipping PDF {full_path}: previously failed extraction.")
                 return None, False
-            elif (sha256_hash == cached_info['sha256_hash'] and current_file_size == cached_info['file_size']) and (cached_info['previous_failure'] is False):
-                cache_filename = os.path.join(self.pdf_cache_path, cached_info['filename'])
-                if os.path.exists(cache_filename):
+            else:                
+                pdf_cache_filename = self.get_pdf_cache_filename(sha256_hash)
+                if os.path.exists(pdf_cache_filename):
                     try:
-                        with open(cache_filename, 'r', encoding='utf-8') as f:
+                        with open(pdf_cache_filename, 'r', encoding='utf-8') as f:
                             pdf_text = f.read()
                         return pdf_text, False # Return cached text, index not changed
                     except Exception as e:
                         print()
-                        self.log.warning(f"Failed to read PDF cache file {cache_filename} for {descriptor}: {e}. Re-extracting.")
+                        self.log.warning(f"Failed to read PDF cache file {pdf_cache_filename} for {full_path}: {e}. Re-extracting.")
                 else:
                     print()
-                    self.log.warning(f"PDF cache index points to non-existent file {cache_filename} for {descriptor}. Re-extracting.")
-            elif sha256_hash != cached_info['sha256_hash'] or current_file_size != cached_info['file_size']:
-                print()
-                self.log.info(f"PDF file size changed for {descriptor} at {full_path}, re-importing text.")
-            else: # Size matches, not failed, but filename missing? Inconsistent.
-                print()
-                self.log.warning(f"Inconsistent PDF cache state for {descriptor}. Re-extracting.")
+                    self.log.warning(f"PDF cache index points to non-existent file {pdf_cache_filename} for {full_path}. Re-extracting.")
 
         if pdf_text is None:
             extracted_text: str | None = None
@@ -300,7 +294,7 @@ class VectorStore:
                 if combined_text.strip() != "" and len(combined_text.strip()) > 7:
                     extracted_text = combined_text
             except Exception as e:
-                self.log.info(f"Failed pymupdf extraction for {descriptor}: {e}", exc_info=True)
+                self.log.info(f"Failed pymupdf extraction for {full_path}: {e}", exc_info=True)
                 
             if extracted_text is None:
                 try:
@@ -308,36 +302,28 @@ class VectorStore:
                     if md_text and md_text.strip():
                         extracted_text = md_text # Use the markdown text
                 except Exception as e:
-                    self.log.error(f"Failed pymupdf4llm fallback extraction for {descriptor}: {e}", exc_info=True)
+                    self.log.error(f"Failed pymupdf4llm fallback extraction for {full_path}: {e}", exc_info=True)
 
             if extracted_text is None:
-                if descriptor in self.pdf_index:
-                    self.pdf_index[descriptor]["previous_failure"] = True
+                if sha256_hash in self.pdf_index:
+                    self.pdf_index[sha256_hash]["previous_failure"] = True
+                    index_changed = True
                 else:
-                    cache_entry = PDFIndex({'filename': "", 'file_size': current_file_size, 'sha256_hash': sha256_hash, 'previous_failure': True})
-                    self.pdf_index[descriptor] = cache_entry
+                    cache_entry = PDFIndex({'file_size': current_file_size, 'previous_failure': True})
+                    self.pdf_index[sha256_hash] = cache_entry
                     index_changed = True
                 return None, index_changed
             else:
                 pdf_text = extracted_text
 
-            cache_entry: PDFIndex
-            if descriptor in self.pdf_index:
-                cache_entry = self.pdf_index[descriptor]
-                cache_entry['file_size'] = current_file_size
-                cache_entry['sha256_hash'] = sha256_hash
-                cache_entry['previous_failure'] = False
-            else:
-                cache_entry = PDFIndex({
-                    'filename': str(uuid.uuid4()) + ".txt",
+            cache_entry = PDFIndex({
                     'file_size': current_file_size,
-                    'sha256_hash': sha256_hash,
                     'previous_failure': False
                 })
-            self.pdf_index[descriptor] = cache_entry
+            self.pdf_index[sha256_hash] = cache_entry
 
-            cache_filename = os.path.join(self.pdf_cache_path, cache_entry['filename'])
-            with open(cache_filename, 'w') as f:
+            pdf_cache_filename = self.get_pdf_cache_filename(sha256_hash)
+            with open(pdf_cache_filename, 'w') as f:
                 _ = f.write(pdf_text)
             index_changed = True
 
@@ -349,7 +335,7 @@ class VectorStore:
             old_library_size = len(list(self.library.keys()))
             last_saved = time.time()
 
-            existing_descriptors: list[str] = list(self.library.keys())
+            existing_hashes: list[str] = list(self.library.keys())
             abort_scan = False
             pdf_cache_hits = 0
             for source in self.config['vector_sources']:
@@ -401,19 +387,12 @@ class VectorStore:
 
                         file_count += 1
                         full_path = os.path.join(root, filename)
-                        relative_path = os.path.relpath(full_path, source_path)
-                        descriptor = "{" + source['name'] + "}" + relative_path                        
                         sha256_hash = VectorStore._get_sha256(full_path)
 
-                        print(f"\r {file_count}/{source_file_count} | {descriptor[:80]:80s}", end="")
+                        print(f"\r {file_count}/{source_file_count} | {full_path[-80:]:80s}", end="")
                         
-                        if descriptor in self.library:
-                            existing_entry: LibraryEntry | None = self.library[descriptor]
-                            if sha256_hash == existing_entry['sha256_hash']:
-                                existing_descriptors.remove(descriptor)
-                                continue
-                        else:
-                            existing_entry = None
+                        if sha256_hash in self.library:
+                            existing_hashes.remove(sha256_hash)
 
                         current_text: str | None = None
                         if ext in ['md', 'txt']:
@@ -421,7 +400,7 @@ class VectorStore:
                                 current_text = f.read()
                             print(" TEXT   ", end="")
                         elif ext == 'pdf':
-                            current_text, pdf_index_changed_during_get = self.get_pdf_text(descriptor, full_path, sha256_hash)
+                            current_text, pdf_index_changed_during_get = self.get_pdf_text(full_path, sha256_hash)
                             if pdf_index_changed_during_get is True:
                                 pdf_index_changed = True
                                 print(" NEW PDF", end="")
@@ -439,12 +418,11 @@ class VectorStore:
 
                         if current_text is None:
                             self.log.error(f"{full_path} has no content or doesnt exist!")
-                            existing_descriptors.remove(descriptor)
+                            existing_hashes.remove(sha256_hash)
                             continue
                         
-                        self.library[descriptor] = LibraryEntry({'source_name': source['name'], 'filename': filename, 'sha256_hash': sha256_hash, 'icon': icon, 'text': current_text})
+                        self.library[sha256_hash] = LibraryEntry({'source_name': source['name'], 'filename': filename, 'icon': icon, 'text': current_text})
                         library_changed = True
-
                         
                         if time.time() - last_saved > 180:
                             self.save_library()
@@ -463,14 +441,15 @@ class VectorStore:
         entry_count = 0
         orphan_count = 0
         missing_count = 0
-        for cache_entry_descriptor in self.pdf_index:
-            cache_entry = self.pdf_index[cache_entry_descriptor]
+        for cache_entry_hash in self.pdf_index:
+            cache_entry = self.pdf_index[cache_entry_hash]
             entry_count += 1
             if cache_entry['previous_failure'] is True:
                 failure_count += 1
-            if cache_entry_descriptor not in self.library:
+            if cache_entry_hash not in self.library:
                 orphan_count += 1
-            if os.path.exists(os.path.join(self.pdf_cache_path, cache_entry['filename'])) is False:
+            pdf_cache_filename = self.get_pdf_cache_filename(cache_entry_hash)
+            if os.path.exists(pdf_cache_filename) is False:
                 missing_count += 1
         print(f"PDF cache entries:   {entry_count}")
         print(f"PDF failures:        {failure_count}")
@@ -506,6 +485,6 @@ class VectorStore:
         self.log.info(f"Model {new_model} active")
         self.config['embeddings_model_name'] = new_model
         self.config_changed = True
-        self.save_config()
+        self.save_config(self.config)
         
         
