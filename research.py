@@ -26,7 +26,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
             
             if command == 'sync':
                 log.info("Starting sync...")
-                ds.sync_texts()
+                ds.sync_texts(arguments)
             elif command == 'check':
                 ds.check(arguments)
             elif command == 'list':
@@ -47,13 +47,26 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 else:
                     log.error(f"Invalid index {arguments}, integer required, use 'list models' for valid range")
             elif command == 'index':
+                if ds.local_update_required() is True:
+                    if 'force' not in arguments.split(' '):
+                        log.warning("Remote data is newer than local data! Please use import first! (or override with 'force'")
+                        continue
+                    else:
+                        log.warning("Version override, starting indexing")
                 vs.index(ds.library)
             elif command == 'search':
                 vs.search(arguments, ds.library)
             elif command == 'publish':
-                ds.publish(arguments)
+                _ = ds.publish(arguments)
             elif command == 'import':
-                ds.import_local(arguments)
+                if ds.import_local(arguments) is True:
+                    log.info("Import successful, reloading data...")
+                    del ds
+                    del vs
+                    ds = DocumentStore()
+                    vs = VectorStore(ds.storage_path, ds.config_path)
+                else:
+                    log.error("Import failed")
             elif command == 'help':
                 print("Use 'list [models|sources]', 'sync', 'check [pdf]', 'select [model-index]', 'index', 'search <search-string>', 'publish', 'import'")
             elif command == 'exit' or command == 'quit':
@@ -67,6 +80,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     log = logging.getLogger("ResearchCLI")
+    log.info("Local Research v1.0")
 
     ds = DocumentStore()
     vs = VectorStore(ds.storage_path, ds.config_path)

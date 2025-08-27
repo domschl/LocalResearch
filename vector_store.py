@@ -56,6 +56,10 @@ class EmbeddingModel(TypedDict):
     chunk_overlap: int
     batch_multiplier: int
 
+    
+class SequenceVersion(TypedDict):
+    sequence: int
+
 
 def get_files_of_extensions(path:str, extensions: list[str]):
     result: list[str] = []
@@ -396,6 +400,8 @@ class DocumentStore:
         if os.path.isdir(self.storage_path) is False:
             os.makedirs(self.storage_path)
         self.library_file:str = os.path.join(self.storage_path, "document_library.json")
+        self.sequence_file:str = os.path.join(self.storage_path, "version_seq.json")
+        self.remote_sequence_file:str = os.path.join(self.config['publish_path'], "version_seq.json")
         self.pdf_cache_path: str = os.path.join(self.storage_path, "pdf_cache")
         if os.path.isdir(self.pdf_cache_path) is False:
             os.makedirs(self.pdf_cache_path, exist_ok=True)
@@ -444,6 +450,31 @@ class DocumentStore:
             self.log.error("Config-file update interrupted, not updated.")
             os.remove(temp_path)
             raise e
+
+    def load_sequence_versions(self) -> tuple[int,int]:
+        try:
+            with open(self.remote_sequence_file, 'r') as f:
+                remote_sequence: SequenceVersion = cast(SequenceVersion, json.load(f))
+        except:
+            remote_sequence = SequenceVersion({'sequence': 0})
+        try:
+            with open(self.sequence_file, 'r') as f:
+                local_sequence: SequenceVersion = cast(SequenceVersion, json.load(f))
+        except:
+            local_sequence = SequenceVersion({'sequence': 1})
+        return (remote_sequence['sequence'], local_sequence['sequence'])
+
+    def write_local_sequence_version(self, seq_no: int):
+        local_sequence = SequenceVersion({'sequence': seq_no})
+        with open(self.sequence_file, 'w') as f:
+            json.dump(local_sequence, f)
+
+    def local_update_required(self) -> bool:
+        remote, local = self.load_sequence_versions()
+        if remote > local:
+            return True
+        else:
+            return False
         
     def load_library(self):
         print("Loading library data...", end="", flush=True)
@@ -624,7 +655,13 @@ class DocumentStore:
             return True
         return False
     
-    def sync_texts(self):
+    def sync_texts(self, parameters:str):
+        if self.local_update_required() is True:
+            if 'force' not in parameters.split(' '):
+                self.log.warning("Please first update local data using 'import', since remote has newer data! (use 'force' to override)")
+                return
+            else:
+                self.log.warning("Override active, syncing even so remote has newer data!")
         library_changed = False
         pdf_index_changed = False
         old_library_size = len(list(self.library.keys()))
@@ -828,10 +865,22 @@ class DocumentStore:
                     print(f" {0:5d} |", end="")
             print(f"                                  |")
 
-    def publish(self, _parameters:str) -> bool:
+    def publish(self, parameters:str) -> bool:
         if self.publish_path is None:
             self.log.error(f"'publish' functionality is disabled, no valid 'publish_path' defined in config {self.config_file}")
             return False
+        if self.local_update_required() is True:
+            if 'force' not in parameters.split(' '):
+                self.log.warning("Remote version is newer than local version, publish aborted. Use 'force' to override!")
+                return False
+            else:
+                self.log.warning("Override active, publishing older local version over newer remote version!")
+                remote, local = self.load_sequence_versions()
+                self.write_local_sequence_version(remote)
+
+        remote, local = self.load_sequence_versions()
+        self.write_local_sequence_version(local+1)
+                
         src = self.storage_path
         if src.endswith('/') is False:
             src += '/'
@@ -845,10 +894,17 @@ class DocumentStore:
             return False
         return True
 
-    def import_local(self, _parameters:str) -> bool:
+    def import_local(self, parameters:str) -> bool:
         if self.publish_path is None:
             self.log.error(f"'import' functionality is disabled, no valid 'publish_path' defined in config {self.config_file}")
             return False
+        remote, local = self.load_sequence_versions()
+        if local>remote:
+            if 'force' not in parameters.split(' '):
+                self.log.warning("Local data has newer version than remote data, not importing. Use 'force' to override!")
+                return False
+            else:
+                self.log.warning("Override active, importing older version from remote!")
         src = self.publish_path
         if src.endswith('/') is False:
             src += '/'
