@@ -376,6 +376,12 @@ class VectorStore:
         print()
         if best_doc is not None and best_chunk is not None:
             result_text = self.get_chunk(best_doc['text'], best_chunk, self.model['chunk_size'], self.model['chunk_overlap'])
+            replacers = [("\n", " "), ("\t", " "), ("  ", " ")]
+            old_text = ""
+            while old_text != result_text:
+                old_text = result_text
+                for rep in replacers:
+                    result_text = result_text.replace(rep[0], rep[1])            
             print(result_text)
             
     
@@ -869,9 +875,6 @@ class DocumentStore:
             print(f"                                  |")
 
     def publish(self, parameters:str) -> bool:
-        if self.publish_path is None:
-            self.log.error(f"'publish' functionality is disabled, no valid 'publish_path' defined in config {self.config_file}")
-            return False
         if self.local_update_required() is True:
             if 'force' not in parameters.split(' '):
                 self.log.warning("Remote version is newer than local version, publish aborted. Use 'force' to override!")
@@ -900,9 +903,6 @@ class DocumentStore:
         return True
 
     def import_local(self, parameters:str) -> bool:
-        if self.publish_path is None:
-            self.log.error(f"'import' functionality is disabled, no valid 'publish_path' defined in config {self.config_file}")
-            return False
         remote, local = self.load_sequence_versions()
         if local>remote:
             if 'force' not in parameters.split(' '):
