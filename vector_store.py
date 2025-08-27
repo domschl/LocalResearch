@@ -890,7 +890,7 @@ class DocumentStore:
         dest = self.publish_path
         if dest.endswith('/') is False:
             dest += '/'
-        cmd = ['rsync','-avxh', '--exclude', '.DS_Store', src, dest, '--delete']
+        cmd = ['rsync','-avxh', '--exclude', '.*', src, dest, '--delete']
         result = subprocess.run(cmd, stderr=subprocess.PIPE)
         if result.returncode != 0:
             self.log.error(f"Failure: {result.stderr}")
@@ -916,7 +916,7 @@ class DocumentStore:
         dest = self.storage_path
         if dest.endswith('/') is False:
             dest += '/'
-        cmd = ['rsync','-avxh', '--exclude', '.DS_Store', src, dest, '--delete']
+        cmd = ['rsync','-avxh', '--exclude', '.*', src, dest, '--delete']
         result = subprocess.run(cmd, stderr=subprocess.PIPE)
         if result.returncode != 0:
             self.log.error(f"Failure: {result.stderr}")
