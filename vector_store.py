@@ -359,7 +359,7 @@ class VectorStore:
         best_doc: LibraryEntry | None = None
         for tensor_file in tensor_file_list:
             tensor_path = os.path.join(path, tensor_file)
-            tensor:torch.Tensor = cast(torch.Tensor, torch.load(tensor_path)).to(device)
+            tensor:torch.Tensor = cast(torch.Tensor, torch.load(tensor_path, map_location=device))
             cosines = torch.matmul(search_tensor, tensor.T).T
             max_ind:int = int(torch.argmax(cosines).item())
             cosine:float = cosines[max_ind].item()
@@ -838,7 +838,7 @@ class DocumentStore:
         dest = self.publish_path
         if dest.endswith('/') is False:
             dest += '/'
-        cmd = ['rsync','-avxh', '--exclude', '.DS_Store', src, dest]
+        cmd = ['rsync','-avxh', '--exclude', '.DS_Store', src, dest, '--delete']
         result = subprocess.run(cmd, stderr=subprocess.PIPE)
         if result.returncode != 0:
             self.log.error(f"Failure: {result.stderr}")
@@ -855,7 +855,7 @@ class DocumentStore:
         dest = self.storage_path
         if dest.endswith('/') is False:
             dest += '/'
-        cmd = ['rsync','-avxh', '--exclude', '.DS_Store', src, dest]
+        cmd = ['rsync','-avxh', '--exclude', '.DS_Store', src, dest, '--delete']
         result = subprocess.run(cmd, stderr=subprocess.PIPE)
         if result.returncode != 0:
             self.log.error(f"Failure: {result.stderr}")
