@@ -50,8 +50,12 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 vs.index(ds.library)
             elif command == 'search':
                 vs.search(arguments, ds.library)
+            elif command == 'publish':
+                ds.publish(arguments)
+            elif command == 'import':
+                ds.import_local(arguments)
             elif command == 'help':
-                print("Use 'list [models|sources]', 'sync', 'check [pdf]', 'select [model-index]'")
+                print("Use 'list [models|sources]', 'sync', 'check [pdf]', 'select [model-index]', 'index', 'search <search-string>', 'publish', 'import'")
             elif command == 'exit' or command == 'quit':
                 break
 

@@ -7,6 +7,7 @@ import tempfile
 from typing import TypedDict, cast
 import io
 import base64
+import subprocess
         
 from PIL import Image
 import pymupdf  # pyright: ignore[reportMissingTypeStubs]
@@ -24,6 +25,7 @@ class DocumentSource(TypedDict):
 
 class DocumentConfig(TypedDict):
     document_sources: list[DocumentSource]
+    publish_path: str
 
 
 class VectorConfig(TypedDict):
@@ -385,6 +387,11 @@ class DocumentStore:
         self.library: dict[str, LibraryEntry] = {}
         self.pdf_index:dict[str, PDFIndex] = {}
 
+        self.publish_path: str|None = os.path.expanduser(self.config['publish_path'])
+        if os.path.isdir(self.publish_path) is False:
+            self.log.warning(f"publish_path: {self.publish_path} is not available, 'import' and 'publish' functionality disabled.")
+            self.publish_path = None
+
         self.storage_path: str = os.path.join(os.path.expanduser("~/.local/share"), "local_research")
         if os.path.isdir(self.storage_path) is False:
             os.makedirs(self.storage_path)
@@ -419,7 +426,8 @@ class DocumentStore:
                         'path': '~/Notes',
                         'file_types': ['md']
                     })
-                ]            
+                ],
+                'publish_path': '~/LocalResearch'
                 })
             self.save_config(config)
             self.log.warning(f"Default configuration created at {self.config_file}, please review!")
@@ -819,3 +827,38 @@ class DocumentStore:
                 else:
                     print(f" {0:5d} |", end="")
             print(f"                                  |")
+
+    def publish(self, _parameters:str) -> bool:
+        if self.publish_path is None:
+            self.log.error(f"'publish' functionality is disabled, no valid 'publish_path' defined in config {self.config_file}")
+            return False
+        src = self.storage_path
+        if src.endswith('/') is False:
+            src += '/'
+        dest = self.publish_path
+        if dest.endswith('/') is False:
+            dest += '/'
+        cmd = ['rsync','-avxh', '--exclude', '.DS_Store', src, dest]
+        result = subprocess.run(cmd, stderr=subprocess.PIPE)
+        if result.returncode != 0:
+            self.log.error(f"Failure: {result.stderr}")
+            return False
+        return True
+
+    def import_local(self, _parameters:str) -> bool:
+        if self.publish_path is None:
+            self.log.error(f"'import' functionality is disabled, no valid 'publish_path' defined in config {self.config_file}")
+            return False
+        src = self.publish_path
+        if src.endswith('/') is False:
+            src += '/'
+        dest = self.storage_path
+        if dest.endswith('/') is False:
+            dest += '/'
+        cmd = ['rsync','-avxh', '--exclude', '.DS_Store', src, dest]
+        result = subprocess.run(cmd, stderr=subprocess.PIPE)
+        if result.returncode != 0:
+            self.log.error(f"Failure: {result.stderr}")
+            return False
+        return True
+    
