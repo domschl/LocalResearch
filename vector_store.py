@@ -391,17 +391,16 @@ class DocumentStore:
         self.library: dict[str, LibraryEntry] = {}
         self.pdf_index:dict[str, PDFIndex] = {}
 
-        self.publish_path: str|None = os.path.expanduser(self.config['publish_path'])
+        self.publish_path: str = os.path.expanduser(self.config['publish_path'])
         if os.path.isdir(self.publish_path) is False:
-            self.log.warning(f"publish_path: {self.publish_path} is not available, 'import' and 'publish' functionality disabled.")
-            self.publish_path = None
+            os.makedirs(self.publish_path)
 
         self.storage_path: str = os.path.join(os.path.expanduser("~/.local/share"), "local_research")
         if os.path.isdir(self.storage_path) is False:
             os.makedirs(self.storage_path)
         self.library_file:str = os.path.join(self.storage_path, "document_library.json")
         self.sequence_file:str = os.path.join(self.storage_path, "version_seq.json")
-        self.remote_sequence_file:str = os.path.join(self.config['publish_path'], "version_seq.json")
+        self.remote_sequence_file:str = os.path.join(self.publish_path, "version_seq.json")
         self.pdf_cache_path: str = os.path.join(self.storage_path, "pdf_cache")
         if os.path.isdir(self.pdf_cache_path) is False:
             os.makedirs(self.pdf_cache_path, exist_ok=True)
@@ -411,7 +410,10 @@ class DocumentStore:
         self.icon_height:int = 320
         
         self.load_library()
-        self.log.info("DocumentStore initialized")
+        remote, local = self.load_sequence_versions()
+        self.log.info(f"DocumentStore initialized: remote data version: {remote}, local version: {local}")
+        if self.local_update_required() is True:
+            self.log.info("Please use 'import' to acquire the latest data version")
 
     def get_config(self) -> DocumentConfig:
         if os.path.exists(self.config_file):
@@ -455,7 +457,8 @@ class DocumentStore:
         try:
             with open(self.remote_sequence_file, 'r') as f:
                 remote_sequence: SequenceVersion = cast(SequenceVersion, json.load(f))
-        except:
+        except Exception as e:
+            self.log.warning(f"Failed to get remote data version: {e}")
             remote_sequence = SequenceVersion({'sequence': 0})
         try:
             with open(self.sequence_file, 'r') as f:
@@ -892,6 +895,8 @@ class DocumentStore:
         if result.returncode != 0:
             self.log.error(f"Failure: {result.stderr}")
             return False
+        remote, local = self.load_sequence_versions()
+        self.log.info(f"Published successful remote version: {remote}, local version: {local}")
         return True
 
     def import_local(self, parameters:str) -> bool:
@@ -916,5 +921,7 @@ class DocumentStore:
         if result.returncode != 0:
             self.log.error(f"Failure: {result.stderr}")
             return False
+        remote, local = self.load_sequence_versions()
+        self.log.info(f"Import successful remote version: {remote}, local version: {local}")
         return True
     
