@@ -38,7 +38,6 @@ class VectorConfig(TypedDict):
 class LibraryEntry(TypedDict):
     source_name: str
     source_path: str
-    icon: str
     text: str
 
 
@@ -412,9 +411,6 @@ class DocumentStore:
             os.makedirs(self.pdf_cache_path, exist_ok=True)
         self.pdf_index_file: str = os.path.join(self.pdf_cache_path, "pdf_index.json")
 
-        self.icon_width:int = 240
-        self.icon_height:int = 320
-        
         self.load_library()
         remote, local = self.load_sequence_versions()
         self.log.info(f"DocumentStore initialized: remote data version: {remote}, local version: {local}")
@@ -447,6 +443,11 @@ class DocumentStore:
             self.log.warning(f"Default configuration created at {self.config_file}, please review!")
         self.config_changed = False
         return config
+
+    @staticmethod
+    def _get_sha256(filename:str):
+        with open(filename, 'rb', buffering=0) as f:
+            return hashlib.file_digest(f, 'sha256').hexdigest()
 
     def save_config(self, config: DocumentConfig):
         temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.config_file))
@@ -497,6 +498,29 @@ class DocumentStore:
                 self.pdf_index = json.load(f)
         else:
             self.pdf_index = {}
+            
+        # home = os.path.expanduser("~")
+        # if home.startswith('/Users'):
+        #     foreign_home = home.replace('/Users', '/home')
+        # else:
+        #     foreign_home = home.replace('/home', '/Users')
+        # upgraded = False
+        # for entry in self.library:
+        #     if 'icon' in self.library[entry]:
+        #         del self.library[entry]['icon']
+        #         upgraded = True
+        #     if self.library[entry]['source_path'].startswith(home):
+        #         self.library[entry]['source_path'] = '~' + self.library[entry]['source_path'][len(home):]
+        #         upgraded = True
+        #     elif self.library[entry]['source_path'].startswith(foreign_home):
+        #         self.library[entry]['source_path'] = '~' + self.library[entry]['source_path'][len(foreign_home):]
+        #         upgraded = True
+        # if upgraded is True:
+        #     print("upgraded... ", end="")
+        #     self.save_library()
+        # else:
+        #     print("not upgraded. ", end="")
+            
         print(" Done.")
 
     def save_library(self):
@@ -521,44 +545,6 @@ class DocumentStore:
             os.remove(temp_path)
             raise e
         print(" Done.")
-
-    @staticmethod
-    def _get_sha256(file_path: str) -> str:
-        sha256 = hashlib.sha256()
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(4096), b""):
-                sha256.update(chunk)
-        return sha256.hexdigest()
-
-    @staticmethod
-    def _encode_image_to_base64(image_path: str, width: int | None = None, height: int | None = None) -> str:
-        with Image.open(image_path) as img:
-            if width is not None or height is not None:
-                if width is None:
-                    aspect_ratio = img.width / img.height
-                    width = int(cast(int, height) * aspect_ratio)
-                elif height is None:
-                    aspect_ratio = img.height / img.width
-                    height = int(width * aspect_ratio)
-                img = img.resize((width, cast(int, height)), Image.LANCZOS)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
-            buffer = io.BytesIO()
-            img_format = img.format if img.format else 'PNG'
-            img.save(buffer, format=img_format)
-            _ = buffer.seek(0)
-            encoded_string = base64.standard_b64encode(buffer.getvalue()).decode('ascii')
-        return encoded_string
-
-    @staticmethod
-    def decode_base64_to_image(base64_string: str, output_format: str = "PNG", output_path: str | None = None) -> bytes | None:
-        image_data = base64.standard_b64decode(base64_string)
-        image = Image.open(io.BytesIO(image_data))
-        # Output format JPEG or PNG
-        if output_path:
-            image.save(output_path, format=output_format)
-            return None
-        img_byte_arr = io.BytesIO()
-        image.save(img_byte_arr, format=output_format)
-        return img_byte_arr.getvalue()
 
     def get_pdf_cache_filename(self, sha256_hash:str) -> str:
         basename = sha256_hash+".txt"
@@ -708,11 +694,15 @@ class DocumentStore:
 
                     file_count += 1
                     full_path = os.path.join(root, filename)
+                    if full_path.startswith(os.path.expanduser('~')):
+                        rel_path = '~'+full_path[len(os.path.expanduser('~')):]
+                    else:
+                        rel_path = full_path
                     sha256_hash = DocumentStore._get_sha256(full_path)
                     ext_with_dot = os.path.splitext(filename)[1]
                     ext = ext_with_dot[1:].lower() if ext_with_dot else ""
 
-                    if sha256_hash in self.library and full_path != self.library[sha256_hash]['source_path']:
+                    if sha256_hash in self.library and rel_path != self.library[sha256_hash]['source_path']:
                         if nl_required:
                             print()
                             nl_required = False
@@ -750,20 +740,12 @@ class DocumentStore:
                     else:
                         self.log.error(f"Handling for file-type {ext} not implemented!")
 
-                    icon:str = ""
-                    if is_calibre is True:
-                        calibre_icon_path = os.path.join(root, 'cover.jpg')
-                        if os.path.exists(calibre_icon_path):
-                            icon = DocumentStore._encode_image_to_base64(calibre_icon_path, self.icon_width, self.icon_height)
-                        else:
-                            self.log.warning(f"Calibre icon file {calibre_icon_path} not found.")
-
                     if current_text is None:
                         self.log.error(f"{full_path} has no content or doesnt exist!")
                         existing_hashes.remove(sha256_hash)
                         continue
-
-                    self.library[sha256_hash] = LibraryEntry({'source_name': source['name'], 'source_path': full_path, 'icon': icon, 'text': current_text})
+                                            
+                    self.library[sha256_hash] = LibraryEntry({'source_name': source['name'], 'source_path': rel_path, 'text': current_text})
                     library_changed = True
 
                     if time.time() - last_saved > 180:
