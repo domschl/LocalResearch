@@ -5,11 +5,8 @@ import time
 import hashlib
 import tempfile
 from typing import TypedDict, cast
-import io
-import base64
 import subprocess
         
-from PIL import Image
 import pymupdf  # pyright: ignore[reportMissingTypeStubs]
 import pymupdf4llm  # pyright: ignore[reportMissingTypeStubs]  # XXX currently locked to 0.19, otherwise export returns empty docs, requires investigation!
 import torch
@@ -485,7 +482,64 @@ class DocumentStore:
             return True
         else:
             return False
-        
+
+    def get_source_name_from_path(self, path:str) -> str|None:
+        full_path = os.path.expanduser(path)
+        for source in self.config['document_sources']:
+            if full_path.startswith(os.path.expanduser(source['path'])):
+                return source['name']
+        return None
+
+    def get_source_from_name(self, source_name:str) -> DocumentSource|None:
+        for source in self.config['document_sources']:
+            if source['name'] == source_name:
+                return source
+        return None
+    
+    def get_descriptor_from_path(self, path:str, source_name: str|None=None) ->str:
+        full_path = os.path.expanduser(path)
+        if source_name is None:
+            source_name = self.get_source_name_from_path(full_path)
+            if source_name is None:
+                self.log.error(f"Path {full_path} is not within a defined source!")
+                return full_path
+        source = self.get_source_from_name(source_name)
+        if source is None:
+            self.log.error(f"Invalid source_name {source_name} referenced for {full_path}")
+            return full_path
+        source_path = os.path.expanduser(source['path'])
+        if full_path.startswith(source_path):
+            descriptor = "{" + source['name'] + "}" + full_path[len(source_path):]
+        else:
+            self.log.error(f"Path {full_path} is not within source {source['name']}")
+            return full_path
+        return descriptor
+
+    def get_source_name_and_path_from_descriptor(self, descriptor: str) -> tuple[str,str]:
+        if len(descriptor)<3:
+            self.log.error(f"Expression >{descriptor}< is not a valid descriptor")
+            return ("", descriptor)
+        if descriptor[0] != '{':
+            self.log.error(f"Descriptor >{descriptor}< must start with " + "{")
+            return ("", descriptor)
+        ind = descriptor.find('}')
+        if ind == -1:
+            self.log.error(f"Descriptor >{descriptor}< name must end with " +"}")
+            return ("", descriptor)
+        source_name = descriptor[1:ind]
+        source = self.get_source_from_name(source_name)
+        if source is None:
+            self.log.error(f">{source_name}< is not a valid source in {descriptor}")
+            return "", descriptor
+        full_path = os.path.join(os.path.expanduser(source['path']), descriptor[ind+1:])
+        return source_name, full_path
+     
+    def get_path_from_descriptor(self, descriptor:str) -> str:
+        source, full_path = self.get_source_name_and_path_from_descriptor(descriptor)
+        if source == "":
+            return descriptor
+        return full_path
+    
     def load_library(self):
         print("Loading library data...", end="", flush=True)
         if os.path.exists(self.library_file):
@@ -499,27 +553,17 @@ class DocumentStore:
         else:
             self.pdf_index = {}
             
-        # home = os.path.expanduser("~")
-        # if home.startswith('/Users'):
-        #     foreign_home = home.replace('/Users', '/home')
-        # else:
-        #     foreign_home = home.replace('/home', '/Users')
-        # upgraded = False
-        # for entry in self.library:
-        #     if 'icon' in self.library[entry]:
-        #         del self.library[entry]['icon']
-        #         upgraded = True
-        #     if self.library[entry]['source_path'].startswith(home):
-        #         self.library[entry]['source_path'] = '~' + self.library[entry]['source_path'][len(home):]
-        #         upgraded = True
-        #     elif self.library[entry]['source_path'].startswith(foreign_home):
-        #         self.library[entry]['source_path'] = '~' + self.library[entry]['source_path'][len(foreign_home):]
-        #         upgraded = True
-        # if upgraded is True:
-        #     print("upgraded... ", end="")
-        #     self.save_library()
-        # else:
-        #     print("not upgraded. ", end="")
+        upgraded = False
+        for entry in self.library:
+            if self.library[entry]['source_path'].startswith('{') is False:
+                descriptor = self.get_descriptor_from_path(self.library[entry]['source_path'], self.library[entry]['source_name'])
+                self.library[entry]['source_path'] = descriptor
+                upgraded = True
+        if upgraded is True:
+            print("upgraded... ", end="")
+            self.save_library()
+        else:
+            print("not upgraded. ", end="")
             
         print(" Done.")
 
@@ -673,9 +717,6 @@ class DocumentStore:
                 break
             source_path = os.path.expanduser(source['path'])
             self.log.info(f"Scanning source '{source['name']}' at '{source_path}'...")
-            is_calibre: bool = False
-            if source['type'] == 'calibre_library':
-                is_calibre = True
             source_file_count = 0
             for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: self.log.warning(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
                 for filename in files:
@@ -694,15 +735,12 @@ class DocumentStore:
 
                     file_count += 1
                     full_path = os.path.join(root, filename)
-                    if full_path.startswith(os.path.expanduser('~')):
-                        rel_path = '~'+full_path[len(os.path.expanduser('~')):]
-                    else:
-                        rel_path = full_path
+                    descriptor = self.get_descriptor_from_path(full_path, source['name'])
                     sha256_hash = DocumentStore._get_sha256(full_path)
                     ext_with_dot = os.path.splitext(filename)[1]
                     ext = ext_with_dot[1:].lower() if ext_with_dot else ""
 
-                    if sha256_hash in self.library and rel_path != self.library[sha256_hash]['source_path']:
+                    if sha256_hash in self.library and descriptor != self.library[sha256_hash]['source_path']:
                         if nl_required:
                             print()
                             nl_required = False
@@ -745,7 +783,7 @@ class DocumentStore:
                         existing_hashes.remove(sha256_hash)
                         continue
                                             
-                    self.library[sha256_hash] = LibraryEntry({'source_name': source['name'], 'source_path': rel_path, 'text': current_text})
+                    self.library[sha256_hash] = LibraryEntry({'source_name': source['name'], 'source_path': descriptor, 'text': current_text})
                     library_changed = True
 
                     if time.time() - last_saved > 180:
