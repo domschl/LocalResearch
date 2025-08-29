@@ -16,7 +16,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
         try:
             # Get user input with a prompt
             line: str = input(">>> ")
-            ind = line.find(' ')
+            ind:int = line.find(' ')
             if ind != -1:
                 command = line[:ind].lower()
                 arguments = line[ind+1:]
@@ -33,7 +33,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 ds.list(arguments)
                 vs.list(arguments)
             elif command == 'select':
-                ind: int = -1
+                ind = -1
                 try:
                     ind = int(arguments)
                 except:
@@ -44,6 +44,26 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                         log.info("Model unchanged.")
                     else:
                         log.info(f"New active model is {new_model}")
+                else:
+                    log.error(f"Invalid index {arguments}, integer required, use 'list models' for valid range")
+            elif command == 'enable':
+                ind = -1
+                try:
+                    ind = int(arguments)
+                except:
+                    pass
+                if ind != -1:
+                    new_model = vs.enable(ind)
+                else:
+                    log.error(f"Invalid index {arguments}, integer required, use 'list models' for valid range")
+            elif command == 'disable':
+                ind = -1
+                try:
+                    ind = int(arguments)
+                except:
+                    pass
+                if ind != -1:
+                    new_model = vs.disable(ind)
                 else:
                     log.error(f"Invalid index {arguments}, integer required, use 'list models' for valid range")
             elif command == 'index':

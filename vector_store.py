@@ -33,7 +33,7 @@ class VectorConfig(TypedDict):
 
 class LibraryEntry(TypedDict):
     source_name: str
-    source_path: str
+    source_path: str  # descriptor
     text: str
 
 
@@ -50,6 +50,7 @@ class EmbeddingModel(TypedDict):
     chunk_size: int
     chunk_overlap: int
     batch_multiplier: int
+    enabled: bool
 
     
 class SequenceVersion(TypedDict):
@@ -71,6 +72,7 @@ def get_files_of_extensions(path:str, extensions: list[str]):
                 result.append(file)
     return result
 
+
 class VectorStore:
     def __init__(self, storage_path:str, config_path:str):
         self.log: logging.Logger = logging.getLogger("VectorStore")
@@ -80,6 +82,7 @@ class VectorStore:
             os.makedirs(self.config_path)
         self.config_changed: bool = False
         self.config_file:str = os.path.join(self.config_path, "vector_store.json")
+        self.model_file:str = os.path.join(self.config_path, "model_list.json")
         self.config: VectorConfig = self.get_config()
         self.embeddings_path:str = os.path.join(self.storage_path, "embeddings")
         if os.path.isdir(self.embeddings_path) is False:
@@ -98,53 +101,74 @@ class VectorStore:
         return os.path.join(self.embeddings_path, model_name)
 
     def get_model_list(self):
-        self.model_list = [
-            { # granite-107m
-                'model_hf_name': 'ibm-granite/granite-embedding-107m-multilingual',
-                'model_name': 'granite-embedding-107m-multilingual',
-                'emb_dim': 384, 
-                'max_input_token': 512,
-                'chunk_size': 2048, 
-                'chunk_overlap': 2048 // 3,
-                'batch_multiplier': 64,
-            },
-            {
-                'model_hf_name': 'ibm-granite/granite-embedding-278m-multilingual',
-                'model_name': 'granite-embedding-278m-multilingual',
-                'emb_dim': 768,
-                'max_input_token': 512,
-                'chunk_size': 2048,
-                'chunk_overlap': 2048 // 3,
-                'batch_multiplier': 32,
-            },
-            {
-                'model_hf_name': 'nomic-ai/nomic-embed-text-v2-moe',
-                'model_name': 'nomic-embed-text-v2-moe',
-                'emb_dim': 768,  #  Matryoshka Embeddings
-                'max_input_token': 512,
-                'chunk_size': 2048,
-                'chunk_overlap': 2048 // 3,
-                'batch_multiplier': 32,
-            },
-            {
-                'model_hf_name': 'sentence-transformers/all-MiniLM-L6-v2',
-                'model_name': 'all-MiniLM-L6-v2',
-                'emb_dim': 384,
-                'max_input_token': 512, # Use underlying model's limit or common practice
-                'chunk_size': 1024,     # Adjust based on token limit and desired context
-                'chunk_overlap': 1024 // 3,
-                'batch_multiplier': 128,
-            },
-            {
-                'model_hf_name': 'Qwen/Qwen3-Embedding-0.6B',
-                'model_name': 'Qwen3-Embedding-0.6B',
-                'emb_dim': 1024,
-                'max_input_token': 512,
-                'chunk_size': 1024,     # Adjust based on token limit and desired context
-                'chunk_overlap': 1024 // 3,
-                'batch_multiplier': 1,
-            },
-        ]
+        if os.path.exists(self.model_file):
+            with open(self.model_file, "r") as f:
+                self.model_list = cast(list[EmbeddingModel], json.load(f))
+        else:
+            self.model_list = [
+                { # granite-107m
+                    'model_hf_name': 'ibm-granite/granite-embedding-107m-multilingual',
+                    'model_name': 'granite-embedding-107m-multilingual',
+                    'emb_dim': 384, 
+                    'max_input_token': 512,
+                    'chunk_size': 2048, 
+                    'chunk_overlap': 2048 // 3,
+                    'batch_multiplier': 64,
+                    'enabled': True,
+                },
+                {
+                    'model_hf_name': 'ibm-granite/granite-embedding-278m-multilingual',
+                    'model_name': 'granite-embedding-278m-multilingual',
+                    'emb_dim': 768,
+                    'max_input_token': 512,
+                    'chunk_size': 2048,
+                    'chunk_overlap': 2048 // 3,
+                    'batch_multiplier': 32,
+                    'enabled': True,
+                },
+                {
+                    'model_hf_name': 'nomic-ai/nomic-embed-text-v2-moe',
+                    'model_name': 'nomic-embed-text-v2-moe',
+                    'emb_dim': 768,  #  Matryoshka Embeddings
+                    'max_input_token': 512,
+                    'chunk_size': 2048,
+                    'chunk_overlap': 2048 // 3,
+                    'batch_multiplier': 32,
+                    'enabled': True,
+                },
+                {
+                    'model_hf_name': 'sentence-transformers/all-MiniLM-L6-v2',
+                    'model_name': 'all-MiniLM-L6-v2',
+                    'emb_dim': 384,
+                    'max_input_token': 512, # Use underlying model's limit or common practice
+                    'chunk_size': 1024,     # Adjust based on token limit and desired context
+                    'chunk_overlap': 1024 // 3,
+                    'batch_multiplier': 128,
+                    'enabled': True,
+                },
+                {
+                    'model_hf_name': 'Qwen/Qwen3-Embedding-0.6B',
+                    'model_name': 'Qwen3-Embedding-0.6B',
+                    'emb_dim': 1024,
+                    'max_input_token': 512,
+                    'chunk_size': 1024,     # Adjust based on token limit and desired context
+                    'chunk_overlap': 1024 // 3,
+                    'batch_multiplier': 1,
+                    'enabled': False,
+                },
+            ]
+            self.save_model_list()
+
+    def save_model_list(self):
+        temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.model_file))
+        try:
+            with os.fdopen(temp_fd, 'w') as temp_file:            
+                json.dump(self.model_list, temp_file, indent=4)
+            os.replace(temp_path, self.model_file)  # atomic update
+        except Exception as e:
+            self.log.error("Model-list-file update interrupted, not updated.")
+            os.remove(temp_path)
+            raise e
 
     def get_config(self) -> VectorConfig:
         if os.path.exists(self.config_file):
@@ -166,7 +190,7 @@ class VectorStore:
         temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.config_file))
         try:
             with os.fdopen(temp_fd, 'w') as temp_file:            
-                json.dump(config, temp_file)
+                json.dump(config, temp_file, indent=4)
             os.replace(temp_path, self.config_file)  # atomic update
         except Exception as e:
             self.log.error("Config-file update interrupted, not updated.")
@@ -181,10 +205,14 @@ class VectorStore:
             path = self.model_embedding_path(model['model_name'])
             cnt = len(get_files_of_extensions(path, ['pt']))
             if model['model_name'] == current_model:
-                print(f" >{ind+1}<  | {cnt:10d} | {model['model_name']}")
+                print(f" >{ind+1}<  | {cnt:10d} | {model['model_name']} ", end="")
             else:
-                print(f"  {ind+1}   | {cnt:10d} | {model['model_name']}")
-        print("  Use 'select <index>' to change the active model")
+                print(f"  {ind+1}   | {cnt:10d} | {model['model_name']} ", end="")
+            if model['enabled'] is False:
+                print("[DISABLED]")
+            else:
+                print()
+        print("  Use 'select <index>' to change the active model, 'enable|disable <index>' to activate/deactivate")
 
     def list(self, mode: str):
         if mode == "" or 'models' in mode:
@@ -194,9 +222,18 @@ class VectorStore:
         if ind<1 or ind>len(self.model_list):
             self.log.error(f"Invalid model index {ind}, use 'list models' to get valid indices")
             return None
+        if self.model_list[ind-1]['enabled'] is False:
+            if self.engine is not None:
+                del self.engine
+                self.engine = None
+            if self.model is not None:
+                del self.model
+                self.model = None
+            self.log.error(f"Model {self.model_list[ind-1]['model_name']} is disabled, use 'enable <index>' to enable")
+            return None
         new_model = self.model_list[ind-1]['model_name']
-        if new_model == self.config['embeddings_model_name']:
-            self.log.info("Model {new_model} was already active")
+        if new_model == self.config['embeddings_model_name'] and self.model is not None and self.engine is not None:
+            self.log.info(f"Model {new_model} was already active")
             return None
         if self.model is not None:
             del self.model
@@ -209,6 +246,38 @@ class VectorStore:
         self.config_changed = True
         self.save_config(self.config)
         return new_model
+
+    def enable(self, ind: int) -> str | None:
+        if ind<1 or ind>len(self.model_list):
+            self.log.error(f"Invalid model index {ind}, use 'list models' to get valid indices")
+            return None
+        if self.model_list[ind-1]['enabled'] is False:
+            self.model_list[ind-1]['enabled'] = True
+            self.save_model_list()
+            self.log.info(f"Model {self.model_list[ind-1]['model_name']} enabled, use 'select {ind}' to start using it, 'list models' for overview'")
+            return self.model_list[ind-1]['model_name']
+        else:
+            self.log.warning(f"Model {self.model_list[ind-1]['model_name']} was already enabled")
+
+    def disable(self, ind: int) -> str | None:
+        if ind<1 or ind>len(self.model_list):
+            self.log.error(f"Invalid model index {ind}, use 'list models' to get valid indices")
+            return None
+        if self.model_list[ind-1]['enabled'] is True:
+            self.model_list[ind-1]['enabled'] = False
+            self.save_model_list()
+            self.log.info(f"Model {self.model_list[ind-1]['model_name']} disabled")
+            if self.model_list[ind-1]['model_name'] == self.config['embeddings_model_name']:
+                if self.model is not None:
+                    del self.model
+                    self.model = None
+                if self.engine is not None:
+                    del self.engine
+                    self.engine = None
+                self.log.warning(f"Model {self.model_list[ind-1]['model_name']} was currently active, use 'list models' and 'select <index>' to active alternative")
+            return self.model_list[ind-1]['model_name']
+        else:
+            self.log.warning(f"Model {self.model_list[ind-1]['model_name']} was already disabled")
 
     def get_embedding_filename(self, hash:str) -> str:
         current_embeddings_path = os.path.join(self.embeddings_path, self.config['embeddings_model_name'])
@@ -239,12 +308,22 @@ class VectorStore:
         if self.model is None:
             for model in self.model_list:
                 if model['model_name'] == self.config['embeddings_model_name']:
-                    self.model = model
+                    if model['enabled'] is False:
+                        if self.engine is not None:
+                            del self.engine
+                            self.engine = None
+                        if self.model is not None:
+                            del self.model
+                            self.model = None
+                        self.log.error(f"Model {self.config['embeddings_model_name']} is disabled, use 'list models' and 'select <index>' to activate a different model.")
+                        return
+                    else:
+                        self.model = model
         if self.model is None:
             self.log.error(f"Invalid model {self.config['embeddings_model_name']} could not be identified, load_model failed!")
             return
         if self.engine is None:
-            self.engine = SentenceTransformer(self.model['model_hf_name'], trust_remote_code=self.config['embeddings_model_trust_code']).to(self.device)          
+            self.engine = SentenceTransformer(self.model['model_hf_name'], trust_remote_code=self.config['embeddings_model_trust_code']).to(self.device)
 
     @staticmethod
     def get_chunk_ptr(index: int, chunk_size: int, chunk_overlap: int) -> int:
@@ -388,6 +467,7 @@ class DocumentStore:
         if os.path.isdir(self.config_path) is False:
             os.makedirs(self.config_path)            
         self.config_file:str = os.path.join(self.config_path, "document_store.json")
+        self.valid_source_types: list[str] = ['calibre', 'md_notes']
         self.config: DocumentConfig = self.get_config()
         self.library: dict[str, LibraryEntry] = {}
         self.pdf_index:dict[str, PDFIndex] = {}
@@ -426,7 +506,7 @@ class DocumentStore:
                         'file_types': ['txt', 'pdf']
                     }),
                     'Notes': DocumentSource({
-                        'type': 'folder',
+                        'type': 'md_notes',
                         'path': '~/Notes',
                         'file_types': ['md']
                     })
@@ -542,17 +622,17 @@ class DocumentStore:
         else:
             self.pdf_index = {}
             
-        upgraded = False
-        for entry in self.library:
-            if self.library[entry]['source_path'].startswith('{') is False:
-                descriptor = self.get_descriptor_from_path(self.library[entry]['source_path'], self.library[entry]['source_name'])
-                self.library[entry]['source_path'] = descriptor
-                upgraded = True
-        if upgraded is True:
-            print("upgraded... ", end="")
-            self.save_library()
-        else:
-            print("not upgraded. ", end="")
+#        upgraded = False
+#        for entry in self.library:
+#            if self.library[entry]['source_path'].startswith('{') is False:
+#                descriptor = self.get_descriptor_from_path(self.library[entry]['source_path'], self.library[entry]['source_name'])
+#                self.library[entry]['source_path'] = descriptor
+#                upgraded = True
+#        if upgraded is True:
+#            print("upgraded... ", end="")
+#            self.save_library()
+#        else:
+#            print("not upgraded. ", end="")
             
         print(" Done.")
 
@@ -703,6 +783,9 @@ class DocumentStore:
         last_status = time.time()
         for source_name in self.config['document_sources']:
             source = self.config['document_sources'][source_name]
+            if source['type'] not in self.valid_source_types:
+                self.log.error(f"{source_name} has invalid type {source['type']}, use one of {self.valid_source_types}")
+                return
             if abort_scan: 
                 break
             source_path = os.path.expanduser(source['path'])
@@ -808,6 +891,7 @@ class DocumentStore:
         failure_count = 0
         entry_count = 0
         orphan_count = 0
+        orphan2_count = 0
         missing_count = 0
         for cache_entry_hash in self.pdf_index:
             cache_entry = self.pdf_index[cache_entry_hash]
@@ -819,17 +903,26 @@ class DocumentStore:
             pdf_cache_filename = self.get_pdf_cache_filename(cache_entry_hash)
             if os.path.exists(pdf_cache_filename) is False:
                 missing_count += 1
+        cache_files = get_files_of_extensions(self.pdf_cache_path, ['pdf'])
+        for cache_file in cache_files:
+            hash = os.path.splitext(cache_file)[0]
+            if hash not in self.pdf_index:
+                orphan2_count += 1
+                
         print(f"PDF cache entries:   {entry_count}")
         print(f"PDF failures:        {failure_count}")
-        print(f"PDF cache orphans:   {orphan_count}")
+        print(f"PDF cache orphans:   {orphan_count}+{orphan2_count}")
         print(f"Missing cache files: {missing_count}")
+
+    def check_indices(self):
+        self.log.warning("Index check Not implemented yet.")
         
     def check(self, mode: str | None = None):
         if mode is None or mode == "" or 'pdf' in mode.lower():
             self.log.info("Checking PDF cache consistency")
             self.check_pdf_cache()
-        else:
-            self.log.error(f"Use 'check <mode>', valid modes are: 'pdf'")
+        if mode is None or mode == "" or 'index' in mode.lower():
+            self.check_indices()
         
     def list(self, mode: str):
         if mode == "" or 'sources' in mode:
