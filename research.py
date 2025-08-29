@@ -29,9 +29,11 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 ds.sync_texts(arguments)
             elif command == 'check':
                 ds.check(arguments)
+                doc_hashes: list[str] = list(ds.library.keys())
+                vs.check(arguments, doc_hashes)
             elif command == 'list':
-                ds.list(arguments)
-                vs.list(arguments)
+                ds.list_info(arguments)
+                vs.list_info(arguments)
             elif command == 'select':
                 ind = -1
                 try:

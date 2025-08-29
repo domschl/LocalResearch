@@ -214,10 +214,38 @@ class VectorStore:
                 print()
         print("  Use 'select <index>' to change the active model, 'enable|disable <index>' to activate/deactivate")
 
-    def list(self, mode: str):
+    def list_info(self, mode: str):
         if mode == "" or 'models' in mode:
             self.list_models(self.config['embeddings_model_name'])
 
+    def check_indices(self, current_model:str, doc_hashes:list[str]):
+        print()
+        print("Index | Embbedings | Debris     | Missing    | Model")
+        print("------+------------+--------------------------------------")
+        for ind, model in enumerate(self.model_list):
+            cnt = 0
+            debris_cnt = 0
+            if model['enabled'] is True:
+                indices_path = self.model_embedding_path(model['model_name'])
+                file_list = get_files_of_extensions(indices_path, ["pt"])
+                hash_list = [os.path.splitext(name)[0] for name in file_list]
+                for hash in hash_list:
+                    if hash in doc_hashes:
+                        cnt += 1
+                    else:
+                        debris_cnt += 1
+                missing = len(doc_hashes) - cnt
+                if model['model_name'] == current_model:
+                    print(f" >{ind+1}<  | {cnt:10d} | {debris_cnt:10d} | {missing:10d} | {model['model_name']}")
+                else:
+                    print(f"  {ind+1}   | {cnt:10d} | {debris_cnt:10d} | {missing:10d} | {model['model_name']}")
+            else:
+                    print(f"  {ind+1}   | DISABLED                             | {model['model_name']}")
+        
+    def check(self, mode:str|None, doc_hashes:list[str]):
+        if mode is None or mode == "" or 'index' in mode.lower():
+            self.check_indices(self.config['embeddings_model_name'], doc_hashes)
+                    
     def select(self, ind: int) -> str | None:
         if ind<1 or ind>len(self.model_list):
             self.log.error(f"Invalid model index {ind}, use 'list models' to get valid indices")
@@ -914,17 +942,13 @@ class DocumentStore:
         print(f"PDF cache orphans:   {orphan_count}+{orphan2_count}")
         print(f"Missing cache files: {missing_count}")
 
-    def check_indices(self):
-        self.log.warning("Index check Not implemented yet.")
         
     def check(self, mode: str | None = None):
         if mode is None or mode == "" or 'pdf' in mode.lower():
             self.log.info("Checking PDF cache consistency")
             self.check_pdf_cache()
-        if mode is None or mode == "" or 'index' in mode.lower():
-            self.check_indices()
         
-    def list(self, mode: str):
+    def list_info(self, mode: str):
         if mode == "" or 'sources' in mode:
             exts = ['pdf', 'txt', 'md']
             print()
