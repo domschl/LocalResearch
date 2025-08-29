@@ -1,3 +1,4 @@
+
 import logging
 import readline
 import os
@@ -5,7 +6,7 @@ import atexit
 from vector_store import DocumentStore, VectorStore
 
 def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
-    history_file = os.path.join(os.path.expanduser("~/.config/vector_store"), "repl_history")
+    history_file = os.path.join(os.path.expanduser("~/.config/local_research"), "repl_history")
     try:
         readline.read_history_file(history_file)
     except FileNotFoundError:
