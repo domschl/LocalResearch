@@ -34,6 +34,7 @@ class VectorConfig(TypedDict):
 class LibraryEntry(TypedDict):
     source_name: str
     source_path: str  # descriptor
+    primary_source_hash: str | None
     text: str
 
 
