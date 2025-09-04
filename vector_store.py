@@ -148,6 +148,16 @@ class VectorStore:
                     'enabled': True,
                 },
                 {
+                    'model_hf_name': 'google/embeddinggemma-300m',
+                    'model_name': 'embeddinggemma',
+                    'emb_dim': 768,
+                    'max_input_token': 512,
+                    'chunk_size': 2048,
+                    'chunk_overlap': 2048 // 3,
+                    'batch_multiplier': 1,
+                    'enabled': True,
+                },
+                {
                     'model_hf_name': 'Qwen/Qwen3-Embedding-0.6B',
                     'model_name': 'Qwen3-Embedding-0.6B',
                     'emb_dim': 1024,
