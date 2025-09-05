@@ -2,6 +2,7 @@ import os
 import logging
 import json
 import time
+import datetime
 import hashlib
 import tempfile
 from typing import TypedDict, cast
@@ -420,6 +421,23 @@ class VectorStore:
                 break
         return chunks
 
+    @staticmethod
+    def get_chunk_count(text:str, chunk_size: int, chunk_overlap: int):
+        overlap = min(chunk_overlap, chunk_size - 1)
+        step = chunk_size - overlap
+        if step <= 0: 
+            step = chunk_size
+        text_len = len(text)
+        count = 0
+        for i in range(0, text_len, step):
+            chunk = text[i : i + chunk_size]
+            if not chunk: 
+               break
+            count += 1
+            if i + chunk_size >= text_len: 
+               break
+        return count
+
     def save_tensor(self, tensor:torch.Tensor, filename:str):
         temp_path: str | None = None
         temp_fd: int | None = None
@@ -459,14 +477,44 @@ class VectorStore:
         if self.model is None or self.engine is None:
             self.log.error("Failed to load model, cannot index!")
             return
-        
+        new_chunks = 0
         for hash in library:
             filename = self.get_embedding_filename(hash)
             name = library[hash]['source_path']
             if os.path.exists(filename):
                 continue
-            print(f"\rIndexing: {name[-80:]:80s}", end="")
+            new_chunks += VectorStore.get_chunk_count(library[hash]['text'], self.model['chunk_size'], self.model['chunk_overlap'])
+
+        if new_chunks == 0:
+            self.log.info("Index already complete, no new documents found")
+            return
+        
+        current_chunks = 0
+        start_time = time.time()
+        last_output = time.time()
+        for hash in library:
+            filename = self.get_embedding_filename(hash)
+            name = library[hash]['source_path']
+            if os.path.exists(filename):
+                continue
+            perc = current_chunks / new_chunks
+            current_time = time.time()
+            delta = current_time - start_time
+            if delta > 5.0 and perc > 0:
+                eta_t = start_time + delta/perc
+                eta_s = delta/perc - delta
+                h = int(eta_s // 3600)
+                m = int((eta_s % 3600) // 60)
+                s = int(eta_s % 60)
+                eta_str = (datetime.datetime.now()+datetime.timedelta(seconds=int(eta_s))).strftime("%H:%M:%S")                
+                eta = f"{eta_str}, in {h}:{m:02d}:{s:02d}"
+            else:
+                eta = "calculating..."
+            if time.time() - last_output > 0.5:
+                print(f"\rIndexing: {perc*100:.4f}% {name[-80:]:80s}, eta={eta}", end="")
+                last_output = time.time()
             self.save_embeddings_tensor(library[hash]['text'], filename)
+            current_chunks += VectorStore.get_chunk_count(library[hash]['text'], self.model['chunk_size'], self.model['chunk_overlap'])
         print(" "*80)
         self.log.info("Index completed")
 
