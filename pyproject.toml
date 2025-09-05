@@ -3,14 +3,15 @@ name = "localresearch"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12"  # umap bottle-neck
 dependencies = [
     "einops>=0.8.1",
     "huggingface-hub[cli]>=0.34.4",
-    "numpy>=2.3.2",
-    "pymupdf>=1.26.3",
-    "pymupdf4llm==0.0.19",
+    "pymupdf>=1.26.4",
+    "pymupdf4llm>=0.0.27",
     "scikit-learn>=1.7.1",
     "sentence-transformers>=5.1.0",
     "torch>=2.8.0",
+    "umap-learn>=0.5.9.post2",
 ]
+
