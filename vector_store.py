@@ -238,33 +238,60 @@ class VectorStore:
         if mode == "" or 'models' in mode:
             self.list_models(self.config['embeddings_model_name'])
 
-    def check_indices(self, current_model:str, doc_hashes:list[str]):
+    def check_indices(self, current_model:str, doc_hashes:list[str], mode:str):
+        if 'clean' in mode:
+            clean = True
+        else:
+            clean = False
+        all_deleted = 0
+        hint_clean = False
+        hint_missing = False
         print()
-        print("Index | Embbedings | Debris     | Missing    | Model")
-        print("------+------------+--------------------------------------")
+        print("Index | Embbedings | Debris/Delted         | Missing    | Model")
+        print("------+------------+-----------------------+------------+------------------------------")
         for ind, model in enumerate(self.model_list):
             cnt = 0
             debris_cnt = 0
+            deleted_cnt = 0
             if model['enabled'] is True:
                 indices_path = self.model_embedding_path(model['model_name'])
                 file_list = get_files_of_extensions(indices_path, ["pt"])
-                hash_list = [os.path.splitext(name)[0] for name in file_list]
-                for hash in hash_list:
+                # hash_list = [os.path.splitext(name)[0] for name in file_list]
+                for filename in file_list:
+                    hash = os.path.splitext(filename)[0]
                     if hash in doc_hashes:
                         cnt += 1
                     else:
                         debris_cnt += 1
+                        if clean is True:
+                            os.remove(of.path.join(indices_path, filename))
+                            deleted_cnt += 1
+                            all_deleted += 1
+                        else:
+                            hint_clean = True
                 missing = len(doc_hashes) - cnt
+                if missing > 0:
+                    hint_missing = True
                 if model['model_name'] == current_model:
-                    print(f" >{ind+1}<  | {cnt:10d} | {debris_cnt:10d} | {missing:10d} | {model['model_name']}")
+                    print(f" >{ind+1}<  | {cnt:10d} | {debris_cnt:10d}/{deleted_cnt:10d} | {missing:10d} | {model['model_name']}")
                 else:
-                    print(f"  {ind+1}   | {cnt:10d} | {debris_cnt:10d} | {missing:10d} | {model['model_name']}")
+                    print(f"  {ind+1}   | {cnt:10d} | {debris_cnt:10d}/{deleted_cnt:10d} | {missing:10d} | {model['model_name']}")
             else:
                     print(f"  {ind+1}   | DISABLED                             | {model['model_name']}")
+        if all_deleted > 0:
+            self.log.info(f"{all_deleted} unused index files removed")
+        if hint_missing is True:
+            self.log.info("To calculate the missing indices, use 'select <model_index>' and 'index' for each model with missing indices")
+        if hint_clean is True:
+            self.log.info("Use 'check index clean' to clean up debris indices")
+        if hint_missing is False and hint_clean is False:
+            self.log.info("All model indices are fully up-to-date")
         
     def check(self, mode:str|None, doc_hashes:list[str]):
-        if mode is None or mode == "" or 'index' in mode.lower():
-            self.check_indices(self.config['embeddings_model_name'], doc_hashes)
+        if mode is None:
+            mode = ""
+        if mode == "" or 'index' in mode.lower():
+            self.check_indices(self.config['embeddings_model_name'], doc_hashes, mode)
                     
     def select(self, ind: int) -> str | None:
         if ind<1 or ind>len(self.model_list):
@@ -996,20 +1023,35 @@ class DocumentStore:
         else:
             self.log.info(f"No changes")
 
-    def check_pdf_cache(self):
+    def check_pdf_cache(self, mode:str):
         failure_count = 0
         entry_count = 0
         orphan_count = 0
         orphan2_count = 0
         missing_count = 0
+        deleted_count = 0
+        deleted2_count = 0
+        cache_changed = False
+        if 'clean' in mode:
+            clean = True
+        else:
+            clean = False
         for cache_entry_hash in self.pdf_index:
             cache_entry = self.pdf_index[cache_entry_hash]
             entry_count += 1
             if cache_entry['previous_failure'] is True:
                 failure_count += 1
+            pdf_cache_filename = self.get_pdf_cache_filename(cache_entry_hash)
             if cache_entry_hash not in self.library:
                 orphan_count += 1
-            pdf_cache_filename = self.get_pdf_cache_filename(cache_entry_hash)
+                if clean is True:
+                    if os.path.exists(pdf_cache_filename):
+                        os.remove(pdf_cache_filename)
+                        deleted_count += 1
+                    del self.pdf_index[cache_entry_hash]
+                    deleted2_count += 1
+                    cache_changed = True
+                    continue
             if os.path.exists(pdf_cache_filename) is False:
                 missing_count += 1
         cache_files = get_files_of_extensions(self.pdf_cache_path, ['pdf'])
@@ -1017,17 +1059,30 @@ class DocumentStore:
             hash = os.path.splitext(cache_file)[0]
             if hash not in self.pdf_index:
                 orphan2_count += 1
+                if clean is True:
+                    pdf_cache_filename = self.get_pdf_cache_filename(cache_entry_hash)
+                    if os.path.exists(pdf_cache_filename):
+                        os.remove(pdf_cache_filename)
+                        deleted_count += 1
+                    
                 
         print(f"PDF cache entries:   {entry_count}")
         print(f"PDF failures:        {failure_count}")
         print(f"PDF cache orphans:   {orphan_count}+{orphan2_count}")
+        if deleted_count > 0:
+            print(f"PDF debris removed:  {deleted_count}")
+        if deleted_count > 0:
+            print(f"PDF records removed: {deleted2_count}")
         print(f"Missing cache files: {missing_count}")
-
+        if cache_changed is True:
+            self.save_library()
         
     def check(self, mode: str | None = None):
         if mode is None or mode == "" or 'pdf' in mode.lower():
             self.log.info("Checking PDF cache consistency")
-            self.check_pdf_cache()
+            if mode is None:
+                mode = ""
+            self.check_pdf_cache(mode)
         
     def list_info(self, mode: str):
         if mode == "" or 'sources' in mode:

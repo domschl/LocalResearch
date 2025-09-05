@@ -91,7 +91,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 else:
                     log.error("Import failed")
             elif command == 'help':
-                print("Use 'list [models|sources]', 'sync', 'check [pdf]', 'select [model-index]', 'index', 'search <search-string>', 'publish', 'import'")
+                print("Use 'list [models|sources]', 'sync', 'check [index|pdf] [clean]', 'select [model-index]', 'index', 'search <search-string>', 'publish', 'import'")
             elif command == 'exit' or command == 'quit':
                 break
 
