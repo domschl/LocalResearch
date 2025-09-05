@@ -20,11 +20,13 @@ class DocumentSource(TypedDict):
 
 
 class DocumentConfig(TypedDict):
+    version: int
     document_sources: dict[str, DocumentSource]
     publish_path: str
 
 
 class VectorConfig(TypedDict):
+    version: int
     embeddings_model_name: str
     embeddings_device: str
     embeddings_model_trust_code: bool
@@ -47,7 +49,6 @@ class EmbeddingModel(TypedDict):
     model_hf_name: str
     model_name: str
     emb_dim: int
-    max_input_token: int
     chunk_size: int
     chunk_overlap: int
     batch_multiplier: int
@@ -76,6 +77,7 @@ def get_files_of_extensions(path:str, extensions: list[str]):
 
 class VectorStore:
     def __init__(self, storage_path:str, config_path:str):
+        self.current_version: int = 1
         self.log: logging.Logger = logging.getLogger("VectorStore")
         self.storage_path:str = storage_path
         self.config_path:str = config_path
@@ -111,7 +113,6 @@ class VectorStore:
                     'model_hf_name': 'ibm-granite/granite-embedding-107m-multilingual',
                     'model_name': 'granite-embedding-107m-multilingual',
                     'emb_dim': 384, 
-                    'max_input_token': 512,
                     'chunk_size': 2048, 
                     'chunk_overlap': 2048 // 3,
                     'batch_multiplier': 64,
@@ -121,7 +122,6 @@ class VectorStore:
                     'model_hf_name': 'ibm-granite/granite-embedding-278m-multilingual',
                     'model_name': 'granite-embedding-278m-multilingual',
                     'emb_dim': 768,
-                    'max_input_token': 512,
                     'chunk_size': 2048,
                     'chunk_overlap': 2048 // 3,
                     'batch_multiplier': 32,
@@ -131,7 +131,6 @@ class VectorStore:
                     'model_hf_name': 'nomic-ai/nomic-embed-text-v2-moe',
                     'model_name': 'nomic-embed-text-v2-moe',
                     'emb_dim': 768,  #  Matryoshka Embeddings
-                    'max_input_token': 512,
                     'chunk_size': 2048,
                     'chunk_overlap': 2048 // 3,
                     'batch_multiplier': 32,
@@ -141,8 +140,7 @@ class VectorStore:
                     'model_hf_name': 'sentence-transformers/all-MiniLM-L6-v2',
                     'model_name': 'all-MiniLM-L6-v2',
                     'emb_dim': 384,
-                    'max_input_token': 512, # Use underlying model's limit or common practice
-                    'chunk_size': 1024,     # Adjust based on token limit and desired context
+                    'chunk_size': 1024,
                     'chunk_overlap': 1024 // 3,
                     'batch_multiplier': 128,
                     'enabled': True,
@@ -151,7 +149,6 @@ class VectorStore:
                     'model_hf_name': 'google/embeddinggemma-300m',
                     'model_name': 'embeddinggemma',
                     'emb_dim': 768,
-                    'max_input_token': 512,
                     'chunk_size': 2048,
                     'chunk_overlap': 2048 // 3,
                     'batch_multiplier': 1,
@@ -161,7 +158,6 @@ class VectorStore:
                     'model_hf_name': 'Qwen/Qwen3-Embedding-0.6B',
                     'model_name': 'Qwen3-Embedding-0.6B',
                     'emb_dim': 1024,
-                    'max_input_token': 512,
                     'chunk_size': 1024,     # Adjust based on token limit and desired context
                     'chunk_overlap': 1024 // 3,
                     'batch_multiplier': 1,
@@ -182,15 +178,26 @@ class VectorStore:
             raise e
 
     def get_config(self) -> VectorConfig:
+        valid = False
         if os.path.exists(self.config_file):
-            with open(self.config_file, "r") as f:
-                config: VectorConfig = cast(VectorConfig, json.load(f))
-        else:
+            try:
+                with open(self.config_file, "r") as f:
+                    config: VectorConfig = cast(VectorConfig, json.load(f))
+                    valid = True
+            except Exception as e:
+                self.log.error(f"Failed to read config {self.config_file}: {e}, resetting to default configuration!")
+                valid = False
+        if valid is True:
+            if 'version' not in config or config['version'] < self.current_version:
+                self.log.error(f"Version of config file {self.config_file} is outdated, upgrading to default version {self.current_version}")
+                valid = False
+        if valid is  False:
             config = VectorConfig({
+                'version': self.current_version,
                 'embeddings_model_name': 'granite-embedding-107m-multilingual',
                 'embeddings_device': 'auto',
                 'embeddings_model_trust_code': True,
-                'batch_base_multiplier': 2,
+                'batch_base_multiplier': 1,
             })
             self.save_config(config)
             self.log.warning(f"Default configuration created at {self.config_file}, please review!")
@@ -199,8 +206,9 @@ class VectorStore:
 
     def save_config(self, config: VectorConfig):
         temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.config_file))
+        config['version'] = self.current_version
         try:
-            with os.fdopen(temp_fd, 'w') as temp_file:            
+            with os.fdopen(temp_fd, 'w') as temp_file:
                 json.dump(config, temp_file, indent=4)
             os.replace(temp_path, self.config_file)  # atomic update
         except Exception as e:
@@ -501,6 +509,7 @@ class VectorStore:
     
 class DocumentStore:
     def __init__(self):
+        self.current_version: int = 2
         self.log: logging.Logger = logging.getLogger("DocumentStore")
         self.config_changed:bool = False
         self.config_path: str = os.path.expanduser("~/.config/local_research")
@@ -534,14 +543,25 @@ class DocumentStore:
             self.log.info("Please use 'import' to acquire the latest data version")
 
     def get_config(self) -> DocumentConfig:
+        valid = False
         if os.path.exists(self.config_file):
-            with open(self.config_file, "r") as f:
-                config: DocumentConfig = cast(DocumentConfig, json.load(f))
-        else:
+            try:
+                with open(self.config_file, "r") as f:
+                    config: DocumentConfig = cast(DocumentConfig, json.load(f))
+                    valid = True
+            except Exception as e:
+                self.log.error(f"Failed to read config-file {self.config_file}: {e}, resetting to default configuration!")
+                valid = False
+        if valid is True:
+            if 'version' not in config or config['version'] < self.current_version:
+                self.log.error(f"Config file {self.config_file} is outdated version, upgrading to new defaults!")
+                valid = False
+        if valid is False:
             config = DocumentConfig({
+                'version': self.current_version,
                 'document_sources': {
                     'Calibre': DocumentSource({
-                        'type': 'calibre_library',
+                        'type': 'calibre',
                         'path': '~/ReferenceLibrary/Calibre Library',
                         'file_types': ['txt', 'pdf']
                     }),
@@ -565,6 +585,7 @@ class DocumentStore:
 
     def save_config(self, config: DocumentConfig):
         temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.config_file))
+        config['version'] = self.current_version
         try:
             with os.fdopen(temp_fd, 'w') as temp_file:            
                 json.dump(config, temp_file)
