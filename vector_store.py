@@ -1016,6 +1016,7 @@ class DocumentStore:
                 if debris in self.pdf_index:
                     del self.pdf_index[debris]
                     pdf_index_changed = True
+            self.log.warning("Please use 'check clean' to remove superflucious indices")
                 
         if library_changed is True or pdf_index_changed is True:
             self.save_library()
