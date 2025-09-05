@@ -10,6 +10,7 @@ dependencies = [
     "numpy>=2.3.2",
     "pymupdf>=1.26.3",
     "pymupdf4llm==0.0.19",
+    "scikit-learn>=1.7.1",
     "sentence-transformers>=5.1.0",
     "torch>=2.8.0",
 ]

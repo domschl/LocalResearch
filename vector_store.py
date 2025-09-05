@@ -13,6 +13,14 @@ import pymupdf4llm  # pyright: ignore[reportMissingTypeStubs]  # XXX currently l
 import torch
 from sentence_transformers import SentenceTransformer
 
+support_dim3d = False
+try:
+    import umap
+    from sklearn.decomposition import PCA
+    support_dim3d = True
+except ImportError:
+    pass
+
 
 class DocumentSource(TypedDict):
     type: str
