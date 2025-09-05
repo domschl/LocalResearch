@@ -60,6 +60,13 @@ class SequenceVersion(TypedDict):
     sequence: int
 
 
+class SearchResultEntry(TypedDict):
+    cosine: float
+    hash: str
+    chunk_index: int
+    entry: LibraryEntry
+
+
 def get_files_of_extensions(path:str, extensions: list[str]):
     result: list[str] = []
     if os.path.isdir(path) is False:
@@ -264,7 +271,7 @@ class VectorStore:
                     else:
                         debris_cnt += 1
                         if clean is True:
-                            os.remove(of.path.join(indices_path, filename))
+                            os.remove(os.path.join(indices_path, filename))
                             deleted_cnt += 1
                             all_deleted += 1
                         else:
@@ -290,7 +297,7 @@ class VectorStore:
     def check(self, mode:str|None, doc_hashes:list[str]):
         if mode is None:
             mode = ""
-        if mode == "" or 'index' in mode.lower():
+        if mode == "" or mode == "clean" or 'index' in mode.lower():
             self.check_indices(self.config['embeddings_model_name'], doc_hashes, mode)
                     
     def select(self, ind: int) -> str | None:
@@ -545,41 +552,45 @@ class VectorStore:
         print(" "*80)
         self.log.info("Index completed")
 
-    def search(self, search_text:str, library:dict[str,LibraryEntry]):
+    def search(self, search_text:str, library:dict[str,LibraryEntry], max_results:int=10):
         self.load_model()
         if self.model is None or self.engine is None:
             self.log.error("Failed to load model, cannot index!")
             return
+        search_results: list[SearchResultEntry] = []
         device = torch.device(self.resolve_device())
         search_tensor = self.engine.encode_query(search_text, convert_to_tensor=True, show_progress_bar=False, normalize_embeddings=True).to(device)  # pyright:ignore[reportUnknownMemberType]
         path = self.model_embedding_path(self.model['model_name'])
         tensor_file_list = get_files_of_extensions(path, ['pt'])
-        best_cosine: float | None = None
-        best_chunk: int | None = None
-        best_doc: LibraryEntry | None = None
+        best_min_cosine: float | None = None
         for tensor_file in tensor_file_list:
             tensor_path = os.path.join(path, tensor_file)
+            hash = os.path.splitext(tensor_file)[0]
             tensor:torch.Tensor = cast(torch.Tensor, torch.load(tensor_path, map_location=device))
             # cosines = torch.matmul(search_tensor, tensor.T).T
             cosines = self.engine.similarity(tensor, search_tensor)
             max_ind:int = int(torch.argmax(cosines).item())
             cosine:float = cosines[max_ind].item()
-            if best_cosine is None or cosine > best_cosine:
-                best_cosine = cosine
-                hash = os.path.splitext(tensor_file)[0]
-                best_chunk = max_ind
-                best_doc = library[hash]
-                print(f"\r{best_cosine:.4f} {best_doc['source_path'][-80:]:80s}, best_chunk: {best_chunk}")
+            if best_min_cosine is None or cosine > best_min_cosine:
+                search_results.append(SearchResultEntry({'cosine': cosine, 'hash': hash, 'chunk_index': max_ind, 'entry': library[hash]}))
+                if search_results is not None:
+                    search_results = sorted(search_results, key=lambda res: res['cosine'])
+                    search_results = search_results[-max_results:]
+                    best_min_cosine = search_results[0]['cosine']
+                    # print(f"{search_results[0]['cosine']}:{search_results[-1]['cosine']}, added: {library[hash]['source_path']}")
         print()
-        if best_doc is not None and best_chunk is not None:
-            result_text = self.get_chunk(best_doc['text'], best_chunk, self.model['chunk_size'], self.model['chunk_overlap'])
+        for result in search_results:
+            result_text = self.get_chunk(result['entry']['text'], result['chunk_index'], self.model['chunk_size'], self.model['chunk_overlap'])
             replacers = [("\n", " "), ("\t", " "), ("  ", " ")]
             old_text = ""
             while old_text != result_text:
                 old_text = result_text
                 for rep in replacers:
-                    result_text = result_text.replace(rep[0], rep[1])            
+                    result_text = result_text.replace(rep[0], rep[1])
+            print("--------------------------------------------------------------")
+            print(f"{result['entry']['source_path']} {result['cosine']}")
             print(result_text)
+        print("--------------------------------------------------------------")
             
     
 class DocumentStore:
@@ -1037,7 +1048,7 @@ class DocumentStore:
             clean = True
         else:
             clean = False
-        for cache_entry_hash in self.pdf_index:
+        for cache_entry_hash in list(self.pdf_index.keys()):
             cache_entry = self.pdf_index[cache_entry_hash]
             entry_count += 1
             if cache_entry['previous_failure'] is True:
@@ -1079,7 +1090,7 @@ class DocumentStore:
             self.save_library()
         
     def check(self, mode: str | None = None):
-        if mode is None or mode == "" or 'pdf' in mode.lower():
+        if mode is None or mode == "" or mode== "clean" or 'pdf' in mode.lower():
             self.log.info("Checking PDF cache consistency")
             if mode is None:
                 mode = ""
