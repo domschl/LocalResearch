@@ -3,6 +3,9 @@ import logging
 import readline
 import os
 import atexit
+
+print("\rStarting...\r", end="", flush=True)
+
 from vector_store import DocumentStore, VectorStore
 
 def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
@@ -11,6 +14,9 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
         readline.read_history_file(history_file)
     except FileNotFoundError:
         pass
+    except Exception as e:
+        log.warning(f"Read history: {e}")
+        
     readline.set_history_length(1000)
     _ = atexit.register(readline.write_history_file, history_file)
     while True:
