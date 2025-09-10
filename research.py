@@ -54,7 +54,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     else:
                         log.info(f"New active model is {new_model}")
                 else:
-                    log.error(f"Invalid index {arguments}, integer required, use 'list models' for valid range")
+                    log.error(f"Invalid ID {arguments}, integer required, use 'list models' for valid range")
             elif command == 'enable':
                 ind = -1
                 try:
@@ -64,7 +64,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 if ind != -1:
                     new_model = vs.enable(ind)
                 else:
-                    log.error(f"Invalid index {arguments}, integer required, use 'list models' for valid range")
+                    log.error(f"Invalid ID {arguments}, integer required, use 'list models' for valid range")
             elif command == 'disable':
                 ind = -1
                 try:
@@ -74,7 +74,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 if ind != -1:
                     new_model = vs.disable(ind)
                 else:
-                    log.error(f"Invalid index {arguments}, integer required, use 'list models' for valid range")
+                    log.error(f"Invalid ID {arguments}, integer required, use 'list models' for valid range")
             elif command == 'index':
                 if ds.local_update_required() is True:
                     if 'force' not in arguments.split(' '):
@@ -97,7 +97,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 else:
                     log.error("Import failed")
             elif command == 'help':
-                print("Use 'list [models|sources]', 'sync', 'check [index|pdf] [clean]', 'select [model-index]', 'index', 'search <search-string>', 'publish', 'import'")
+                print("Use 'list [models|sources]', 'sync', 'check [index|pdf] [clean]', 'select <model-ID>', 'index', 'search <search-string>', 'publish', 'import'")
             elif command == 'exit' or command == 'quit':
                 break
 

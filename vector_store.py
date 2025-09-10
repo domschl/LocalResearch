@@ -21,6 +21,9 @@ try:
 except ImportError:
     pass
 
+from text_format import TextFormat
+
+tf = TextFormat()
 
 class DocumentSource(TypedDict):
     type: str
@@ -233,23 +236,25 @@ class VectorStore:
             raise e
 
     def list_models(self, current_model: str|None = None):
-        print()
-        print("Index | Embbedings | Model")
-        print("------+------------+--------------------------------------")
+        header = ["ID", "Embeddings", "Model"]
+        rows: list[list[str]] = []
         for ind, model in enumerate(self.model_list):
             path = self.model_embedding_path(model['model_name'])
             cnt = len(get_files_of_extensions(path, ['pt']))
+            if model['enabled'] == False:
+                post = ' DISABLED'
+            else:
+                post = ''
             if model['model_name'] == current_model:
-                print(f" >{ind+1}<  | {cnt:10d} | {model['model_name']} ", end="")
+                rows.append([f">{ind+1}<", str(cnt), f"{model['model_name']}{post}"])
             else:
-                print(f"  {ind+1}   | {cnt:10d} | {model['model_name']} ", end="")
-            if model['enabled'] is False:
-                print("[DISABLED]")
-            else:
-                print()
-        print("  Use 'select <index>' to change the active model, 'enable|disable <index>' to activate/deactivate")
+                rows.append([f" {ind+1}", str(cnt), f"{model['model_name']}{post}"])
+        _ = tf.print_table(header, rows, [True, False, True])
+        print()
+        print("Use 'select <ID>' to change the active model, 'enable|disable <ID>' to activate/deactivate")
 
     def list_info(self, mode: str):
+        print()
         if mode == "" or 'models' in mode:
             self.list_models(self.config['embeddings_model_name'])
 
@@ -261,9 +266,9 @@ class VectorStore:
         all_deleted = 0
         hint_clean = False
         hint_missing = False
-        print()
-        print("Index | Embbedings | Debris/Delted         | Missing    | Model")
-        print("------+------------+-----------------------+------------+------------------------------")
+        header = ["ID", "Embeddings", "Debris", "Deleted", "Missing", "Model"]
+        alignment = [True, False, False, False, False, True]
+        rows: list[list[str]] = []
         for ind, model in enumerate(self.model_list):
             cnt = 0
             debris_cnt = 0
@@ -288,21 +293,24 @@ class VectorStore:
                 if missing > 0:
                     hint_missing = True
                 if model['model_name'] == current_model:
-                    print(f" >{ind+1}<  | {cnt:10d} | {debris_cnt:10d}/{deleted_cnt:10d} | {missing:10d} | {model['model_name']}")
+                    rows.append([f">{ind+1}<", str(cnt), str(debris_cnt), str(deleted_cnt), str(missing), model['model_name']])
                 else:
-                    print(f"  {ind+1}   | {cnt:10d} | {debris_cnt:10d}/{deleted_cnt:10d} | {missing:10d} | {model['model_name']}")
+                    rows.append([f" {ind+1} ", str(cnt), str(debris_cnt), str(deleted_cnt), str(missing), model['model_name']])
             else:
-                    print(f"  {ind+1}   | DISABLED                             | {model['model_name']}")
+                rows.append([f">{ind+1}<", "DISABLED", "", "", "", model['model_name']])
+        _ = tf.print_table(header, rows, alignment)
+        print()
         if all_deleted > 0:
             self.log.info(f"{all_deleted} unused index files removed")
         if hint_missing is True:
-            self.log.info("To calculate the missing indices, use 'select <model_index>' and 'index' for each model with missing indices")
+            self.log.info("To calculate the missing indices, use 'select <ID>' and 'index' for each model with missing indices")
         if hint_clean is True:
             self.log.info("Use 'check index clean' to clean up debris indices")
         if hint_missing is False and hint_clean is False:
             self.log.info("All model indices are fully up-to-date")
         
     def check(self, mode:str|None, doc_hashes:list[str]):
+        print()
         if mode is None:
             mode = ""
         if mode == "" or mode == "clean" or 'index' in mode.lower():
@@ -310,7 +318,7 @@ class VectorStore:
                     
     def select(self, ind: int) -> str | None:
         if ind<1 or ind>len(self.model_list):
-            self.log.error(f"Invalid model index {ind}, use 'list models' to get valid indices")
+            self.log.error(f"Invalid model ID {ind}, use 'list models' to get valid IDs")
             return None
         if self.model_list[ind-1]['enabled'] is False:
             if self.engine is not None:
@@ -319,7 +327,7 @@ class VectorStore:
             if self.model is not None:
                 del self.model
                 self.model = None
-            self.log.error(f"Model {self.model_list[ind-1]['model_name']} is disabled, use 'enable <index>' to enable")
+            self.log.error(f"Model {self.model_list[ind-1]['model_name']} is disabled, use 'enable <ID>' to enable")
             return None
         new_model = self.model_list[ind-1]['model_name']
         if new_model == self.config['embeddings_model_name'] and self.model is not None and self.engine is not None:
@@ -339,7 +347,7 @@ class VectorStore:
 
     def enable(self, ind: int) -> str | None:
         if ind<1 or ind>len(self.model_list):
-            self.log.error(f"Invalid model index {ind}, use 'list models' to get valid indices")
+            self.log.error(f"Invalid model ID {ind}, use 'list models' to get valid IDs")
             return None
         if self.model_list[ind-1]['enabled'] is False:
             self.model_list[ind-1]['enabled'] = True
@@ -351,7 +359,7 @@ class VectorStore:
 
     def disable(self, ind: int) -> str | None:
         if ind<1 or ind>len(self.model_list):
-            self.log.error(f"Invalid model index {ind}, use 'list models' to get valid indices")
+            self.log.error(f"Invalid model ID {ind}, use 'list models' to get valid IDs")
             return None
         if self.model_list[ind-1]['enabled'] is True:
             self.model_list[ind-1]['enabled'] = False
@@ -364,7 +372,7 @@ class VectorStore:
                 if self.engine is not None:
                     del self.engine
                     self.engine = None
-                self.log.warning(f"Model {self.model_list[ind-1]['model_name']} was currently active, use 'list models' and 'select <index>' to active alternative")
+                self.log.warning(f"Model {self.model_list[ind-1]['model_name']} was currently active, use 'list models' and 'select <ID>' to active alternative")
             return self.model_list[ind-1]['model_name']
         else:
             self.log.warning(f"Model {self.model_list[ind-1]['model_name']} was already disabled")
@@ -405,7 +413,7 @@ class VectorStore:
                         if self.model is not None:
                             del self.model
                             self.model = None
-                        self.log.error(f"Model {self.config['embeddings_model_name']} is disabled, use 'list models' and 'select <index>' to activate a different model.")
+                        self.log.error(f"Model {self.config['embeddings_model_name']} is disabled, use 'list models' and 'select <ID>' to activate a different model.")
                         return
                     else:
                         self.model = model
@@ -1085,37 +1093,37 @@ class DocumentStore:
                         os.remove(pdf_cache_filename)
                         deleted_count += 1
                     
-                
-        print(f"PDF cache entries:   {entry_count}")
-        print(f"PDF failures:        {failure_count}")
-        print(f"PDF cache orphans:   {orphan_count}+{orphan2_count}")
+        header = ["PDF Cache", "Count"]
+        alignment = [True, False]
+        rows: list[list[str]] = []
+        rows.append(["Cache entries", f"{entry_count}"])
+        rows.append(["Extract failures", f"{failure_count}"])
+        rows.append(["Orphans", f"{orphan_count}+{orphan2_count}"])
         if deleted_count > 0:
-            print(f"PDF debris removed:  {deleted_count}")
+            rows.append(["Debris removed", f"{deleted_count}"])
         if deleted_count > 0:
-            print(f"PDF records removed: {deleted2_count}")
-        print(f"Missing cache files: {missing_count}")
+            rows.append(["Records removed", f"{deleted2_count}"])
+        rows.append(["Missing cache files", f"{missing_count}"])
+        _ = tf.print_table(header, rows, alignment)
+        print()
         if cache_changed is True:
             self.save_library()
         
     def check(self, mode: str | None = None):
+        print()
         if mode is None or mode == "" or mode== "clean" or 'pdf' in mode.lower():
-            self.log.info("Checking PDF cache consistency")
+            # self.log.info("Checking PDF cache consistency")
             if mode is None:
                 mode = ""
             self.check_pdf_cache(mode)
         
     def list_info(self, mode: str):
+        print()
         if mode == "" or 'sources' in mode:
             exts = ['pdf', 'txt', 'md']
-            print()
-            print("Source   | Docs  |", end="")
-            for ext in exts:
-                print(f" {ext:5s} |", end="")
-            print(" Path                             |")
-            print("---------+-------+", end="")
-            for ext in exts:
-                print("-------+", end="")
-            print("----------------------------------+")
+            header = ["Source", "Docs"] + exts + ["Path"]
+            al: list[bool] = [True, False] + [False] * len(exts) + [True]
+            rows: list[list[str]] = []
             sum_ext_cnts: dict[str,int] = {}
             sum_cnt = 0
             for source_name in self.config['document_sources']:
@@ -1138,24 +1146,24 @@ class DocumentStore:
                                 sum_ext_cnts[ext] += 1
                             else:
                                 sum_ext_cnts[ext] = 1
-                print(f"{source_name[:8]:8s} | {cnt:5d} |", end="")
+                row = [f"{source_name}", str(cnt)]
                 for ext in exts:
                     if ext in ext_cnts:
-                        print(f" {ext_cnts[ext]:5d} |", end="")
+                        row.append(str(ext_cnts[ext]))
                     else:
-                        print(f" {0:5d} |", end="")
-                print(f" {source['path'][-32:]:32s} |")
-            print("---------+-------+", end="")
-            for ext in exts:
-                print("-------+", end="")
-            print("----------------------------------+")
-            print(f"Total    | {sum_cnt:5d} |", end="")
+                        row.append("0")
+                row.append(source['path'])
+                rows.append(row)
+            row = ["Total", str(sum_cnt)]
             for ext in exts:
                 if ext in sum_ext_cnts:
-                    print(f" {sum_ext_cnts[ext]:5d} |", end="")
+                    row.append(str(sum_ext_cnts[ext]))
                 else:
-                    print(f" {0:5d} |", end="")
-            print(f"                                  |")
+                    row.append("0")
+            row.append("")
+            rows.append(row)
+            _ = tf.print_table(header, rows, al)
+            print()
 
     def publish(self, parameters:str) -> bool:
         if self.local_update_required() is True:
