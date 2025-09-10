@@ -568,6 +568,16 @@ class VectorStore:
         print(" "*80)
         self.log.info("Index completed")
 
+    def get_keywords(self, text:str) -> list[str]:
+        keys: list[str] = []
+        akeys = text.split(' ')
+        trivials = ['the', 'a', 'in', 'of']
+        for key in akeys:
+            if key not in trivials:
+                keys.append(key)
+        return keys
+
+        return keys
     def search(self, search_text:str, library:dict[str,LibraryEntry], max_results:int=10):
         self.load_model()
         if self.model is None or self.engine is None:
@@ -594,19 +604,22 @@ class VectorStore:
                     search_results = search_results[-max_results:]
                     best_min_cosine = search_results[0]['cosine']
                     # print(f"{search_results[0]['cosine']}:{search_results[-1]['cosine']}, added: {library[hash]['source_path']}")
-        print()
-        for result in search_results:
+        for index, result in enumerate(search_results):
             result_text = self.get_chunk(result['entry']['text'], result['chunk_index'], self.model['chunk_size'], self.model['chunk_overlap'])
-            replacers = [("\n", " "), ("\t", " "), ("  ", " ")]
+            replacers = [("\n", " "), ("\r", " "), ("\b", " "), ("\t", " "), ("  ", " ")]
             old_text = ""
             while old_text != result_text:
                 old_text = result_text
                 for rep in replacers:
                     result_text = result_text.replace(rep[0], rep[1])
-            print("--------------------------------------------------------------")
-            print(f"{result['entry']['source_path']} {result['cosine']}")
-            print(result_text)
-        print("--------------------------------------------------------------")
+            # Rich mess
+            # result_text = result_text.replace("[", "\\[")
+            header = [f"{result['cosine']:.3f}", result['entry']['source_path']]
+            rows = [[str(len(search_results)-index)+'.', result_text]]
+            print()
+            keywords = self.get_keywords(search_text)
+            _ = tf.print_table(header, rows, multi_line=True, keywords=keywords)
+        print()
             
     
 class DocumentStore:
