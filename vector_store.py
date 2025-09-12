@@ -607,6 +607,8 @@ class VectorStore:
         for index, result in enumerate(search_results):
             result_text = self.get_chunk(result['entry']['text'], result['chunk_index'], self.model['chunk_size'], self.model['chunk_overlap'])
             replacers = [("\n", " "), ("\r", " "), ("\b", " "), ("\t", " "), ("  ", " ")]
+            zero_width = [("\u200b", ""), ("\u200c", ""), ("\u200d", ""), ("\u00ad", ""), ("\ufeff", "")] 
+            replacers += zero_width
             old_text = ""
             while old_text != result_text:
                 old_text = result_text

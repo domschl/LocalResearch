@@ -1,11 +1,45 @@
 import logging
 import os
-from rich import print as rprint
+from dataclasses import dataclass
+#from typing import TypedDict
+# from rich import print as rprint
+
+@dataclass
+
+class Color:
+    def __init__(self, h:str|None=None, r:int|None=None, g:int|None=None, b:int|None=None, a:int|None=None):
+        self.r: int = 0
+        self.g: int = 0
+        self.b: int = 0
+        self.a: int = 0xff
+        if h is not None and h.startswith('#'):
+            if len(h) == 7 or len(h) == 9:
+                self.r=int(h[1:3], 16)
+                self.g=int(h[3:5], 16)
+                self.b=int(h[5:7], 16)
+            if len(h) == 9:
+                self.a = int(h[7:9], 16)
+            else:
+                self.a=0xff
+        else:
+            if a is not None:
+                self.a = a
+            if r is not None:
+                self.r = r
+            if g is not None:
+                self.g = g
+            if b is not None:
+                self.b = b
 
 class TextFormat:
     def __init__(self):
         self.log: logging.Logger = logging.getLogger("TextFormat")
         self.sep:str = "┇"
+        self.theme: dict[str, tuple[Color,Color]] = {
+            'header': (Color("#cdc67f"), Color("#000000")),
+            'text': (Color("#dbdad2"), Color("#000000")),
+            'keyword': (Color("#dbdad2"), Color("#0c4dff")),
+            }
 
     def shorten(self, text:str, length:int, left_align:bool|None=None, ellipsis:str='⋯') -> str:
         if len(text) == length:
@@ -35,6 +69,26 @@ class TextFormat:
                 w = length - 1
                 return text[-w:] + ellipsis
 
+    @staticmethod
+    def fg(col:Color):
+        print(f"\033[38;2;{col.r};{col.g};{col.b}m", end="")  # Set foreground color as RGB.
+
+    @staticmethod
+    def bg(col:Color):
+        print(f"\033[48;2;{col.r};{col.g};{col.b}m", end="")  # Set background color as RGB.
+
+    @staticmethod
+    def defc():
+        print("\033[m", end="", flush=True)
+
+    def tkc(self, name:str):
+        if name not in self.theme:
+            self.log.error(f"Unknown theme component {name} referenced.")
+            return
+        bg, fg = self.theme[name]
+        TextFormat.bg(bg)
+        TextFormat.fg(fg)        
+    
     def valid_split(self, line:str, length:int) -> tuple[str, str]:
         if len(line) <= length:
             return line, ""
@@ -112,28 +166,25 @@ class TextFormat:
                         if full_width <= width:
                             break
 
-        bg = 230
-        line = f"[black on color({bg})]{self.sep}"
+        self.tkc("header")
+        print(self.sep, end="")
         for index, col in enumerate(header):
             al = None
             entry = self.shorten(col, col_width[index], al)
-            line += " " + entry + " " + self.sep
-        line += "[/]"
-        rprint(line)
-        bg = 231
+            print(" " + entry + " " + self.sep, end="")
+        print()
+        self.tkc("text")
         for row in rows:
-            line = f"[black on color({bg})]"
             if multi_line is False:
-                line += self.sep
+                print(self.sep, end="")
                 for index, col in enumerate(row):
                     if alignments is not None:
                         al = alignments[index]
                     else:
                         al = None
                     entry = self.shorten(col, col_width[index], al)
-                    line += " " + entry + " " + self.sep
-                line += "[/]"
-                rprint(line)
+                    print(" " + entry + " " + self.sep, end="")
+                print()
             else:
                 sub_lines:list[list[str]] = []
                 max_sub_lines = 0
@@ -143,17 +194,16 @@ class TextFormat:
                         max_sub_lines = len(sls)
                     sub_lines.append(sls)
                 for sl in range(max_sub_lines):
-                    line = f"[black on color({bg})]"
-                    line += self.sep
+                    print(self.sep, end="")
                     for index in range(len(sub_lines)):
-                        line += ' '
+                        print(' ', end="")
                         if len(sub_lines[index]) > sl:
-                            sline = sub_lines[index][sl].replace('[', '\\[')  # RICH ESCAPE MESS
-                            line += self.key_highlight(sline, keywords)
+                            sline = sub_lines[index][sl]
+                            # line += self.key_highlight(sline, keywords)
+                            print(sline, end="")
                         else:
-                            line += ' ' * col_width[index]
-                        line += ' ' + self.sep
-                    line += "[/]"
-                    rprint(line)
-                
+                            print(' ' * col_width[index], end="")
+                        print(' ' + self.sep, end="")
+                    print()
+        TextFormat.defc()
         return True
