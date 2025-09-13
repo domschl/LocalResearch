@@ -473,12 +473,6 @@ class VectorStore:
                 act_end = ind+1
                 break
         context_text = extended_text[act_start:act_end].strip()
-        print(index, VectorStore.get_chunk_count(text, chunk_size, chunk_overlap), len(extended_text), act_start, act_end, chunk_size, act_end - act_start)
-        # print("1---")
-        # print(extended_text)
-        # print("2---")
-        # print(context_text)
-        # print("3---")    
         return context_text
 
     @staticmethod
@@ -653,8 +647,6 @@ class VectorStore:
                 old_text = result_text
                 for rep in replacers:
                     result_text = result_text.replace(rep[0], rep[1])
-            # Rich mess
-            # result_text = result_text.replace("[", "\\[")
             header = [f"{result['cosine']:.3f}", result['entry']['source_path']]
             rows = [[str(len(search_results)-index)+'.', result_text]]
             print()
