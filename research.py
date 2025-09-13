@@ -3,6 +3,7 @@ import logging
 import readline
 import os
 import atexit
+from typing import cast
 
 print("\rStarting...\r", end="", flush=True)
 
@@ -41,6 +42,13 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
             elif command == 'list':
                 ds.list_info(arguments)
                 vs.list_info(arguments)
+            elif command == 'set':
+                comps = arguments.split(' ')
+                if len(comps) != 2:
+                    log.error('Usage: set <name> <value>')
+                    log.info("Use list of list of known variable names and types")
+                else:
+                    _ = ds.set_var(comps[0], comps[1])
             elif command == 'select':
                 ind = -1
                 try:
@@ -84,7 +92,9 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                         log.warning("Version override, starting indexing")
                 vs.index(ds.library)
             elif command == 'search':
-                vs.search(arguments, ds.library)
+                search_results: int = cast(int, ds.get_var('search_results'))
+                highlight: bool = cast(bool, ds.get_var('highlight'))
+                vs.search(arguments, ds.library, search_results, highlight)
             elif command == 'publish':
                 _ = ds.publish(arguments)
             elif command == 'import':

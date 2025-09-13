@@ -34,6 +34,7 @@ class DocumentSource(TypedDict):
 class DocumentConfig(TypedDict):
     version: int
     document_sources: dict[str, DocumentSource]
+    vars: dict[str, tuple[str,str]]
     publish_path: str
 
 
@@ -442,6 +443,45 @@ class VectorStore:
         return text[chunk_start : chunk_start + chunk_size]
 
     @staticmethod
+    def get_chunk_context_aware(text:str, index: int, chunk_size: int, chunk_overlap: int) -> str:
+        """Extracts a single text chunk based on index, try to extend to sentence-completness"""
+        if not text: 
+            return ""
+        chunk_start = VectorStore.get_chunk_ptr(index, chunk_size, chunk_overlap)
+        chunk_end = chunk_start + chunk_size
+        if index>0:
+            prev_chunk = VectorStore.get_chunk_ptr(index-1, chunk_size, chunk_overlap)
+        else:
+            prev_chunk = chunk_start
+        prev_max = chunk_start - prev_chunk
+        if index < VectorStore.get_chunk_count(text, chunk_size, chunk_overlap) - 1:
+            next_chunk = VectorStore.get_chunk_ptr(index + 1, chunk_size, chunk_overlap)
+        else:
+            next_chunk = chunk_end
+        next_max = prev_max + chunk_size
+        extended_text = text[prev_chunk:next_chunk+chunk_size]
+        act_start = prev_max
+        for ind in range(prev_max, 0, -1):
+            if extended_text[ind] == '.':
+                act_start = ind
+                while extended_text[act_start] in ['.', ' ']:
+                    act_start += 1
+                break
+        act_end = next_max
+        for ind in range(next_max, len(extended_text)):
+            if extended_text[ind] == '.':
+                act_end = ind+1
+                break
+        context_text = extended_text[act_start:act_end].strip()
+        print(index, VectorStore.get_chunk_count(text, chunk_size, chunk_overlap), len(extended_text), act_start, act_end, chunk_size, act_end - act_start)
+        # print("1---")
+        # print(extended_text)
+        # print("2---")
+        # print(context_text)
+        # print("3---")    
+        return context_text
+
+    @staticmethod
     def get_span_chunk(text:str, index: int, count:int, chunk_size: int, chunk_overlap: int):
         """Extracts a span of text covering 'count' base chunks."""
         if not text or count < 1: 
@@ -577,12 +617,12 @@ class VectorStore:
                 keys.append(key)
         return keys
 
-        return keys
-    def search(self, search_text:str, library:dict[str,LibraryEntry], max_results:int=10):
+    def search(self, search_text:str, library:dict[str,LibraryEntry], max_results:int=10, highlight:bool=False):
         self.load_model()
         if self.model is None or self.engine is None:
             self.log.error("Failed to load model, cannot index!")
             return
+        self.log.info(f"Max_results: {max_results}")
         search_results: list[SearchResultEntry] = []
         device = torch.device(self.resolve_device())
         search_tensor = self.engine.encode_query(search_text, convert_to_tensor=True, show_progress_bar=False, normalize_embeddings=True).to(device)  # pyright:ignore[reportUnknownMemberType]
@@ -599,13 +639,12 @@ class VectorStore:
             cosine:float = cosines[max_ind].item()
             if best_min_cosine is None or cosine > best_min_cosine:
                 search_results.append(SearchResultEntry({'cosine': cosine, 'hash': hash, 'chunk_index': max_ind, 'entry': library[hash]}))
-                if search_results is not None:
-                    search_results = sorted(search_results, key=lambda res: res['cosine'])
-                    search_results = search_results[-max_results:]
-                    best_min_cosine = search_results[0]['cosine']
-                    # print(f"{search_results[0]['cosine']}:{search_results[-1]['cosine']}, added: {library[hash]['source_path']}")
+                search_results = sorted(search_results, key=lambda res: res['cosine'])
+                search_results = search_results[-max_results:]
+                best_min_cosine = search_results[0]['cosine']
+                # print(f"{search_results[0]['cosine']}:{search_results[-1]['cosine']}, added: {library[hash]['source_path']}")
         for index, result in enumerate(search_results):
-            result_text = self.get_chunk(result['entry']['text'], result['chunk_index'], self.model['chunk_size'], self.model['chunk_overlap'])
+            result_text = self.get_chunk_context_aware(result['entry']['text'], result['chunk_index'], self.model['chunk_size'], self.model['chunk_overlap'])
             replacers = [("\n", " "), ("\r", " "), ("\b", " "), ("\t", " "), ("  ", " ")]
             zero_width = [("\u200b", ""), ("\u200c", ""), ("\u200d", ""), ("\u00ad", ""), ("\ufeff", "")] 
             replacers += zero_width
@@ -620,13 +659,15 @@ class VectorStore:
             rows = [[str(len(search_results)-index)+'.', result_text]]
             print()
             keywords = self.get_keywords(search_text)
+            if highlight is True:
+                pass
             _ = tf.print_table(header, rows, multi_line=True, keywords=keywords)
         print()
             
     
 class DocumentStore:
     def __init__(self):
-        self.current_version: int = 2
+        self.current_version: int = 3
         self.log: logging.Logger = logging.getLogger("DocumentStore")
         self.config_changed:bool = False
         self.config_path: str = os.path.expanduser("~/.config/local_research")
@@ -688,7 +729,11 @@ class DocumentStore:
                         'file_types': ['md']
                     })
                 },
-                'publish_path': '~/LocalResearch'
+                'publish_path': '~/LocalResearch',
+                'vars': {
+                    'search_results': ("10", "int"),
+                    'highlight': ("false", "bool"),
+                    }
                 })
             self.save_config(config)
             self.log.warning(f"Default configuration created at {self.config_file}, please review!")
@@ -712,6 +757,61 @@ class DocumentStore:
             os.remove(temp_path)
             raise e
 
+    def set_var(self, name:str, value:str) -> bool:
+        if name not in self.config['vars']:
+            self.log.error(f"Unknown config variable '{name}', use 'list' for possible names")
+            return False
+        val, type = self.config['vars'][name]
+        if type == 'int':
+            try:
+                v = int(value)
+            except ValueError:
+                self.log.error(f"{name} must be of type 'int'")
+                return False
+            except Exception as e:
+                self.log.error(f"{name} of type int caused: {e}")
+                return False
+        elif type == 'bool':
+            value = value.lower()
+            if value not in ['true', 'false']:
+                self.log.error(f"{name} must be of type 'bool'")
+                return False
+        else:
+            self.log.error(f"{name} has type {type} which is not implemented")
+            return False
+        self.config['vars'][name] = (value, type)
+        if val != value:
+            self.save_config(self.config)
+        return True
+
+    def get_var(self, name:str) -> bool|int|str|None:
+        if name not in self.config['vars']:
+            self.log.error(f"Unknown config variable '{name}', use 'list' for possible names")
+            return False
+        val, type = self.config['vars'][name]
+        if type == 'int':
+            try:
+                v = int(val)
+                return v
+            except ValueError:
+                self.log.error(f"{name} must be of type 'int'")
+                return None
+            except Exception as e:
+                self.log.error(f"{name} of type int caused: {e}")
+                return None
+        elif type == 'bool':
+            val = val.lower()
+            if val not in ['true', 'false']:
+                self.log.error(f"{name} must be of type 'bool'")
+                return None
+            if val == 'true':
+                return True
+            else:
+                return False
+        else:
+            self.log.error(f"{name} has type {type} which is not implemented")
+            return None
+        
     def load_sequence_versions(self) -> tuple[int,int]:
         try:
             with open(self.remote_sequence_file, 'r') as f:
@@ -1177,6 +1277,14 @@ class DocumentStore:
                     row.append("0")
             row.append("")
             rows.append(row)
+            _ = tf.print_table(header, rows, al)
+            print()
+            header = ['Variable', 'Value', 'Type']
+            al = [True, True, False]
+            rows: list[list[str]] = []
+            for name in self.config['vars']:
+                val, type = self.config['vars'][name]
+                rows.append([name, val, type])
             _ = tf.print_table(header, rows, al)
             print()
 

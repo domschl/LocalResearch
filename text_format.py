@@ -35,10 +35,11 @@ class TextFormat:
     def __init__(self):
         self.log: logging.Logger = logging.getLogger("TextFormat")
         self.sep:str = "┇"
+        self.paper_color: Color = Color("#fbfaf2")
         self.theme: dict[str, tuple[Color,Color]] = {
-            'header': (Color("#cdc67f"), Color("#000000")),
-            'text': (Color("#dbdad2"), Color("#000000")),
-            'keyword': (Color("#dbdad2"), Color("#0c4dff")),
+            'header': (Color("#e0d67f"), Color("#000000")),
+            'text': (self.paper_color, Color("#000000")),
+            'keyword': (Color("#ffffa0"), Color("#0c4dff")),
             }
 
     def shorten(self, text:str, length:int, left_align:bool|None=None, ellipsis:str='⋯') -> str:
@@ -93,13 +94,13 @@ class TextFormat:
         if len(line) <= length:
             return line, ""
         ind = length
-        mx = 10
+        mx = 18
         if mx > len(line) // 2:
             mx = len(line) // 2
         for mxi in range(mx):
             if line[ind - mxi] == ' ':
                 return line[:ind - mxi], line[ind - mxi + 1:]
-            if line[ind - mxi] == '-':
+            if line[ind - mxi] == '-' and mxi != 0:
                 return line[:ind - mxi + 1], line[ind - mxi + 1:]
         return line[:length], line[length:]
         
@@ -117,18 +118,49 @@ class TextFormat:
             lines.append(' ' * length)
         return lines
 
-    def key_highlight(self, text:str, keys:list[str]|None) -> str:
+    def key_highlight(self, text:str, keys:list[str]|None):
         if keys is None or keys == []:
-            return text
-        for key in keys:
-            text = text.replace(key, "[bold red]"+key+"[/bold red]")
-        return text
+            self.tkc("text")
+            print(text, end="")
+            return
+        while len(text) > 0:
+            min_ind = -1
+            key_len = 0
+            for key in keys:
+                ind = text.lower().find(key.lower())
+                if ind > -1 and ind > min_ind:
+                    min_ind = ind
+                    key_len = len(key)
+            if min_ind == -1:
+                self.tkc("text")
+                print(text, end="")
+                return
+            else:
+                self.tkc("text")
+                print(text[:min_ind], end="")
+                self.tkc("keyword")
+                print(text[min_ind:min_ind+key_len], end="")
+                self.tkc("text")
+                text = text[min_ind+key_len:]
                 
+    def filter_keys(self, keywords: list[str]|None) -> list[str]|None:
+        if keywords is None or keywords == []:
+            return keywords
+        trivials = ["and", "or", "to", "of", "the", "a", "in", "this", "these", "be", "it", "for"]
+        f_keys:list[str] = []
+        for key in keywords:
+            if key not in trivials:
+                f_keys.append(key)
+        return f_keys
+    
     def print_table(self, header:list[str], rows:list[list[str]], alignments:list[bool|None]|None=None, multi_line:bool=False, max_width:int=0, keywords:list[str]|None=None) -> bool:
         if max_width == 0:
             width:int = os.get_terminal_size()[0]
         else:
             width = max_width
+        if width < 30:
+            self.log.error(f"Window width insufficient: {width}")
+            return False
         header_cols = len(header)
         if alignments is not None and len(alignments) != len(header):
             self.log.error(f"If alignments are not None, dim must be equal to header dim")
@@ -199,8 +231,7 @@ class TextFormat:
                         print(' ', end="")
                         if len(sub_lines[index]) > sl:
                             sline = sub_lines[index][sl]
-                            # line += self.key_highlight(sline, keywords)
-                            print(sline, end="")
+                            self.key_highlight(sline, self.filter_keys(keywords))
                         else:
                             print(' ' * col_width[index], end="")
                         print(' ' + self.sep, end="")
