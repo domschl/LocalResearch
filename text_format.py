@@ -189,8 +189,8 @@ class TextFormat:
                             "be", "it", "for", "on", "he", "she", "is", "was"]
         f_keys:list[str] = []
         for key in keywords:
-            if key not in trivials:
-                f_keys.append(key)
+            if key.lower() not in trivials:
+                f_keys.append(key.lower())
         return f_keys
     
     def print_table(self, header:list[str], rows:list[list[str]], alignments:list[bool|None]|None=None,

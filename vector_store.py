@@ -779,7 +779,7 @@ class DocumentStore:
                 'publish_path': '~/LocalResearch',
                 'vars': {
                     'search_results': ("10", "int"),
-                    'highlight': ("false", "bool"),
+                    'highlight': ("true", "bool"),
                     'highlight_cutoff': ("0.3", "float"),
                     'highlight_dampening': ("1.5", "float"),
                     }
