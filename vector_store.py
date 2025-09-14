@@ -675,6 +675,7 @@ class VectorStore:
                 for rep in replacers:
                     result_text = result_text.replace(rep[0], rep[1])
             header = [f"{result['cosine']:.3f}", result['entry']['source_path']]
+            rows: list[list[str]] = [[str(len(search_results)-index+1), result_text]]
             print()
             keywords = self.get_keywords(search_text)
             significance: list[float] = [0.0] * len(result_text)
