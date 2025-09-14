@@ -153,7 +153,7 @@ class TextFormat:
                 f_keys.append(key)
         return f_keys
     
-    def print_table(self, header:list[str], rows:list[list[str]], alignments:list[bool|None]|None=None, multi_line:bool=False, max_width:int=0, keywords:list[str]|None=None) -> bool:
+    def print_table(self, header:list[str], rows:list[list[str|tuple[str,str]]], alignments:list[bool|None]|None=None, multi_line:bool=False, max_width:int=0, keywords:list[str]|None=None) -> bool:
         if max_width == 0:
             width:int = os.get_terminal_size()[0]
         else:

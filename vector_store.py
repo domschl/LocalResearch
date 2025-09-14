@@ -611,6 +611,9 @@ class VectorStore:
                 keys.append(key)
         return keys
 
+    def markup(self, text:str, search_text:str, keywords:list[str]) -> list[str]:
+        pass
+
     def search(self, search_text:str, library:dict[str,LibraryEntry], max_results:int=10, highlight:bool=False):
         self.load_model()
         if self.model is None or self.engine is None:
@@ -648,12 +651,16 @@ class VectorStore:
                 for rep in replacers:
                     result_text = result_text.replace(rep[0], rep[1])
             header = [f"{result['cosine']:.3f}", result['entry']['source_path']]
-            rows = [[str(len(search_results)-index)+'.', result_text]]
             print()
             keywords = self.get_keywords(search_text)
             if highlight is True:
-                pass
-            _ = tf.print_table(header, rows, multi_line=True, keywords=keywords)
+                markup = self.markup(result_text, search_text, keywords)
+                rows = [[str(len(search_results)-index)+'.', (result_text, markup)]]
+                _ = tf.print_table(header, rows, multi_line=True, keywords=keywords)
+            else:
+                rows = [[str(len(search_results)-index)+'.', result_text]]
+                _ = tf.print_table(header, rows, multi_line=True, keywords=keywords)
+                
         print()
             
     
