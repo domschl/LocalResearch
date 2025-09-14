@@ -607,6 +607,37 @@ class VectorStore:
         keys = text.split(' ')
         return keys
 
+    def get_significance(self, text: str, search_tensor: torch.Tensor, overall_cosine:float, context_length: int, context_steps: int) -> list[float]:
+        clr: list[str] = []
+        if self.model is None:
+            self.log.error("No active model")
+            return []
+        batch_size = self.config['batch_base_multiplier'] * self.model['batch_multiplier']
+        text_len = len(text)
+        for i in range(0, text_len, context_steps):
+            i0 = max(0, i - context_length // 2)
+            i1 = min(text_len, i + context_length // 2 + (context_length % 2))
+            if i0 == 0 and i1 < text_len: 
+                i1 = min(text_len, i0 + context_length)
+            elif i1 == text_len and i0 > 0: 
+                i0 = max(0, i1 - context_length)
+            snippet = text[i0:i1];
+            if snippet: 
+                clr.append(snippet)
+        if not clr: 
+            clr = [text]
+
+        context_tensor: torch.Tensor = self.engine.encode_document(clr, convert_to_tensor=True, show_progress_bar=False, batch_size=batch_size, normalize_embeddings=True)  # pyright:ignore[reportUnknownMemberType]
+        cosines: list[float] = self.engine.similarity(context_tensor, search_tensor).reshape((-1,)).tolist()
+
+        for index, cosine in enumerate(cosines):
+            n_cos = cosine - overall_cosine
+            if n_cos < 0:
+                n_cos = 0.0
+            cosines[index] = n_cos
+        
+        return cosines
+
     def search(self, search_text:str, library:dict[str,LibraryEntry], max_results:int=10, highlight:bool=False):
         self.load_model()
         if self.model is None or self.engine is None:
@@ -647,9 +678,15 @@ class VectorStore:
             rows = [[str(len(search_results)-index)+'.', result_text]]
             print()
             keywords = self.get_keywords(search_text)
+            significance: list[float] = [0.0] * len(result_text)
             if highlight is True:
-                pass
-            _ = tf.print_table(header, rows, multi_line=True, keywords=keywords)
+                context_steps = 4
+                context_length = 16
+                stepped_significance: list[float] = self.get_significance(result_text, search_tensor, result['cosine'], context_length, context_steps)
+                for ind in range(len(result_text)):
+                    significance[ind] = stepped_significance[ind // context_steps]
+                    
+            _ = tf.print_table(header, rows, multi_line=True, keywords=keywords, significance=significance)
         print()
             
     
