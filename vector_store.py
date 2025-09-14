@@ -778,10 +778,10 @@ class DocumentStore:
                 },
                 'publish_path': '~/LocalResearch',
                 'vars': {
-                    'search_results': ("10", "int"),
+                    'search_results': ("3", "int"),
                     'highlight': ("true", "bool"),
                     'highlight_cutoff': ("0.3", "float"),
-                    'highlight_dampening': ("1.5", "float"),
+                    'highlight_dampening': ("1.2", "float"),
                     }
                 })
             self.save_config(config)

@@ -96,8 +96,6 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 highlight: bool = cast(bool, ds.get_var('highlight'))
                 cutoff = cast(float, ds.get_var('highlight_cutoff'))
                 damp:float = cast(float, ds.get_var('highlight_dampening'))
-
-                print(f"{cutoff}, {damp}")
                 vs.search(arguments, ds.library, search_results, highlight, cutoff, damp)
             elif command == 'publish':
                 _ = ds.publish(arguments)
