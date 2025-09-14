@@ -146,7 +146,7 @@ class TextFormat:
     def filter_keys(self, keywords: list[str]|None) -> list[str]|None:
         if keywords is None or keywords == []:
             return keywords
-        trivials = ["and", "or", "to", "of", "the", "a", "in", "this", "these", "be", "it", "for"]
+        trivials = ["and", "or", "to", "of", "the", "a", "in", "this", "these", "be", "it", "for", "on", "he", "she"]
         f_keys:list[str] = []
         for key in keywords:
             if key not in trivials:

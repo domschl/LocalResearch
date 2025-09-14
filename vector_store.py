@@ -602,13 +602,9 @@ class VectorStore:
         print(" "*80)
         self.log.info("Index completed")
 
+    
     def get_keywords(self, text:str) -> list[str]:
-        keys: list[str] = []
-        akeys = text.split(' ')
-        trivials = ['the', 'a', 'in', 'of']
-        for key in akeys:
-            if key not in trivials:
-                keys.append(key)
+        keys = text.split(' ')
         return keys
 
     def search(self, search_text:str, library:dict[str,LibraryEntry], max_results:int=10, highlight:bool=False):
