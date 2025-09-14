@@ -820,7 +820,7 @@ class DocumentStore:
             except Exception as e:
                 self.log.error(f"{name} of type int caused: {e}")
                 return False
-        if type == 'float':
+        elif type == 'float':
             try:
                 v = float(value)
             except ValueError:
