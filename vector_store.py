@@ -7,6 +7,7 @@ import hashlib
 import tempfile
 from typing import TypedDict, cast
 import subprocess
+import math
         
 import pymupdf  # pyright: ignore[reportMissingTypeStubs]
 import pymupdf4llm  # pyright: ignore[reportMissingTypeStubs]  # XXX currently locked to 0.19, otherwise export returns empty docs, requires investigation!
@@ -239,6 +240,7 @@ class VectorStore:
     def list_models(self, current_model: str|None = None):
         header = ["ID", "Embeddings", "Model"]
         rows: list[list[str]] = []
+        selected: int|None = None
         for ind, model in enumerate(self.model_list):
             path = self.model_embedding_path(model['model_name'])
             cnt = len(get_files_of_extensions(path, ['pt']))
@@ -248,9 +250,10 @@ class VectorStore:
                 post = ''
             if model['model_name'] == current_model:
                 rows.append([f">{ind+1}<", str(cnt), f"{model['model_name']}{post}"])
+                selected = ind
             else:
                 rows.append([f" {ind+1}", str(cnt), f"{model['model_name']}{post}"])
-        _ = tf.print_table(header, rows, [True, False, True])
+        _ = tf.print_table(header, rows, [True, False, True], selected=selected)
         print()
         print("Use 'select <ID>' to change the active model, 'enable|disable <ID>' to activate/deactivate")
 
@@ -270,6 +273,7 @@ class VectorStore:
         header = ["ID", "Embeddings", "Debris", "Deleted", "Missing", "Model"]
         alignment = [True, False, False, False, False, True]
         rows: list[list[str]] = []
+        selected: int|None = None
         for ind, model in enumerate(self.model_list):
             cnt = 0
             debris_cnt = 0
@@ -295,11 +299,12 @@ class VectorStore:
                     hint_missing = True
                 if model['model_name'] == current_model:
                     rows.append([f">{ind+1}<", str(cnt), str(debris_cnt), str(deleted_cnt), str(missing), model['model_name']])
+                    selected = ind
                 else:
                     rows.append([f" {ind+1} ", str(cnt), str(debris_cnt), str(deleted_cnt), str(missing), model['model_name']])
             else:
                 rows.append([f">{ind+1}<", "DISABLED", "", "", "", model['model_name']])
-        _ = tf.print_table(header, rows, alignment)
+        _ = tf.print_table(header, rows, alignment, selected=selected)
         print()
         if all_deleted > 0:
             self.log.info(f"{all_deleted} unused index files removed")
@@ -607,10 +612,11 @@ class VectorStore:
         keys = text.split(' ')
         return keys
 
-    def get_significance(self, text: str, search_tensor: torch.Tensor, overall_cosine:float, context_length: int, context_steps: int) -> list[float]:
+    def get_significance(self, text: str, search_tensor: torch.Tensor, overall_cosine:float, context_length: int, context_steps: int, cutoff:float=0.0) -> list[float]:
         clr: list[str] = []
         if self.model is None:
             self.log.error("No active model")
+
             return []
         batch_size = self.config['batch_base_multiplier'] * self.model['batch_multiplier']
         text_len = len(text)
@@ -630,20 +636,29 @@ class VectorStore:
         context_tensor: torch.Tensor = self.engine.encode_document(clr, convert_to_tensor=True, show_progress_bar=False, batch_size=batch_size, normalize_embeddings=True)  # pyright:ignore[reportUnknownMemberType]
         cosines: list[float] = self.engine.similarity(context_tensor, search_tensor).reshape((-1,)).tolist()
 
-        for index, cosine in enumerate(cosines):
-            n_cos = cosine - overall_cosine
-            if n_cos < 0:
-                n_cos = 0.0
-            cosines[index] = n_cos
-        
+        min_cos = 1.0
+        max_cos = 0.0
+        for cos in cosines:
+            if cos < min_cos:
+                min_cos = cos
+            if cos > max_cos:
+                max_cos = cos
+        if max_cos - min_cos > 0.0:
+            for ind, cos in enumerate(cosines):
+                cosines[ind] = (cos - min_cos) / (max_cos - min_cos)
+
+            for ind, cos in enumerate(cosines):
+                cosines[ind] = (math.exp(cos) - 1) / (math.exp(1) - 1)
+                if cosines[ind] < cutoff:
+                    cosines[ind] = 0.0
         return cosines
 
-    def search(self, search_text:str, library:dict[str,LibraryEntry], max_results:int=10, highlight:bool=False):
+    def search(self, search_text:str, library:dict[str,LibraryEntry], max_results:int=10, highlight:bool=False,
+               highlight_cutoff:float=0.0, highlight_dampening:float=1.0):
         self.load_model()
         if self.model is None or self.engine is None:
             self.log.error("Failed to load model, cannot index!")
             return
-        self.log.info(f"Max_results: {max_results}")
         search_results: list[SearchResultEntry] = []
         device = torch.device(self.resolve_device())
         search_tensor = self.engine.encode_query(search_text, convert_to_tensor=True, show_progress_bar=False, normalize_embeddings=True).to(device)  # pyright:ignore[reportUnknownMemberType]
@@ -675,24 +690,31 @@ class VectorStore:
                 for rep in replacers:
                     result_text = result_text.replace(rep[0], rep[1])
             header = [f"{result['cosine']:.3f}", result['entry']['source_path']]
-            rows: list[list[str]] = [[str(len(search_results)-index+1), result_text]]
+            rows: list[list[str]] = [[str(len(search_results) - index), result_text]]
             print()
             keywords = self.get_keywords(search_text)
             significance: list[float] = [0.0] * len(result_text)
             if highlight is True:
                 context_steps = 4
                 context_length = 16
-                stepped_significance: list[float] = self.get_significance(result_text, search_tensor, result['cosine'], context_length, context_steps)
+                stepped_significance: list[float] = self.get_significance(result_text, search_tensor, result['cosine'], context_length, context_steps, highlight_cutoff)
+                if highlight_dampening == 0.0:
+                    self.log.error("Dampending must not be zero!")
+                    highlight_dampening = 1.0
                 for ind in range(len(result_text)):
-                    significance[ind] = stepped_significance[ind // context_steps]
-                    
+                    significance[ind] = stepped_significance[ind // context_steps] * result['cosine'] / highlight_dampening
+
+                # for ind in range(len(significance)):
+                #     print(f"{significance[ind]:.2f} ", end="")
+                # print()
+                
             _ = tf.print_table(header, rows, multi_line=True, keywords=keywords, significance=significance)
         print()
             
     
 class DocumentStore:
     def __init__(self):
-        self.current_version: int = 3
+        self.current_version: int = 4
         self.log: logging.Logger = logging.getLogger("DocumentStore")
         self.config_changed:bool = False
         self.config_path: str = os.path.expanduser("~/.config/local_research")
@@ -758,6 +780,8 @@ class DocumentStore:
                 'vars': {
                     'search_results': ("10", "int"),
                     'highlight': ("false", "bool"),
+                    'highlight_cutoff': ("0.3", "float"),
+                    'highlight_dampening': ("1.5", "float"),
                     }
                 })
             self.save_config(config)
@@ -796,6 +820,15 @@ class DocumentStore:
             except Exception as e:
                 self.log.error(f"{name} of type int caused: {e}")
                 return False
+        if type == 'float':
+            try:
+                v = float(value)
+            except ValueError:
+                self.log.error(f"{name} must be of type 'float'")
+                return False
+            except Exception as e:
+                self.log.error(f"{name} of type float caused: {e}")
+                return False
         elif type == 'bool':
             value = value.lower()
             if value not in ['true', 'false']:
@@ -824,6 +857,16 @@ class DocumentStore:
             except Exception as e:
                 self.log.error(f"{name} of type int caused: {e}")
                 return None
+        elif type == 'float':
+            try:
+                v = float(val)
+                return v
+            except ValueError:
+                self.log.error(f"{name} must be of type 'float'")
+                return None
+            except Exception as e:
+                self.log.error(f"{name} of type float caused: {e}")
+                return None            
         elif type == 'bool':
             val = val.lower()
             if val not in ['true', 'false']:

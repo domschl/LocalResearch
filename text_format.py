@@ -1,6 +1,7 @@
 import logging
 import os
 from dataclasses import dataclass
+from copy import copy
 #from typing import TypedDict
 # from rich import print as rprint
 
@@ -31,6 +32,39 @@ class Color:
             if b is not None:
                 self.b = b
 
+
+class AttrString:
+    def __init__(self, string:str, bg:Color|list[Color], fg:Color|list[Color]):
+        self.string:str = string
+        if isinstance(bg, list):
+            if len(self.string) != len(bg):
+                raise ValueError("String length must be equal to bg color list")
+            self.bg = copy(bg)
+        else:
+            self.bg:list[Color] = []
+            for _ in range(len(self.string)):
+                self.bg.append(copy(bg))
+        if isinstance(fg, list):
+            if len(self.string) != len(fg):
+                raise ValueError("String length must be equal to fg color list")
+            self.fg = copy(fg)
+        else:
+            self.fg:list[Color] = []
+            for _ in range(len(self.string)):
+                self.fg.append(copy(fg))
+        
+    def __len__(self):
+        return len(self.string)
+
+    def __add__(self, other:'AttrString'):  ## Type work-around
+        return AttrString(self.string + other.string, self.bg+other.bg, self.fg+other.fg)
+
+    def substring(self, start:int, end:int=-1) -> 'AttrString':  ## Type work-around
+        if end == -1:
+            end = len(self.string)
+        return AttrString(self.string[start:end], self.bg[start:end], self.fg[start:end])
+            
+
 class TextFormat:
     def __init__(self):
         self.log: logging.Logger = logging.getLogger("TextFormat")
@@ -39,7 +73,8 @@ class TextFormat:
         self.theme: dict[str, tuple[Color,Color]] = {
             'header': (Color("#e0d67f"), Color("#000000")),
             'text': (self.paper_color, Color("#000000")),
-            'keyword': (Color("#ffffa0"), Color("#0c4dff")),
+            'keyword': (Color("#ffffa0"), Color("#ff0000")),
+            'selected': (Color("#e0e0ff"), Color("#000000")),
             }
 
     def shorten(self, text:str, length:int, left_align:bool|None=None, ellipsis:str='⋯') -> str:
@@ -82,6 +117,21 @@ class TextFormat:
     def defc():
         print("\033[m", end="", flush=True)
 
+    @staticmethod
+    def print_attr(text:AttrString):
+        # last_bg:Color|None = None
+        # last_fg:Color|None = None
+        for ind in range(len(text.string)):
+            c = text.string[ind]
+            # if last_bg != text.bg[ind]:
+            last_bg = text.bg[ind]
+            TextFormat.bg(last_bg)
+            # if last_fg != text.fg[ind]:
+            last_fg = text.fg[ind]
+            TextFormat.fg(last_fg)
+            print(c, end="")
+        TextFormat.defc()
+            
     def tkc(self, name:str):
         if name not in self.theme:
             self.log.error(f"Unknown theme component {name} referenced.")
@@ -90,74 +140,68 @@ class TextFormat:
         TextFormat.bg(bg)
         TextFormat.fg(fg)        
     
-    def valid_split(self, line:str, length:int) -> tuple[str, str]:
+    def valid_split(self, line:AttrString, length:int) -> tuple[AttrString, AttrString]:
         if len(line) <= length:
-            return line, ""
+            return line, AttrString("", *self.theme['text'])
         ind = length
         mx = 18
         if mx > len(line) // 2:
             mx = len(line) // 2
         for mxi in range(mx):
-            if line[ind - mxi] == ' ':
-                return line[:ind - mxi], line[ind - mxi + 1:]
-            if line[ind - mxi] == '-' and mxi != 0:
-                return line[:ind - mxi + 1], line[ind - mxi + 1:]
-        return line[:length], line[length:]
-        
-    
-    def multi_liner(self, text:str, length:int) -> list[str]:
-        lines: list[str]= []
+            if line.string[ind - mxi] == ' ':
+                return line.substring(0,ind - mxi), line.substring(ind - mxi + 1)
+            if line.string[ind - mxi] == '-' and mxi != 0:
+                return line.substring(0,ind - mxi + 1), line.substring(ind - mxi + 1)
+        return line.substring(0,length), line.substring(length)
+            
+    def markup(self, text:AttrString, keywords:list[str], significance:list[float]|None):
+        for ind in range(len(text.string)):
+            for keyword in keywords:
+                if text.string[ind:ind+len(keyword)].lower() == keyword.lower():
+                    for mark in range(ind, ind+len(keyword)):
+                        text.bg[mark] = self.theme['keyword'][0]
+                        text.fg[mark] = self.theme['keyword'][1]
+            if significance is not None and significance[ind] != 0:
+                cur_bg = text.bg[ind]
+                yellow = int(cur_bg.b - significance[ind] * 255)
+                if yellow > 255:
+                    yellow = 255
+                if yellow < 0:
+                    yellow = 0
+                text.bg[ind].b = yellow
+        return text
+                
+    def multi_liner(self, text:AttrString, length:int) -> list[AttrString]:
+        lines: list[AttrString]= []
         while len(text) > 0:
             if len(text) <= length:
-                lines.append(text + ' ' * (length - len(text)))
-                text = ""
+                lines.append(text + AttrString(' ' * (length - len(text)), *self.theme['text']))
+                text = AttrString("", *self.theme['text'])
             else:
                 line, text = self.valid_split(text, length)
-                lines.append(line + ' ' * (length - len(line)))
+                lines.append(line + AttrString(' ' * (length - len(line)), *self.theme['text']))
         if lines == []:
-            lines.append(' ' * length)
+            lines.append(AttrString(' ' * length, *self.theme['text']))
         return lines
 
-    def key_highlight(self, text:str, keys:list[str]|None):
-        if keys is None or keys == []:
-            self.tkc("text")
-            print(text, end="")
-            return
-        while len(text) > 0:
-            min_ind = -1
-            key_len = 0
-            for key in keys:
-                ind = text.lower().find(key.lower())
-                if ind > -1 and ind > min_ind:
-                    min_ind = ind
-                    key_len = len(key)
-            if min_ind == -1:
-                self.tkc("text")
-                print(text, end="")
-                return
-            else:
-                self.tkc("text")
-                print(text[:min_ind], end="")
-                self.tkc("keyword")
-                print(text[min_ind:min_ind+key_len], end="")
-                self.tkc("text")
-                text = text[min_ind+key_len:]
-                
-    def filter_keys(self, keywords: list[str]|None) -> list[str]|None:
-        if keywords is None or keywords == []:
-            return keywords
-        trivials = ["and", "or", "to", "of", "the", "a", "in", "this", "these", "be", "it", "for", "on", "he", "she"]
+    def filter_keys(self, keywords: list[str]) -> list[str]:
+        trivials = ["and", "or", "to", "of", "the", "a", "in", "what", "which", "this", "these",
+                            "be", "it", "for", "on", "he", "she", "is", "was"]
         f_keys:list[str] = []
         for key in keywords:
             if key not in trivials:
                 f_keys.append(key)
         return f_keys
     
-    def print_table(self, header:list[str], rows:list[list[str]], alignments:list[bool|None]|None=None, multi_line:bool=False, max_width:int=0, keywords:list[str]|None=None, significance:list[float]|None=None) -> bool:
+    def print_table(self, header:list[str], rows:list[list[str]], alignments:list[bool|None]|None=None,
+                    multi_line:bool=False, max_width:int=0, keywords:list[str]|None=None, selected:list[int]|int|None=None,
+                    significance:list[float]|None=None) -> bool:
         if max_width == 0:
             width:int = os.get_terminal_size()[0]
         else:
             width = max_width
+        if keywords is None:
+            keywords = []
         if width < 30:
             self.log.error(f"Window width insufficient: {width}")
             return False
@@ -206,8 +250,14 @@ class TextFormat:
             print(" " + entry + " " + self.sep, end="")
         print()
         self.tkc("text")
-        for row in rows:
+        for line_index, row in enumerate(rows):
             if multi_line is False:
+                if selected is not None and (selected == line_index or (isinstance(selected, list) and line_index in selected)):
+                    self.bg(self.theme['selected'][0])
+                    self.fg(self.theme['selected'][1])
+                else:
+                    self.bg(self.theme['text'][0])
+                    self.fg(self.theme['text'][1])
                 print(self.sep, end="")
                 for index, col in enumerate(row):
                     if alignments is not None:
@@ -216,12 +266,18 @@ class TextFormat:
                         al = None
                     entry = self.shorten(col, col_width[index], al)
                     print(" " + entry + " " + self.sep, end="")
+                self.defc()
                 print()
             else:
-                sub_lines:list[list[str]] = []
+                sub_lines:list[list[AttrString]] = []
                 max_sub_lines = 0
                 for index, col in enumerate(row):
-                    sls: list[str] = self.multi_liner(col, col_width[index])
+                    acol = AttrString(col, *self.theme['text'])
+                    if significance is not None and len(acol.string) == len(significance):  ## HACK!
+                        acol = self.markup(acol, self.filter_keys(keywords), significance)
+                    else:
+                        acol = self.markup(acol, self.filter_keys(keywords), None)
+                    sls: list[AttrString] = self.multi_liner(acol, col_width[index])
                     if len(sls) > max_sub_lines:
                         max_sub_lines = len(sls)
                     sub_lines.append(sls)
@@ -231,7 +287,7 @@ class TextFormat:
                         print(' ', end="")
                         if len(sub_lines[index]) > sl:
                             sline = sub_lines[index][sl]
-                            self.key_highlight(sline, self.filter_keys(keywords))
+                            TextFormat.print_attr(sline)
                         else:
                             print(' ' * col_width[index], end="")
                         print(' ' + self.sep, end="")

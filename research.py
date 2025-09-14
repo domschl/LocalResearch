@@ -94,7 +94,11 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
             elif command == 'search':
                 search_results: int = cast(int, ds.get_var('search_results'))
                 highlight: bool = cast(bool, ds.get_var('highlight'))
-                vs.search(arguments, ds.library, search_results, highlight)
+                cutoff = cast(float, ds.get_var('highlight_cutoff'))
+                damp:float = cast(float, ds.get_var('highlight_dampening'))
+
+                print(f"{cutoff}, {damp}")
+                vs.search(arguments, ds.library, search_results, highlight, cutoff, damp)
             elif command == 'publish':
                 _ = ds.publish(arguments)
             elif command == 'import':
