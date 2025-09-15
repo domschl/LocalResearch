@@ -826,7 +826,7 @@ class DocumentStore:
 
     def set_var(self, name:str, value:str) -> bool:
         if name not in self.config['vars']:
-            self.log.error(f"Unknown config variable '{name}', use 'list' for possible names")
+            self.log.error(f"Unknown config variable '{name}', use 'list vars' for possible names")
             return False
         val, type = self.config['vars'][name]
         if type == 'int':
@@ -862,7 +862,7 @@ class DocumentStore:
 
     def get_var(self, name:str) -> bool|int|float|str|None:
         if name not in self.config['vars']:
-            self.log.error(f"Unknown config variable '{name}', use 'list' for possible names")
+            self.log.error(f"Unknown config variable '{name}', use 'list vars' for possible names")
             return False
         val, type = self.config['vars'][name]
         if type == 'int':
@@ -1318,62 +1318,70 @@ class DocumentStore:
                 mode = ""
             self.check_pdf_cache(mode)
         
-    def list_info(self, mode: str):
+    def list_sources(self):
         print()
-        if mode == "" or 'sources' in mode:
-            exts = ['pdf', 'txt', 'md']
-            header = ["Source", "Docs"] + exts + ["Path"]
-            al: list[bool] = [True, False] + [False] * len(exts) + [True]
-            rows: list[list[str]] = []
-            sum_ext_cnts: dict[str,int] = {}
-            sum_cnt = 0
-            for source_name in self.config['document_sources']:
-                source = self.config['document_sources'][source_name]
-                cnt = 0
-                ext_cnts: dict[str,int] = {}
-                for hsh in self.library:
-                    if self.library[hsh]['source_name'] == source_name:
-                        cnt += 1
-                        sum_cnt += 1
-                        ext = os.path.splitext(self.library[hsh]['source_path'].lower())[1]
-                        if ext and len(ext) > 0:
-                            ext = ext[1:]
-                        if ext and ext in exts:
-                            if ext in ext_cnts:
-                                ext_cnts[ext] += 1
-                            else:
-                                ext_cnts[ext] = 1
-                            if ext in sum_ext_cnts:
-                                sum_ext_cnts[ext] += 1
-                            else:
-                                sum_ext_cnts[ext] = 1
-                row = [f"{source_name}", str(cnt)]
-                for ext in exts:
-                    if ext in ext_cnts:
-                        row.append(str(ext_cnts[ext]))
-                    else:
-                        row.append("0")
-                row.append(source['path'])
-                rows.append(row)
-            row = ["Total", str(sum_cnt)]
+        exts = ['pdf', 'txt', 'md']
+        header = ["Source", "Docs"] + exts + ["Path"]
+        al: list[bool] = [True, False] + [False] * len(exts) + [True]
+        rows: list[list[str]] = []
+        sum_ext_cnts: dict[str,int] = {}
+        sum_cnt = 0
+        for source_name in self.config['document_sources']:
+            source = self.config['document_sources'][source_name]
+            cnt = 0
+            ext_cnts: dict[str,int] = {}
+            for hsh in self.library:
+                if self.library[hsh]['source_name'] == source_name:
+                    cnt += 1
+                    sum_cnt += 1
+                    ext = os.path.splitext(self.library[hsh]['source_path'].lower())[1]
+                    if ext and len(ext) > 0:
+                        ext = ext[1:]
+                    if ext and ext in exts:
+                        if ext in ext_cnts:
+                            ext_cnts[ext] += 1
+                        else:
+                            ext_cnts[ext] = 1
+                        if ext in sum_ext_cnts:
+                            sum_ext_cnts[ext] += 1
+                        else:
+                            sum_ext_cnts[ext] = 1
+            row = [f"{source_name}", str(cnt)]
             for ext in exts:
-                if ext in sum_ext_cnts:
-                    row.append(str(sum_ext_cnts[ext]))
+                if ext in ext_cnts:
+                    row.append(str(ext_cnts[ext]))
                 else:
                     row.append("0")
-            row.append("")
+            row.append(source['path'])
             rows.append(row)
-            _ = tf.print_table(header, rows, al)
-            print()
-            header = ['Variable', 'Value', 'Type']
-            al = [True, True, False]
-            rows: list[list[str]] = []
-            for name in self.config['vars']:
-                val, type = self.config['vars'][name]
-                rows.append([name, val, type])
-            _ = tf.print_table(header, rows, al)
-            print()
+        row = ["Total", str(sum_cnt)]
+        for ext in exts:
+            if ext in sum_ext_cnts:
+                row.append(str(sum_ext_cnts[ext]))
+            else:
+                row.append("0")
+        row.append("")
+        rows.append(row)
+        _ = tf.print_table(header, rows, al)
+        print()
 
+    def list_vars(self):
+        print()
+        header = ['Variable', 'Value', 'Type']
+        al = [True, True, False]
+        rows: list[list[str]] = []
+        for name in self.config['vars']:
+            val, type = self.config['vars'][name]
+            rows.append([name, val, type])
+        _ = tf.print_table(header, rows, al)
+        print()
+
+    def list_info(self, mode:str):
+        if mode == "" or 'vars' in mode:
+            self.list_vars()
+        if mode == "" or 'sources' in mode:
+            self.list_sources()
+        
     def publish(self, parameters:str) -> bool:
         if self.local_update_required() is True:
             if 'force' not in parameters.split(' '):

@@ -46,7 +46,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 comps = arguments.split(' ')
                 if len(comps) != 2:
                     log.error('Usage: set <name> <value>')
-                    log.info("Use list of list of known variable names and types")
+                    log.info("Use `list vars` for a list of known variable names and types")
                 else:
                     _ = ds.set_var(comps[0], comps[1])
             elif command == 'select':
@@ -112,7 +112,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 else:
                     log.error("Import failed")
             elif command == 'help':
-                print("Use 'list [models|sources]', 'sync', 'check [index|pdf] [clean]', 'select <model-ID>', 'index [force] [all]', 'search <search-string>', 'publish', 'import', set <var-name> <value>")
+                print("Use 'list [models|sources|vars]', 'sync', 'check [index|pdf] [clean]', 'select <model-ID>', 'index [force] [all]', 'search <search-string>', 'publish', 'import', set <var-name> <value>")
             elif command == 'exit' or command == 'quit':
                 break
 
