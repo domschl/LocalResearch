@@ -90,7 +90,10 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                         continue
                     else:
                         log.warning("Version override, starting indexing")
-                vs.index(ds.library)
+                if 'all' in arguments.split(' '):
+                    vs.index_all(ds.library)
+                else:
+                    vs.index(ds.library)
             elif command == 'search':
                 search_results: int = cast(int, ds.get_var('search_results'))
                 highlight: bool = cast(bool, ds.get_var('highlight'))
@@ -109,7 +112,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 else:
                     log.error("Import failed")
             elif command == 'help':
-                print("Use 'list [models|sources]', 'sync', 'check [index|pdf] [clean]', 'select <model-ID>', 'index', 'search <search-string>', 'publish', 'import'")
+                print("Use 'list [models|sources]', 'sync', 'check [index|pdf] [clean]', 'select <model-ID>', 'index [force] [all]', 'search <search-string>', 'publish', 'import', set <var-name> <value>")
             elif command == 'exit' or command == 'quit':
                 break
 

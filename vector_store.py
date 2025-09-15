@@ -182,7 +182,7 @@ class VectorStore:
                     'chunk_size': 1024,     # Adjust based on token limit and desired context
                     'chunk_overlap': 1024 // 3,
                     'batch_multiplier': 1,
-                    'enabled': False,
+                    'enabled': True,
                 },
             ]
             self.save_model_list()
@@ -236,6 +236,12 @@ class VectorStore:
             self.log.error("Config-file update interrupted, not updated.")
             os.remove(temp_path)
             raise e
+
+    def get_model_index(self, model_name:str) -> int|None:
+        for ind, model in enumerate(self.model_list):
+            if model['model_name'] == model_name:
+                return ind+1
+        return None
 
     def list_models(self, current_model: str|None = None):
         header = ["ID", "Embeddings", "Model"]
@@ -607,6 +613,18 @@ class VectorStore:
         print(" "*80)
         self.log.info("Index completed")
 
+    def index_all(self, library:dict[str, LibraryEntry]):
+        current_old = self.config['embeddings_model_name']
+        current_index = self.get_model_index(current_old)
+        for ind in range(len(self.model_list)):
+            if self.model_list[ind]['enabled'] is False:
+                continue
+            name = self.select(ind+1)
+            self.log.info(f"{ind+1}., indexing {name}")
+            self.index(library)
+        if current_index is not None:
+            name = self.select(current_index)
+            self.log.info(f"Reactivated {name} after indexing all.")
     
     def get_keywords(self, text:str) -> list[str]:
         keys = text.split(' ')
@@ -842,7 +860,7 @@ class DocumentStore:
             self.save_config(self.config)
         return True
 
-    def get_var(self, name:str) -> bool|int|str|None:
+    def get_var(self, name:str) -> bool|int|float|str|None:
         if name not in self.config['vars']:
             self.log.error(f"Unknown config variable '{name}', use 'list' for possible names")
             return False
