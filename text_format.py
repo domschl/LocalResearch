@@ -117,6 +117,13 @@ class TextFormat:
     def defc():
         print("\033[m", end="", flush=True)
 
+    def theme_col(self, theme_name:str):
+        if theme_name not in self.theme:
+            self.log.error(f"Unknown theme color {theme_name} referenced")
+            return
+        TextFormat.bg(self.theme[theme_name][0])
+        TextFormat.fg(self.theme[theme_name][1])
+                      
     @staticmethod
     def print_attr(text:AttrString):
         # last_bg:Color|None = None
@@ -159,8 +166,8 @@ class TextFormat:
             for keyword in keywords:
                 if text.string[ind:ind+len(keyword)].lower() == keyword.lower():
                     for mark in range(ind, ind+len(keyword)):
-                        text.bg[mark] = self.theme['keyword'][0]
-                        text.fg[mark] = self.theme['keyword'][1]
+                        text.bg[mark] = copy(self.theme['keyword'][0])
+                        text.fg[mark] = copy(self.theme['keyword'][1])
             if significance is not None and significance[ind] != 0:
                 cur_bg = text.bg[ind]
                 yellow = int(cur_bg.b - significance[ind] * 255)
@@ -195,7 +202,7 @@ class TextFormat:
     
     def print_table(self, header:list[str], rows:list[list[str]], alignments:list[bool|None]|None=None,
                     multi_line:bool=False, max_width:int=0, keywords:list[str]|None=None, selected:list[int]|int|None=None,
-                    significance:list[float]|None=None) -> bool:
+                    significance:list[list[list[float]|None]]|None=None) -> bool:
         if max_width == 0:
             width:int = os.get_terminal_size()[0]
         else:
@@ -209,13 +216,21 @@ class TextFormat:
         if alignments is not None and len(alignments) != len(header):
             self.log.error(f"If alignments are not None, dim must be equal to header dim")
             return False
-        for row in rows:
+        if significance is not None:
+            if len(significance) != len(rows):
+                self.log.error(f"If significance is not None, dim must be equal to dim rows")
+                return False
+        for index, row in enumerate(rows):
             if len(row) > header_cols:
                 self.log.error(f"Faulty row: {row}, too many columns!")
                 return False
             elif len(row) < header_cols:
                 self.log.error(f"Faulty row {row}, too few columns!")
                 return False
+            if significance is not None:
+                if len(significance[index]) != header_cols:
+                    self.log.error(f"Significance row-index {index} has wrong dim!")
+                    return False
         col_width: list[int] = []
         for column in header:
             col_width.append(len(column))
@@ -253,11 +268,9 @@ class TextFormat:
         for line_index, row in enumerate(rows):
             if multi_line is False:
                 if selected is not None and (selected == line_index or (isinstance(selected, list) and line_index in selected)):
-                    self.bg(self.theme['selected'][0])
-                    self.fg(self.theme['selected'][1])
+                    self.theme_col('selected')
                 else:
-                    self.bg(self.theme['text'][0])
-                    self.fg(self.theme['text'][1])
+                    self.theme_col('text')
                 print(self.sep, end="")
                 for index, col in enumerate(row):
                     if alignments is not None:
@@ -273,8 +286,8 @@ class TextFormat:
                 max_sub_lines = 0
                 for index, col in enumerate(row):
                     acol = AttrString(col, *self.theme['text'])
-                    if significance is not None and len(acol.string) == len(significance):  ## HACK!
-                        acol = self.markup(acol, self.filter_keys(keywords), significance)
+                    if significance is not None and significance[line_index][index] is not None:
+                        acol = self.markup(acol, self.filter_keys(keywords), significance[line_index][index])
                     else:
                         acol = self.markup(acol, self.filter_keys(keywords), None)
                     sls: list[AttrString] = self.multi_liner(acol, col_width[index])
@@ -289,6 +302,7 @@ class TextFormat:
                             sline = sub_lines[index][sl]
                             TextFormat.print_attr(sline)
                         else:
+                            self.theme_col('text')
                             print(' ' * col_width[index], end="")
                         print(' ' + self.sep, end="")
                     print()

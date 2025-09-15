@@ -708,7 +708,7 @@ class VectorStore:
                 #     print(f"{significance[ind]:.2f} ", end="")
                 # print()
                 
-            _ = tf.print_table(header, rows, multi_line=True, keywords=keywords, significance=significance)
+            _ = tf.print_table(header, rows, multi_line=True, keywords=keywords, significance=[[None, significance]])
         print()
             
     
