@@ -69,7 +69,7 @@ class TextFormat:
     def __init__(self):
         self.log: logging.Logger = logging.getLogger("TextFormat")
         self.sep:str = "┇"
-        self.paper_color: Color = Color("#fbfaf2")
+        self.paper_color: Color = Color("#fbfaf9")
         self.theme: dict[str, tuple[Color,Color]] = {
             'header': (Color("#e0d67f"), Color("#000000")),
             'text': (self.paper_color, Color("#000000")),
