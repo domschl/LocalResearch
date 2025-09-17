@@ -263,6 +263,7 @@ class TextFormat:
             al = None
             entry = self.shorten(col, col_width[index], al)
             print(" " + entry + " " + self.sep, end="")
+        self.defc()
         print()
         self.tkc("text")
         for line_index, row in enumerate(rows):

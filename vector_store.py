@@ -1,4 +1,5 @@
 import os
+# import psutil
 import logging
 import json
 import time
@@ -47,12 +48,16 @@ class VectorConfig(TypedDict):
     embeddings_device: str
     embeddings_model_trust_code: bool
     batch_base_multiplier: int
+    chunk_size: int
+    chunk_overlap: int
+    umap_n_neighbors: int
+    umap_min_dist: float
+    umap_metric: str
 
 
 class LibraryEntry(TypedDict):
     source_name: str
-    source_path: str  # descriptor
-    primary_source_hash: str | None
+    descriptor: str
     text: str
 
 
@@ -64,9 +69,6 @@ class PDFIndex(TypedDict):
 class EmbeddingModel(TypedDict):
     model_hf_name: str
     model_name: str
-    emb_dim: int
-    chunk_size: int
-    chunk_overlap: int
     batch_multiplier: int
     enabled: bool
 
@@ -100,7 +102,7 @@ def get_files_of_extensions(path:str, extensions: list[str]):
 
 class VectorStore:
     def __init__(self, storage_path:str, config_path:str):
-        self.current_version: int = 1
+        self.current_version: int = 2
         self.log: logging.Logger = logging.getLogger("VectorStore")
         self.storage_path:str = storage_path
         self.config_path:str = config_path
@@ -130,62 +132,48 @@ class VectorStore:
         return os.path.join(self.embeddings_path, model_name)
 
     def get_model_list(self):
+        self.model_list = []
         if os.path.exists(self.model_file):
-            with open(self.model_file, "r") as f:
-                self.model_list = cast(list[EmbeddingModel], json.load(f))
-        else:
+            try:
+                with open(self.model_file, "r") as f:
+                    self.model_list = cast(list[EmbeddingModel], json.load(f))
+            except Exception as e:
+                self.log.error(f"Failed to load model list: {e}, reverting to default")
+        if len(self.model_list) == 0:
             self.model_list = [
                 { # granite-107m
                     'model_hf_name': 'ibm-granite/granite-embedding-107m-multilingual',
                     'model_name': 'granite-embedding-107m-multilingual',
-                    'emb_dim': 384, 
-                    'chunk_size': 2048, 
-                    'chunk_overlap': 2048 // 3,
                     'batch_multiplier': 64,
                     'enabled': True,
                 },
                 {
                     'model_hf_name': 'ibm-granite/granite-embedding-278m-multilingual',
                     'model_name': 'granite-embedding-278m-multilingual',
-                    'emb_dim': 768,
-                    'chunk_size': 2048,
-                    'chunk_overlap': 2048 // 3,
                     'batch_multiplier': 32,
                     'enabled': True,
                 },
                 {
                     'model_hf_name': 'nomic-ai/nomic-embed-text-v2-moe',
                     'model_name': 'nomic-embed-text-v2-moe',
-                    'emb_dim': 768,  #  Matryoshka Embeddings
-                    'chunk_size': 2048,
-                    'chunk_overlap': 2048 // 3,
                     'batch_multiplier': 32,
                     'enabled': True,
                 },
                 {
                     'model_hf_name': 'sentence-transformers/all-MiniLM-L6-v2',
                     'model_name': 'all-MiniLM-L6-v2',
-                    'emb_dim': 384,
-                    'chunk_size': 1024,
-                    'chunk_overlap': 1024 // 3,
                     'batch_multiplier': 128,
                     'enabled': True,
                 },
                 {
                     'model_hf_name': 'google/embeddinggemma-300m',
                     'model_name': 'embeddinggemma',
-                    'emb_dim': 768,
-                    'chunk_size': 2048,
-                    'chunk_overlap': 2048 // 3,
                     'batch_multiplier': 1,
                     'enabled': True,
                 },
                 {
                     'model_hf_name': 'Qwen/Qwen3-Embedding-0.6B',
                     'model_name': 'Qwen3-Embedding-0.6B',
-                    'emb_dim': 1024,
-                    'chunk_size': 1024,     # Adjust based on token limit and desired context
-                    'chunk_overlap': 1024 // 3,
                     'batch_multiplier': 1,
                     'enabled': True,
                 },
@@ -205,25 +193,30 @@ class VectorStore:
 
     def get_config(self) -> VectorConfig:
         valid = False
+        config: VectorConfig | None = None
         if os.path.exists(self.config_file):
             try:
                 with open(self.config_file, "r") as f:
-                    config: VectorConfig = cast(VectorConfig, json.load(f))
+                    config = cast(VectorConfig, json.load(f))
                     valid = True
+                    if config['version'] < self.current_version:
+                        self.log.error(f"Version of config file {self.config_file} is outdated, upgrading to default version {self.current_version}")
+                        valid = False
             except Exception as e:
                 self.log.error(f"Failed to read config {self.config_file}: {e}, resetting to default configuration!")
                 valid = False
-        if valid is True:
-            if 'version' not in config or config['version'] < self.current_version:
-                self.log.error(f"Version of config file {self.config_file} is outdated, upgrading to default version {self.current_version}")
-                valid = False
-        if valid is  False:
+        if valid is False or config is None:
             config = VectorConfig({
                 'version': self.current_version,
                 'embeddings_model_name': 'granite-embedding-107m-multilingual',
                 'embeddings_device': 'auto',
                 'embeddings_model_trust_code': True,
                 'batch_base_multiplier': 1,
+                'chunk_size': 3072,
+                'chunk_overlap': 1024,
+                'umap_n_neighbors': 15,
+                'umap_min_dist': 0.1,
+                'umap_metric': 'cosine',
             })
             self.save_config(config)
             self.log.warning(f"Default configuration created at {self.config_file}, please review!")
@@ -282,7 +275,7 @@ class VectorStore:
         hint_clean = False
         hint_missing = False
         header = ["ID", "Embeddings", "Debris", "Deleted", "Missing", "Model"]
-        alignment = [True, False, False, False, False, True]
+        alignment: list[bool|None]|None = [True, False, False, False, False, True]
         rows: list[list[str]] = []
         selected: int|None = None
         for ind, model in enumerate(self.model_list):
@@ -454,7 +447,7 @@ class VectorStore:
                 y=ny
             else:
                 if ny != y:
-                    print("Tensor dimensions in axis 1 differ! That can't be")
+                    self.log.error("Tensor dimensions in axis 1 differ! That can't be")
                     raise ValueError
         return x,y
         
@@ -612,7 +605,7 @@ class VectorStore:
         if self.model is None or self.engine is None:
             return
         batch_size = self.config['batch_base_multiplier'] * self.model['batch_multiplier']
-        chunks: list[str] = VectorStore.get_chunks(text, self.model['chunk_size'], self.model['chunk_overlap'])
+        chunks: list[str] = VectorStore.get_chunks(text, self.config['chunk_size'], self.config['chunk_overlap'])
         embeddings_tensor = cast(torch.Tensor, self.engine.encode_document(chunks, convert_to_tensor=True, show_progress_bar=False, batch_size=batch_size, normalize_embeddings=True))  # pyright:ignore[reportUnknownMemberType]
         self.save_tensor(embeddings_tensor, filename)
         del embeddings_tensor
@@ -625,10 +618,10 @@ class VectorStore:
         new_chunks: int = 0
         for hash in library:
             filename = self.get_embedding_filename(hash)
-            name = library[hash]['source_path']
+            name = library[hash]['descriptor']
             if os.path.exists(filename):
                 continue
-            new_chunks += VectorStore.get_chunk_count(library[hash]['text'], self.model['chunk_size'], self.model['chunk_overlap'])
+            new_chunks += VectorStore.get_chunk_count(library[hash]['text'], self.config['chunk_size'], self.config['chunk_overlap'])
 
         if new_chunks == 0:
             self.log.info("Index already complete, no new documents found")
@@ -639,7 +632,7 @@ class VectorStore:
         last_output = time.time()
         for hash in library:
             filename = self.get_embedding_filename(hash)
-            name = library[hash]['source_path']
+            name = library[hash]['descriptor']
             if os.path.exists(filename):
                 continue
             perc:float = current_chunks / new_chunks
@@ -659,7 +652,7 @@ class VectorStore:
                 print(f"\rIndexing: {perc*100:.4f}% {name[-80:]:80s}, eta={eta}", end="")
                 last_output = time.time()
             self.save_embeddings_tensor(library[hash]['text'], filename)
-            current_chunks += VectorStore.get_chunk_count(library[hash]['text'], self.model['chunk_size'], self.model['chunk_overlap'])
+            current_chunks += VectorStore.get_chunk_count(library[hash]['text'], self.config['chunk_size'], self.config['chunk_overlap'])
         print(" "*80)
         self.log.info("Index completed")
 
@@ -748,9 +741,9 @@ class VectorStore:
                 search_results = sorted(search_results, key=lambda res: res['cosine'])
                 search_results = search_results[-max_results:]
                 best_min_cosine = search_results[0]['cosine']
-                # print(f"{search_results[0]['cosine']}:{search_results[-1]['cosine']}, added: {library[hash]['source_path']}")
+                # print(f"{search_results[0]['cosine']}:{search_results[-1]['cosine']}, added: {library[hash]['descriptor']}")
         for index, result in enumerate(search_results):
-            result_text = self.get_chunk_context_aware(result['entry']['text'], result['chunk_index'], self.model['chunk_size'], self.model['chunk_overlap'])
+            result_text = self.get_chunk_context_aware(result['entry']['text'], result['chunk_index'], self.config['chunk_size'], self.config['chunk_overlap'])
             replacers = [("\n", " "), ("\r", " "), ("\b", " "), ("\t", " "), ("  ", " ")]
             zero_width = [("\u200b", ""), ("\u200c", ""), ("\u200d", ""), ("\u00ad", ""), ("\ufeff", "")] 
             replacers += zero_width
@@ -759,7 +752,7 @@ class VectorStore:
                 old_text = result_text
                 for rep in replacers:
                     result_text = result_text.replace(rep[0], rep[1])
-            header = [f"{result['cosine']:.3f}", result['entry']['source_path']]
+            header = [f"{result['cosine']:.3f}", result['entry']['descriptor']]
             rows: list[list[str]] = [[str(len(search_results) - index), result_text]]
             print()
             keywords = self.get_keywords(search_text)
@@ -795,32 +788,40 @@ class VectorStore:
             matrix = matrix[:max_points, :]
             hashes = hashes[:max_points]
             self.log.info(f"Reduced by max_points {max_points}, matrix {matrix.shape}, hash-count: {len(hashes)}")
-            
-        n_neighbors_val = 15
+        # total_mem:int = psutil.virtual_memory().total
+        # if total_mem > 134809341952 // 2:
+        #     low_mem = False
+        #     self.log.info("High memory usage ok")
+        # else:
+        low_mem = True
+        n_neighbors_val = 5
         reducer = umap.UMAP(n_components=3, n_neighbors=n_neighbors_val, 
-                                min_dist=0.1, metric='cosine', low_memory=True)
+                                min_dist=0.1, metric='cosine', low_memory=low_mem)
                                 # min_dist=0.1, random_state=42, metric='cosine')
         try:
+            self.log.info("Starting UMAP reducer")
             reduced_embeddings_np = cast(np.typing.NDArray[np.float32], reducer.fit_transform(matrix))  # pyright:ignore[reportUnknownMemberType]
+            self.log.info("Reducer finished, compiling results")
         except Exception as e:
             self.log.error(f"UMAP reduction failed: {e} (shape: {matrix.shape}, n_neighbors: {n_neighbors_val})")
             return {"error": f"UMAP reduction failed: {str(e)}"}
 
-        points = reduced_embeddings_np.tolist()
-        texts = [library[hash]['source_path']+f"[{chunk_id}]" for hash, chunk_id in hashes]
-        doc_ids = [library[hash]['source_path'] for hash, _chunk_id in hashes]
+        points:list[list[float]] = cast(list[list[float]], reduced_embeddings_np.tolist())
+        texts = [library[hash]['descriptor']+f"[{chunk_id}]" for hash, chunk_id in hashes]
+        doc_ids = [library[hash]['descriptor'] for hash, _chunk_id in hashes]
 
         unique_doc_ids = list(set(doc_ids))
 
         num_unique_docs = len(unique_doc_ids)
-        color_map = {}
+        color_map: dict[str, list[int]] = {}
         for i, doc_id_val in enumerate(unique_doc_ids):
             hue = i / num_unique_docs if num_unique_docs > 0 else 0
             rgb_float = colorsys.hls_to_rgb(hue, 0.5, 0.8) 
             color_map[doc_id_val] = [int(c * 255) for c in rgb_float]
 
-        colors = [color_map.get(library[hash]['source_path'], [128,128,128]) for hash, _chunk_id in hashes]
+        colors: list[list[int]] = [color_map.get(library[hash]['descriptor'], [128,128,128]) for hash, _chunk_id in hashes]
         sizes = [5.0] * len(points)
+        self.log.info("UMAP finished")
 
         return {
             "points": points,
@@ -892,19 +893,19 @@ class DocumentStore:
 
     def get_config(self) -> DocumentConfig:
         valid = False
+        config: DocumentConfig | None = None
         if os.path.exists(self.config_file):
             try:
                 with open(self.config_file, "r") as f:
-                    config: DocumentConfig = cast(DocumentConfig, json.load(f))
+                    config = cast(DocumentConfig, json.load(f))
                     valid = True
+                    if config['version'] < self.current_version:
+                        self.log.error(f"Config file {self.config_file} is outdated version, upgrading to new defaults!")
+                        valid = False
             except Exception as e:
                 self.log.error(f"Failed to read config-file {self.config_file}: {e}, resetting to default configuration!")
                 valid = False
-        if valid is True:
-            if 'version' not in config or config['version'] < self.current_version:
-                self.log.error(f"Config file {self.config_file} is outdated version, upgrading to new defaults!")
-                valid = False
-        if valid is False:
+        if valid is False or config is None:
             config = DocumentConfig({
                 'version': self.current_version,
                 'document_sources': {
@@ -956,7 +957,7 @@ class DocumentStore:
         val, type = self.config['vars'][name]
         if type == 'int':
             try:
-                v = int(value)
+                _v = int(value)
             except ValueError:
                 self.log.error(f"{name} must be of type 'int'")
                 return False
@@ -965,7 +966,7 @@ class DocumentStore:
                 return False
         elif type == 'float':
             try:
-                v = float(value)
+                _v = float(value)
             except ValueError:
                 self.log.error(f"{name} must be of type 'float'")
                 return False
@@ -1113,9 +1114,9 @@ class DocumentStore:
             
 #        upgraded = False
 #        for entry in self.library:
-#            if self.library[entry]['source_path'].startswith('{') is False:
-#                descriptor = self.get_descriptor_from_path(self.library[entry]['source_path'], self.library[entry]['source_name'])
-#                self.library[entry]['source_path'] = descriptor
+#            if self.library[entry]['descriptor'].startswith('{') is False:
+#                descriptor = self.get_descriptor_from_path(self.library[entry]['descriptor'], self.library[entry]['source_name'])
+#                self.library[entry]['descriptor'] = descriptor
 #                upgraded = True
 #        if upgraded is True:
 #            print("upgraded... ", end="")
@@ -1302,11 +1303,11 @@ class DocumentStore:
                     ext_with_dot = os.path.splitext(filename)[1]
                     ext = ext_with_dot[1:].lower() if ext_with_dot else ""
 
-                    if sha256_hash in self.library and descriptor != self.library[sha256_hash]['source_path']:
+                    if sha256_hash in self.library and descriptor != self.library[sha256_hash]['descriptor']:
                         if nl_required:
                             print()
                             nl_required = False
-                        self.log.warning(f"File {full_path} is a duplicate of {self.library[sha256_hash]['source_path']}, ignoring this copy.")
+                        self.log.warning(f"File {full_path} is a duplicate of {self.library[sha256_hash]['descriptor']}, ignoring this copy.")
                         duplicate_count += 1
                         continue
 
@@ -1345,7 +1346,7 @@ class DocumentStore:
                         existing_hashes.remove(sha256_hash)
                         continue
                                             
-                    self.library[sha256_hash] = LibraryEntry({'source_name': source_name, 'source_path': descriptor, 'text': current_text})
+                    self.library[sha256_hash] = LibraryEntry({'source_name': source_name, 'descriptor': descriptor, 'text': current_text})
                     library_changed = True
 
                     if time.time() - last_saved > 180:
@@ -1363,7 +1364,7 @@ class DocumentStore:
             self.log.warning(f"{len(existing_hashes)} debris entries")
             for debris in existing_hashes:
                 if debris in self.library:
-                    self.log.info(f"Deleting library entry {self.library[debris]['source_path']}")
+                    self.log.info(f"Deleting library entry {self.library[debris]['descriptor']}")
                     del self.library[debris]
                     library_changed = True
                 if debris in self.pdf_index:
@@ -1414,13 +1415,13 @@ class DocumentStore:
             if hash not in self.pdf_index:
                 orphan2_count += 1
                 if clean is True:
-                    pdf_cache_filename = self.get_pdf_cache_filename(cache_entry_hash)
+                    pdf_cache_filename = self.get_pdf_cache_filename(hash)
                     if os.path.exists(pdf_cache_filename):
                         os.remove(pdf_cache_filename)
                         deleted_count += 1
                     
         header = ["PDF Cache", "Count"]
-        alignment = [True, False]
+        alignment: list[bool|None]|None = [True, False]
         rows: list[list[str]] = []
         rows.append(["Cache entries", f"{entry_count}"])
         rows.append(["Extract failures", f"{failure_count}"])
@@ -1447,7 +1448,8 @@ class DocumentStore:
         print()
         exts = ['pdf', 'txt', 'md']
         header = ["Source", "Docs"] + exts + ["Path"]
-        al: list[bool] = [True, False] + [False] * len(exts) + [True]
+        al: list[bool|None]|None = [True, False]
+        al += [False] * len(exts) + [True]
         rows: list[list[str]] = []
         sum_ext_cnts: dict[str,int] = {}
         sum_cnt = 0
@@ -1459,7 +1461,7 @@ class DocumentStore:
                 if self.library[hsh]['source_name'] == source_name:
                     cnt += 1
                     sum_cnt += 1
-                    ext = os.path.splitext(self.library[hsh]['source_path'].lower())[1]
+                    ext = os.path.splitext(self.library[hsh]['descriptor'].lower())[1]
                     if ext and len(ext) > 0:
                         ext = ext[1:]
                     if ext and ext in exts:
@@ -1493,7 +1495,7 @@ class DocumentStore:
     def list_vars(self):
         print()
         header = ['Variable', 'Value', 'Type']
-        al = [True, True, False]
+        al:list[bool|None]|None = [True, True, False]
         rows: list[list[str]] = []
         for name in self.config['vars']:
             val, type = self.config['vars'][name]
