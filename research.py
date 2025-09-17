@@ -94,6 +94,17 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     vs.index_all(ds.library)
                 else:
                     vs.index(ds.library)
+            elif command == 'index3d':
+                if ds.local_update_required() is True:
+                    if 'force' not in arguments.split(' '):
+                        log.warning("Remote data is newer than local data! Please use import first! (or override with 'force'")
+                        continue
+                    else:
+                        log.warning("Version override, starting 3D-indexing")
+                if 'all' in arguments.split(' '):
+                    vs.index3d_all(ds.library)
+                else:
+                    vs.index3d(ds.library, None)                
             elif command == 'search':
                 search_results: int = cast(int, ds.get_var('search_results'))
                 highlight: bool = cast(bool, ds.get_var('highlight'))

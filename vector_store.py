@@ -5,10 +5,12 @@ import time
 import datetime
 import hashlib
 import tempfile
-from typing import TypedDict, cast
+from typing import TypedDict, cast, Any
 import subprocess
+import colorsys
 import math
-        
+import numpy as np
+
 import pymupdf  # pyright: ignore[reportMissingTypeStubs]
 import pymupdf4llm  # pyright: ignore[reportMissingTypeStubs]  # XXX currently locked to 0.19, otherwise export returns empty docs, requires investigation!
 import torch
@@ -16,10 +18,10 @@ from sentence_transformers import SentenceTransformer
 
 support_dim3d = False
 try:
-    import umap
-    from sklearn.decomposition import PCA
+    import umap  # pyright: ignore[reportMissingTypeStubs]
     support_dim3d = True
 except ImportError:
+    umap = None
     pass
 
 from text_format import TextFormat
@@ -111,6 +113,9 @@ class VectorStore:
         self.embeddings_path:str = os.path.join(self.storage_path, "embeddings")
         if os.path.isdir(self.embeddings_path) is False:
             os.makedirs(self.embeddings_path, exist_ok=True)
+        self.visualization_3d:str = os.path.join(self.storage_path, "visualization_3d")
+        if os.path.isdir(self.visualization_3d) is False:
+            os.makedirs(self.visualization_3d)
         self.model_list: list[EmbeddingModel]
         self.get_model_list()
         for model in self.model_list:
@@ -435,6 +440,51 @@ class VectorStore:
         if self.engine is None:
             self.engine = SentenceTransformer(self.model['model_hf_name'], trust_remote_code=self.config['embeddings_model_trust_code']).to(self.device)
 
+    def get_embeddings_size(self, embeddings_path:str) -> tuple[int,int]:
+        file_list = get_files_of_extensions(embeddings_path, ["pt"])
+        x:int = 0
+        y:int = 0
+        for filename in file_list:
+            tensor_path = os.path.join(embeddings_path, filename)
+            tensor_i = cast(torch.Tensor, torch.load(tensor_path, map_location='cpu'))
+            dx, ny = tensor_i.shape
+            del tensor_i
+            x += dx
+            if y==0:
+                y=ny
+            else:
+                if ny != y:
+                    print("Tensor dimensions in axis 1 differ! That can't be")
+                    raise ValueError
+        return x,y
+        
+    def get_embeddings_matrix(self, model_name:str|None=None) -> tuple[np.typing.NDArray[np.float32], list[tuple[str,int]]]:
+        emb_array: np.typing.NDArray[np.float32] = np.array([], dtype=np.float32)
+        hashes: list[tuple[str,int]] = []
+        if model_name is None:
+            model_name = self.config['embeddings_model_name']
+        for _ind, model in enumerate(self.model_list):
+            if model_name != model['model_name']:
+                continue
+            if model['enabled'] is True:
+                indices_path = self.model_embedding_path(model['model_name'])
+                x, y = self.get_embeddings_size(indices_path)
+                print(f"Tensor size: {x}x{y}, loading...")
+                cx:int= 0
+                emb_array = np.zeros((x,y), dtype=np.float32)
+                file_list = get_files_of_extensions(indices_path, ["pt"])
+                for filename in file_list:
+                    hash = os.path.splitext(filename)[0]
+                    tensor_path = os.path.join(indices_path, filename)
+                    emb_tensor = cast(torch.Tensor, torch.load(tensor_path, map_location='cpu'))
+                    dx, _dy = emb_tensor.shape
+                    emb_part = cast(np.typing.NDArray[np.float32], emb_tensor.numpy(force=True))  # pyright:ignore[reportUnknownMemberType]
+                    emb_array[cx:cx+dx, :] = emb_part
+                    cx += dx
+                    hashes += [(hash, ind) for ind in range(emb_part.shape[0])]
+        print("Tensor loaded.")
+        return emb_array, hashes
+
     @staticmethod
     def get_chunk_ptr(index: int, chunk_size: int, chunk_overlap: int) -> int:
         """Calculates the start character index of a chunk."""
@@ -517,7 +567,7 @@ class VectorStore:
         return chunks
 
     @staticmethod
-    def get_chunk_count(text:str, chunk_size: int, chunk_overlap: int):
+    def get_chunk_count(text:str, chunk_size: int, chunk_overlap: int) -> int:
         overlap = min(chunk_overlap, chunk_size - 1)
         step = chunk_size - overlap
         if step <= 0: 
@@ -563,7 +613,7 @@ class VectorStore:
             return
         batch_size = self.config['batch_base_multiplier'] * self.model['batch_multiplier']
         chunks: list[str] = VectorStore.get_chunks(text, self.model['chunk_size'], self.model['chunk_overlap'])
-        embeddings_tensor = self.engine.encode_document(chunks, convert_to_tensor=True, show_progress_bar=False, batch_size=batch_size, normalize_embeddings=True)  # pyright:ignore[reportUnknownMemberType]
+        embeddings_tensor = cast(torch.Tensor, self.engine.encode_document(chunks, convert_to_tensor=True, show_progress_bar=False, batch_size=batch_size, normalize_embeddings=True))  # pyright:ignore[reportUnknownMemberType]
         self.save_tensor(embeddings_tensor, filename)
         del embeddings_tensor
     
@@ -572,7 +622,7 @@ class VectorStore:
         if self.model is None or self.engine is None:
             self.log.error("Failed to load model, cannot index!")
             return
-        new_chunks = 0
+        new_chunks: int = 0
         for hash in library:
             filename = self.get_embedding_filename(hash)
             name = library[hash]['source_path']
@@ -584,7 +634,7 @@ class VectorStore:
             self.log.info("Index already complete, no new documents found")
             return
         
-        current_chunks = 0
+        current_chunks:int = 0
         start_time = time.time()
         last_output = time.time()
         for hash in library:
@@ -592,12 +642,12 @@ class VectorStore:
             name = library[hash]['source_path']
             if os.path.exists(filename):
                 continue
-            perc = current_chunks / new_chunks
-            current_time = time.time()
-            delta = current_time - start_time
+            perc:float = current_chunks / new_chunks
+            current_time:float = time.time()
+            delta:float = current_time - start_time
             if delta > 5.0 and perc > 0:
-                eta_t = start_time + delta/perc
-                eta_s = delta/perc - delta
+                # eta_t:float = start_time + delta/perc
+                eta_s:float = delta/perc - delta
                 h = int(eta_s // 3600)
                 m = int((eta_s % 3600) // 60)
                 s = int(eta_s % 60)
@@ -630,7 +680,7 @@ class VectorStore:
         keys = text.split(' ')
         return keys
 
-    def get_significance(self, text: str, search_tensor: torch.Tensor, overall_cosine:float, context_length: int, context_steps: int, cutoff:float=0.0) -> list[float]:
+    def get_significance(self, text: str, search_tensor: torch.Tensor, context_length: int, context_steps: int, cutoff:float=0.0) -> list[float]:
         clr: list[str] = []
         if self.model is None:
             self.log.error("No active model")
@@ -651,8 +701,10 @@ class VectorStore:
         if not clr: 
             clr = [text]
 
-        context_tensor: torch.Tensor = self.engine.encode_document(clr, convert_to_tensor=True, show_progress_bar=False, batch_size=batch_size, normalize_embeddings=True)  # pyright:ignore[reportUnknownMemberType]
-        cosines: list[float] = self.engine.similarity(context_tensor, search_tensor).reshape((-1,)).tolist()
+        if self.engine is None:
+            raise ValueError
+        context_tensor: torch.Tensor = cast(torch.Tensor, self.engine.encode_document(clr, convert_to_tensor=True, show_progress_bar=False, batch_size=batch_size, normalize_embeddings=True))  # pyright:ignore[reportUnknownMemberType]
+        cosines: list[float] = cast(list[float], self.engine.similarity(context_tensor, search_tensor).reshape((-1,)).tolist())  # pyright:ignore[reportUnknownMemberType]
 
         min_cos = 1.0
         max_cos = 0.0
@@ -679,7 +731,7 @@ class VectorStore:
             return
         search_results: list[SearchResultEntry] = []
         device = torch.device(self.resolve_device())
-        search_tensor = self.engine.encode_query(search_text, convert_to_tensor=True, show_progress_bar=False, normalize_embeddings=True).to(device)  # pyright:ignore[reportUnknownMemberType]
+        search_tensor = cast(torch.Tensor, self.engine.encode_query(search_text, convert_to_tensor=True, show_progress_bar=False, normalize_embeddings=True)).to(device)  # pyright:ignore[reportUnknownMemberType]
         path = self.model_embedding_path(self.model['model_name'])
         tensor_file_list = get_files_of_extensions(path, ['pt'])
         best_min_cosine: float | None = None
@@ -687,7 +739,7 @@ class VectorStore:
             tensor_path = os.path.join(path, tensor_file)
             hash = os.path.splitext(tensor_file)[0]
             tensor:torch.Tensor = cast(torch.Tensor, torch.load(tensor_path, map_location=device))
-            # cosines = torch.matmul(search_tensor, tensor.T).T
+            # Cosines = torch.matmul(search_tensor, tensor.T).T
             cosines = self.engine.similarity(tensor, search_tensor)
             max_ind:int = int(torch.argmax(cosines).item())
             cosine:float = cosines[max_ind].item()
@@ -715,7 +767,7 @@ class VectorStore:
             if highlight is True:
                 context_steps = 4
                 context_length = 16
-                stepped_significance: list[float] = self.get_significance(result_text, search_tensor, result['cosine'], context_length, context_steps, highlight_cutoff)
+                stepped_significance: list[float] = self.get_significance(result_text, search_tensor, context_length, context_steps, highlight_cutoff)
                 if highlight_dampening == 0.0:
                     self.log.error("Dampending must not be zero!")
                     highlight_dampening = 1.0
@@ -728,7 +780,80 @@ class VectorStore:
                 
             _ = tf.print_table(header, rows, multi_line=True, keywords=keywords, significance=[[None, significance]])
         print()
+
+    
+    def prepare_visualization_data(self, library:dict[str, LibraryEntry], max_points: int | None = None) -> dict[str, Any]:  # pyright:ignore[reportExplicitAny]
+        print("Compiling source matrix\r", end="", flush=True)
+        matrix, hashes = self.get_embeddings_matrix()
+        print(f"Compiled source matrix: {matrix.shape}")
+        if umap is None:
+            return {"error": "UMAP module is not available"}
+        
+        self.log.info(f"Loaded matrix {matrix.shape}, hash-count: {len(hashes)}")
+        num_available_points = matrix.shape[0]
+        if max_points is not None:
+            matrix = matrix[:max_points, :]
+            hashes = hashes[:max_points]
+            self.log.info(f"Reduced by max_points {max_points}, matrix {matrix.shape}, hash-count: {len(hashes)}")
             
+        n_neighbors_val = 15
+        reducer = umap.UMAP(n_components=3, n_neighbors=n_neighbors_val, 
+                                min_dist=0.1, metric='cosine', low_memory=True)
+                                # min_dist=0.1, random_state=42, metric='cosine')
+        try:
+            reduced_embeddings_np = cast(np.typing.NDArray[np.float32], reducer.fit_transform(matrix))  # pyright:ignore[reportUnknownMemberType]
+        except Exception as e:
+            self.log.error(f"UMAP reduction failed: {e} (shape: {matrix.shape}, n_neighbors: {n_neighbors_val})")
+            return {"error": f"UMAP reduction failed: {str(e)}"}
+
+        points = reduced_embeddings_np.tolist()
+        texts = [library[hash]['source_path']+f"[{chunk_id}]" for hash, chunk_id in hashes]
+        doc_ids = [library[hash]['source_path'] for hash, _chunk_id in hashes]
+
+        unique_doc_ids = list(set(doc_ids))
+
+        num_unique_docs = len(unique_doc_ids)
+        color_map = {}
+        for i, doc_id_val in enumerate(unique_doc_ids):
+            hue = i / num_unique_docs if num_unique_docs > 0 else 0
+            rgb_float = colorsys.hls_to_rgb(hue, 0.5, 0.8) 
+            color_map[doc_id_val] = [int(c * 255) for c in rgb_float]
+
+        colors = [color_map.get(library[hash]['source_path'], [128,128,128]) for hash, _chunk_id in hashes]
+        sizes = [5.0] * len(points)
+
+        return {
+            "points": points,
+            "texts": texts,
+            "colors": colors,
+            "sizes": sizes,
+            "doc_ids": doc_ids,
+            "model_name": self.config['embeddings_model_name'],
+            "reduction_method": "UMAP",
+            "num_points_visualized": len(points),
+            "num_points_available_before_sampling": num_available_points
+        }
+
+
+    def index3d(self, library:dict[str, LibraryEntry], max_points:int|None=None):
+        point_cloud = self.prepare_visualization_data(library, max_points)
+        filename = os.path.join(self.visualization_3d, self.config['embeddings_model_name']+'.json')
+        with open(filename, "w") as f:
+            json.dump(point_cloud, f, indent=2)
+    
+    def index3d_all(self, library:dict[str, LibraryEntry], max_points:int|None=None):
+        current_old = self.config['embeddings_model_name']
+        current_index = self.get_model_index(current_old)
+        for ind in range(len(self.model_list)):
+            if self.model_list[ind]['enabled'] is False:
+                continue
+            name = self.select(ind+1)
+            self.log.info(f"{ind+1}., 3D-indexing {name}")
+            self.index3d(library, max_points)
+        if current_index is not None:
+            name = self.select(current_index)
+            self.log.info(f"Reactivated {name} after indexing all.")
+        
     
 class DocumentStore:
     def __init__(self):
@@ -1432,4 +1557,3 @@ class DocumentStore:
         remote, local = self.load_sequence_versions()
         self.log.info(f"Import successful remote version: {remote}, local version: {local}")
         return True
-    
