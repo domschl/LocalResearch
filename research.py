@@ -1,4 +1,3 @@
-
 import logging
 import readline
 import os
@@ -8,6 +7,7 @@ from typing import cast
 print("\rStarting...\r", end="", flush=True)
 
 from vector_store import DocumentStore, VectorStore
+from text_format import TextParse
 
 def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
     history_file = os.path.join(os.path.expanduser("~/.config/local_research"), "repl_history")
@@ -20,6 +20,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
         
     readline.set_history_length(1000)
     _ = atexit.register(readline.write_history_file, history_file)
+    tp = TextParse()
     while True:
         try:
             # Get user input with a prompt
@@ -27,10 +28,16 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
             ind:int = line.find(' ')
             if ind != -1:
                 command = line[:ind].lower()
-                arguments = line[ind+1:]
+                text_argument = line[ind+1:]
+                parse_arguments = tp.parse(text_argument)
+                if parse_arguments is None:
+                    arguments = []
+                else:
+                    arguments = parse_arguments
             else:
                 command = line.lower()
-                arguments = ""
+                text_argument = ""
+                arguments: list[str] = []
             
             if command == 'sync':
                 log.info("Starting sync...")
@@ -40,10 +47,11 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 doc_hashes: list[str] = list(ds.library.keys())
                 vs.check(arguments, doc_hashes)
             elif command == 'list':
+                print(f"Args: {arguments}")
                 ds.list_info(arguments)
                 vs.list_info(arguments)
             elif command == 'set':
-                comps = arguments.split(' ')
+                comps = arguments
                 if len(comps) != 2:
                     log.error('Usage: set <name> <value>')
                     log.info("Use `list vars` for a list of known variable names and types")
@@ -52,7 +60,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
             elif command == 'select':
                 ind = -1
                 try:
-                    ind = int(arguments)
+                    ind = int(arguments[0])
                 except:
                     pass
                 if ind != -1:
@@ -66,7 +74,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
             elif command == 'enable':
                 ind = -1
                 try:
-                    ind = int(arguments)
+                    ind = int(arguments[0])
                 except:
                     pass
                 if ind != -1:
@@ -76,7 +84,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
             elif command == 'disable':
                 ind = -1
                 try:
-                    ind = int(arguments)
+                    ind = int(arguments[0])
                 except:
                     pass
                 if ind != -1:
@@ -85,23 +93,23 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     log.error(f"Invalid ID {arguments}, integer required, use 'list models' for valid range")
             elif command == 'index':
                 if ds.local_update_required() is True:
-                    if 'force' not in arguments.split(' '):
+                    if 'force' not in arguments:
                         log.warning("Remote data is newer than local data! Please use import first! (or override with 'force'")
                         continue
                     else:
                         log.warning("Version override, starting indexing")
-                if 'all' in arguments.split(' '):
+                if 'all' in arguments:
                     vs.index_all(ds.library)
                 else:
                     vs.index(ds.library)
             elif command == 'index3d':
                 if ds.local_update_required() is True:
-                    if 'force' not in arguments.split(' '):
+                    if 'force' not in arguments:
                         log.warning("Remote data is newer than local data! Please use import first! (or override with 'force'")
                         continue
                     else:
                         log.warning("Version override, starting 3D-indexing")
-                if 'all' in arguments.split(' '):
+                if 'all' in arguments:
                     vs.index3d_all(ds.library)
                 else:
                     vs.index3d(ds.library, None)                
@@ -110,7 +118,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 highlight: bool = cast(bool, ds.get_var('highlight'))
                 cutoff = cast(float, ds.get_var('highlight_cutoff'))
                 damp:float = cast(float, ds.get_var('highlight_dampening'))
-                vs.search(arguments, ds.library, search_results, highlight, cutoff, damp)
+                vs.search(text_argument, ds.library, search_results, highlight, cutoff, damp)
             elif command == 'publish':
                 _ = ds.publish(arguments)
             elif command == 'import':

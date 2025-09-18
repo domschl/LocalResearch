@@ -16,6 +16,8 @@ import pymupdf4llm  # pyright: ignore[reportMissingTypeStubs]  # XXX currently l
 import torch
 from sentence_transformers import SentenceTransformer
 
+from text_format import TextParse
+
 support_dim3d = False
 try:
     import umap  # pyright: ignore[reportMissingTypeStubs]
@@ -260,12 +262,12 @@ class VectorStore:
         print()
         print("Use 'select <ID>' to change the active model, 'enable|disable <ID>' to activate/deactivate")
 
-    def list_info(self, mode: str):
+    def list_info(self, mode: list[str]|None):
         print()
-        if mode == "" or 'models' in mode:
+        if mode is None or mode == [] or 'models' in mode:
             self.list_models(self.config['embeddings_model_name'])
 
-    def check_indices(self, current_model:str, doc_hashes:list[str], mode:str):
+    def check_indices(self, current_model:str, doc_hashes:list[str], mode:list[str]):
         if 'clean' in mode:
             clean = True
         else:
@@ -318,11 +320,11 @@ class VectorStore:
         if hint_missing is False and hint_clean is False:
             self.log.info("All model indices are fully up-to-date")
         
-    def check(self, mode:str|None, doc_hashes:list[str]):
+    def check(self, mode:list[str]|None, doc_hashes:list[str]):
         print()
         if mode is None:
-            mode = ""
-        if mode == "" or mode == "clean" or 'index' in mode.lower():
+            mode = []
+        if mode == [] or "clean" in mode or 'index' in mode:
             self.check_indices(self.config['embeddings_model_name'], doc_hashes, mode)
                     
     def select(self, ind: int) -> str | None:
@@ -669,7 +671,10 @@ class VectorStore:
             self.log.info(f"Reactivated {name} after indexing all.")
     
     def get_keywords(self, text:str) -> list[str]:
-        keys = text.split(' ')
+        tp = TextParse()
+        keys = tp.parse(text)
+        if keys is None:
+            keys = []
         return keys
 
     def get_significance(self, text: str, search_tensor: torch.Tensor, context_length: int, context_steps: int, cutoff:float=0.0) -> list[float]:
@@ -772,7 +777,6 @@ class VectorStore:
                 
             _ = tf.print_table(header, rows, multi_line=True, keywords=keywords, significance=[[None, significance]])
         print()
-
     
     def prepare_visualization_data(self, library:dict[str, LibraryEntry], max_points: int | None = None) -> dict[str, Any]:  # pyright:ignore[reportExplicitAny]
         print("Compiling source matrix\r", end="", flush=True)
@@ -1252,9 +1256,11 @@ class DocumentStore:
             return True
         return False
     
-    def sync_texts(self, parameters:str):
+    def sync_texts(self, parameters:list[str]|None):
+        if parameters is None:
+            parameters = []
         if self.local_update_required() is True:
-            if 'force' not in parameters.split(' '):
+            if 'force' not in parameters:
                 self.log.warning("Please first update local data using 'import', since remote has newer data! (use 'force' to override)")
                 return
             else:
@@ -1377,7 +1383,7 @@ class DocumentStore:
         else:
             self.log.info(f"No changes")
 
-    def check_pdf_cache(self, mode:str):
+    def check_pdf_cache(self, mode:list[str]|None):
         failure_count = 0
         entry_count = 0
         orphan_count = 0
@@ -1386,6 +1392,8 @@ class DocumentStore:
         deleted_count = 0
         deleted2_count = 0
         cache_changed = False
+        if mode is None:
+            mode = []
         if 'clean' in mode:
             clean = True
         else:
@@ -1435,12 +1443,12 @@ class DocumentStore:
         if cache_changed is True:
             self.save_library()
         
-    def check(self, mode: str | None = None):
+    def check(self, mode: list[str] | None = None):
         print()
-        if mode is None or mode == "" or mode== "clean" or 'pdf' in mode.lower():
+        if mode is None or mode == [] or "clean" in mode or 'pdf' in mode:
             # self.log.info("Checking PDF cache consistency")
             if mode is None:
-                mode = ""
+                mode = []
             self.check_pdf_cache(mode)
         
     def list_sources(self):
@@ -1502,15 +1510,17 @@ class DocumentStore:
         _ = tf.print_table(header, rows, al)
         print()
 
-    def list_info(self, mode:str):
-        if mode == "" or 'vars' in mode:
+    def list_info(self, mode:list[str]|None):
+        if mode is None or mode == [] or 'vars' in mode:
             self.list_vars()
-        if mode == "" or 'sources' in mode:
+        if mode is None or mode == [] or 'sources' in mode:
             self.list_sources()
         
-    def publish(self, parameters:str) -> bool:
+    def publish(self, parameters:list[str]|None) -> bool:
+        if parameters is None:
+            parameters = []
         if self.local_update_required() is True:
-            if 'force' not in parameters.split(' '):
+            if 'force' not in parameters:
                 self.log.warning("Remote version is newer than local version, publish aborted. Use 'force' to override!")
                 return False
             else:
@@ -1536,10 +1546,12 @@ class DocumentStore:
         self.log.info(f"Published successful remote version: {remote}, local version: {local}")
         return True
 
-    def import_local(self, parameters:str) -> bool:
+    def import_local(self, parameters:list[str]|None) -> bool:
+        if parameters is None:
+            parameters = []
         remote, local = self.load_sequence_versions()
         if local>remote:
-            if 'force' not in parameters.split(' '):
+            if 'force' not in parameters:
                 self.log.warning("Local data has newer version than remote data, not importing. Use 'force' to override!")
                 return False
             else:

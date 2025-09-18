@@ -3,10 +3,8 @@ import os
 from dataclasses import dataclass
 from copy import copy
 #from typing import TypedDict
-# from rich import print as rprint
 
 @dataclass
-
 class Color:
     def __init__(self, h:str|None=None, r:int|None=None, g:int|None=None, b:int|None=None, a:int|None=None):
         self.r: int = 0
@@ -309,3 +307,64 @@ class TextFormat:
                     print()
         TextFormat.defc()
         return True
+
+class TextParse:
+    def __init__(self):
+        self.log: logging.Logger = logging.getLogger("TextParser")
+
+    def parse(self, text:str) -> list[str]|None:
+        result: list[str] = []
+        tok:str = ""
+        in_str:bool = False
+        esc:bool = False
+        str_chr = ""
+        for ind, c in enumerate(text):
+            if esc is True:
+                esc = False
+                if c == 'n':
+                    tok += '\n'
+                else:
+                    tok += c
+                if ind == len(text) - 1:
+                    result.append(tok)
+                    tok = ""
+                continue
+            if c == '\\':
+                esc = True
+                continue                
+            if in_str is True:
+                if c == str_chr:
+                    str_chr = ""
+                    in_str = False
+                    if len(tok) > 0:
+                        result.append(tok)
+                        tok = ""
+                    continue
+                else:
+                    tok += c
+                    continue
+            if c == '"' or c == "'":
+                in_str = True
+                str_chr = c
+                continue
+            if c == ' ':
+                if len(tok) > 0:
+                    result.append(tok)
+                    tok = ""
+                    continue
+            if ind == len(text) - 1:
+                tok += c
+                result.append(tok)
+                tok = ""
+                continue
+            tok += c
+        if esc is True:
+            self.log.error("Unterminated ESC sequence!")
+            return None
+        if in_str is True:
+            self.log.error(f"Unterminated string, missing terminator {str_chr}")
+            return None
+        if len(tok) > 0:
+            self.log.error(f"Parser error, unprocessed: {tok}")
+            return None
+        return result
