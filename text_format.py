@@ -318,7 +318,6 @@ class TokType(Enum):
     val = 5
 
 class TextParse:
-        
     def __init__(self):
         self.log: logging.Logger = logging.getLogger("TextParser")
 
@@ -391,7 +390,7 @@ class TextParse:
                     else:
                         format.append(TokType['arg'])
                     tok = ""
-                    continue
+                continue
             if ind == len(text) - 1:
                 tok += c
                 result.append(tok)
