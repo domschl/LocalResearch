@@ -428,15 +428,18 @@ class TextParse:
         list_args: list[str] = []
         key_args: dict[str,str] = {}
 
-        prev_tok:str = ""
         for ind, tok in enumerate(result):
-            if format[ind] == TokType['string']:
-                if len(prev_tok)>0:
-                    list_args.append(prev_tok)
+            if format[ind] == TokType['arg'] or format[ind] == TokType['string']:
                 list_args.append(tok)
-                prev_tok = ""
-                continue
-            # if '=' in tok:
-                
+            if format[ind] == TokType['key']:
+                if len(format) > ind+2:
+                    if format[ind+1] == TokType['op'] and result[ind+1] == '=' and format[ind+2] == TokType['val']:
+                        key_args[tok] = result[ind+2]
+                    else:
+                        self.log.error("Invalid structure of key=val assignment")
+                        return [], {}
+                else: 
+                    self.log.error("Incomplete key=val structure")
+                    return [], {}
         return list_args, key_args
             

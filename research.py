@@ -26,20 +26,22 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
             # Get user input with a prompt
             line: str = input(">>> ")
             ind:int = line.find(' ')
+            key_vals:dict[str,str]={}
             if ind != -1:
                 command = line[:ind].lower()
                 text_argument = line[ind+1:]
-                parse_arguments = tp.parse(text_argument)
-                if parse_arguments is None:
-                    arguments = []
-                else:
-                    arguments = parse_arguments
+                parse_arguments, key_vals = tp.parse_keys(text_argument)
+                arguments = parse_arguments
             else:
                 command = line.lower()
                 text_argument = ""
                 arguments: list[str] = []
-            
-            if command == 'sync':
+            if command == 'test':
+                print(f"Command: {command}")
+                print(f"Arguments: {arguments}")
+                print(f"Key-Values: {key_vals}")
+                continue
+            elif command == 'sync':
                 log.info("Starting sync...")
                 ds.sync_texts(arguments)
             elif command == 'check':
