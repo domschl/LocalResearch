@@ -2,6 +2,7 @@ import logging
 import os
 from dataclasses import dataclass
 from copy import copy
+from enum import Enum
 #from typing import TypedDict
 
 @dataclass
@@ -308,12 +309,19 @@ class TextFormat:
         TextFormat.defc()
         return True
 
+
+class TokType(Enum):
+    arg = 1
+    string = 2
+
 class TextParse:
+        
     def __init__(self):
         self.log: logging.Logger = logging.getLogger("TextParser")
 
-    def parse(self, text:str) -> list[str]|None:
+    def parse_full(self, text:str) -> tuple[list[str]|None, list[TokType]|None]:
         result: list[str] = []
+        format: list[TokType] = []
         tok:str = ""
         in_str:bool = False
         esc:bool = False
@@ -327,6 +335,7 @@ class TextParse:
                     tok += c
                 if ind == len(text) - 1:
                     result.append(tok)
+                    format.append(TokType['arg'])
                     tok = ""
                 continue
             if c == '\\':
@@ -338,6 +347,7 @@ class TextParse:
                     in_str = False
                     if len(tok) > 0:
                         result.append(tok)
+                        format.append(TokType['string'])
                         tok = ""
                     continue
                 else:
@@ -350,21 +360,47 @@ class TextParse:
             if c == ' ':
                 if len(tok) > 0:
                     result.append(tok)
+                    format.append(TokType['arg'])
                     tok = ""
                     continue
             if ind == len(text) - 1:
                 tok += c
                 result.append(tok)
+                format.append(TokType['arg'])
                 tok = ""
                 continue
             tok += c
         if esc is True:
             self.log.error("Unterminated ESC sequence!")
-            return None
+            return None, None
         if in_str is True:
             self.log.error(f"Unterminated string, missing terminator {str_chr}")
-            return None
+            return None, None
         if len(tok) > 0:
             self.log.error(f"Parser error, unprocessed: {tok}")
-            return None
+            return None, None
+        return result, format
+
+    def parse(self, text:str) -> list[str]|None:
+        result, _ = self.parse_full(text)
         return result
+        
+    def parse_keys(self, text:str) -> tuple[list[str], dict[str,str]]:
+        result, format = self.parse_full(text)
+        if result is None or format is None:
+            return ([], {})
+        list_args: list[str] = []
+        key_args: dict[str,str] = {}
+
+        prev_tok:str = ""
+        for ind, tok in enumerate(result):
+            if format[ind] == TokType['string']:
+                if len(prev_tok)>0:
+                    list_args.append(prev_tok)
+                list_args.append(tok)
+                prev_tok = ""
+                continue
+            # if '=' in tok:
+                
+        return list_args, key_args
+            
