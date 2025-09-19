@@ -313,6 +313,9 @@ class TextFormat:
 class TokType(Enum):
     arg = 1
     string = 2
+    op = 3
+    key = 4
+    val = 5
 
 class TextParse:
         
@@ -325,6 +328,7 @@ class TextParse:
         tok:str = ""
         in_str:bool = False
         esc:bool = False
+        key_val = False
         str_chr = ""
         for ind, c in enumerate(text):
             if esc is True:
@@ -335,7 +339,11 @@ class TextParse:
                     tok += c
                 if ind == len(text) - 1:
                     result.append(tok)
-                    format.append(TokType['arg'])
+                    if key_val is True:
+                        format.append(TokType['val'])
+                        key_val = False
+                    else:
+                        format.append(TokType['arg'])
                     tok = ""
                 continue
             if c == '\\':
@@ -347,7 +355,11 @@ class TextParse:
                     in_str = False
                     if len(tok) > 0:
                         result.append(tok)
-                        format.append(TokType['string'])
+                        if key_val is True:
+                            format.append(TokType['val'])
+                            key_val = False
+                        else:
+                            format.append(TokType['string'])
                         tok = ""
                     continue
                 else:
@@ -357,19 +369,43 @@ class TextParse:
                 in_str = True
                 str_chr = c
                 continue
-            if c == ' ':
+            if c == '=':
                 if len(tok) > 0:
                     result.append(tok)
                     format.append(TokType['arg'])
+                    tok = ""                    
+                if len(format) == 0 or format[-1] != TokType['arg']:
+                    self.log.error("Invalid '=', not following valid token")
+                    return None, None
+                format[-1] = TokType['key']
+                key_val = True
+                result.append('=')
+                format.append(TokType['op'])
+                continue                
+            if c == ' ':
+                if len(tok) > 0:
+                    result.append(tok)
+                    if key_val is True:
+                        format.append(TokType['val'])
+                        key_val = False
+                    else:
+                        format.append(TokType['arg'])
                     tok = ""
                     continue
             if ind == len(text) - 1:
                 tok += c
                 result.append(tok)
-                format.append(TokType['arg'])
+                if key_val is True:
+                    format.append(TokType['val'])
+                    key_val = False
+                else:
+                    format.append(TokType['arg'])
                 tok = ""
                 continue
             tok += c
+        if key_val is True:
+            self.log.error("Unterminated assignment")
+            return None, None
         if esc is True:
             self.log.error("Unterminated ESC sequence!")
             return None, None
