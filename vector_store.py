@@ -705,7 +705,7 @@ class VectorStore:
         return cosines
 
     def search(self, search_text:str, library:dict[str,LibraryEntry], max_results:int=10, highlight:bool=False,
-               highlight_cutoff:float=0.0, highlight_dampening:float=1.0) -> list[SearchResultEntry]:
+               highlight_cutoff:float=0.0, highlight_dampening:float=1.0, context_length:int=16, context_steps:int=4) -> list[SearchResultEntry]:
         self.load_model()
         if self.model is None or self.engine is None:
             self.log.error("Failed to load model, cannot index!")
@@ -744,8 +744,6 @@ class VectorStore:
 
             if highlight is True:
                 significance: list[float] = [0.0] * len(result_text)
-                context_steps = 4
-                context_length = 16
                 stepped_significance: list[float] = self.get_significance(result_text, search_tensor, context_length, context_steps, highlight_cutoff)
                 if highlight_dampening == 0.0:
                     self.log.error("Dampending must not be zero!")
@@ -836,7 +834,7 @@ class VectorStore:
     
 class DocumentStore:
     def __init__(self):
-        self.current_version: int = 4
+        self.current_version: int = 5
         self.log: logging.Logger = logging.getLogger("DocumentStore")
         self.config_changed:bool = False
         self.config_path: str = os.path.expanduser("~/.config/local_research")
@@ -904,6 +902,8 @@ class DocumentStore:
                     'highlight': ("true", "bool"),
                     'highlight_cutoff': ("0.3", "float"),
                     'highlight_dampening': ("1.2", "float"),
+                    'context_length': ("16", "int"),
+                    'context_steps': ("4", "int"),
                     }
                 })
             self.save_config(config)
@@ -964,11 +964,13 @@ class DocumentStore:
             self.save_config(self.config)
         return True
 
-    def get_var(self, name:str) -> bool|int|float|str|None:
+    def get_var(self, name:str, local_vars:dict[str,str]|None=None) -> bool|int|float|str|None:
         if name not in self.config['vars']:
             self.log.error(f"Unknown config variable '{name}', use 'list vars' for possible names")
             return False
         val, type = self.config['vars'][name]
+        if local_vars is not None and name in local_vars:
+            val = local_vars[name]
         if type == 'int':
             try:
                 v = int(val)

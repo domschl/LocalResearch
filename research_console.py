@@ -259,15 +259,12 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 else:
                     vs.index3d(ds.library, None)                
             elif command == 'search':
-                search_results: int = cast(int, ds.get_var('search_results'))
-                if 'search_results' in key_vals:
-                    try:
-                        search_results = int(key_vals['search_results'])
-                    except ValueError:
-                        log.error(f"Invalid integer format: {key_vals['search_results']}")
-                highlight: bool = cast(bool, ds.get_var('highlight'))
-                cutoff = cast(float, ds.get_var('highlight_cutoff'))
-                damp:float = cast(float, ds.get_var('highlight_dampening'))
+                search_results: int = cast(int, ds.get_var('search_results', key_vals))
+                highlight: bool = cast(bool, ds.get_var('highlight', key_vals))
+                cutoff = cast(float, ds.get_var('highlight_cutoff', key_vals))
+                damp:float = cast(float, ds.get_var('highlight_dampening', key_vals))
+                context_length:int = cast(int, ds.get_var('context_length', key_vals))
+                context_steps:int = cast(int, ds.get_var('context_steps', key_vals))
                 count = search_results
                 search_string = ' '.join(arguments)
                 print(f"Searching: {search_string}")
@@ -276,8 +273,9 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                         count = int(key_vals['max_results'])
                     except ValueError:
                         log.error(f"Invalid integer max_results={key_vals['max_results']}, keeping default {count}")
-                search_result_list = vs.search(search_string, ds.library, count, highlight, cutoff, damp)
-
+                search_result_list = vs.search(search_string, ds.library, count,
+                                               highlight, cutoff, damp,
+                                               context_length, context_steps)
                 keywords = tp.parse(search_string)
                 if keywords is None:
                     keywords = []
