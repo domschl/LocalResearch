@@ -77,7 +77,9 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                         clean = True
                     else:
                         clean = False
+                    print("Checking indices... ", end="", flush=True)
                     model_check = vs.check_indices(doc_hashes, clean)
+                    print("Done.")
 
                     hint_missing: bool = False
                     hint_clean: bool = False
@@ -90,14 +92,14 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                             if ms['debris_count'] > 0:
                                 hint_clean = True
                             if ms['selected'] is True:
-                                c_rows.append([f">{ind+1}<", str(ms['embedding_count']), str(ms['debris_count']), str(ms['deleted_count']), str(ms['missing_count']), ms['model_name']])
+                                c_rows.append([f">{ind+1}<", str(ms['document_count']), str(ms['embedding_count']), str(ms['embedding_dim']), str(ms['debris_count']), str(ms['deleted_count']), str(ms['missing_count']), ms['model_name']])
                                 c_selected = ind
                             else:
-                                c_rows.append([f" {ind+1} ", str(ms['embedding_count']), str(ms['debris_count']), str(ms['deleted_count']), str(ms['missing_count']), ms['model_name']])
+                                c_rows.append([f" {ind+1} ", str(ms['document_count']), str(ms['embedding_count']), str(ms['embedding_dim']), str(ms['debris_count']), str(ms['deleted_count']), str(ms['missing_count']), ms['model_name']])
                         else:
                             c_rows.append([f">{ind+1}<", "DISABLED", "", "", "", ms['model_name']])                    
-                    header = ["ID", "Embeddings", "Debris", "Deleted", "Missing", "Model"]
-                    alignment: list[bool|None]|None = [True, False, False, False, False, True]
+                    header = ["ID", "Documents", "Embeddings", "Dim", "Debris", "Deleted", "Missing", "Model"]
+                    alignment: list[bool|None]|None = [True, False, False, False, False, False, False, True]
                     _ = tf.print_table(header, c_rows, alignment, selected=c_selected)
                     print()
                     if hint_missing is True:
