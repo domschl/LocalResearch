@@ -68,7 +68,9 @@ class PDFIndex(TypedDict):
 
 
 class ModelCheck(TypedDict):
+    document_count: int
     embedding_count: int
+    embedding_dim: int
     debris_count: int
     deleted_count: int
     missing_count: int
@@ -154,7 +156,13 @@ class VectorStore:
                 self.log.error(f"Failed to load model list: {e}, reverting to default")
         if len(self.model_list) == 0:
             self.model_list = [
-                { # granite-107m
+                {
+                    'model_hf_name': 'sentence-transformers/all-MiniLM-L6-v2',
+                    'model_name': 'all-MiniLM-L6-v2',
+                    'batch_multiplier': 128,
+                    'enabled': True,
+                },
+                {
                     'model_hf_name': 'ibm-granite/granite-embedding-107m-multilingual',
                     'model_name': 'granite-embedding-107m-multilingual',
                     'batch_multiplier': 64,
@@ -170,12 +178,6 @@ class VectorStore:
                     'model_hf_name': 'nomic-ai/nomic-embed-text-v2-moe',
                     'model_name': 'nomic-embed-text-v2-moe',
                     'batch_multiplier': 32,
-                    'enabled': True,
-                },
-                {
-                    'model_hf_name': 'sentence-transformers/all-MiniLM-L6-v2',
-                    'model_name': 'all-MiniLM-L6-v2',
-                    'batch_multiplier': 128,
                     'enabled': True,
                 },
                 {
@@ -264,6 +266,7 @@ class VectorStore:
             deleted_cnt = 0
             if model['enabled'] is True:
                 indices_path = self.model_embedding_path(model['model_name'])
+                emb_cnt, dim = self.get_embeddings_size(indices_path)
                 file_list = get_files_of_extensions(indices_path, ["pt"])
                 # hash_list = [os.path.splitext(name)[0] for name in file_list]
                 for filename in file_list:
@@ -281,7 +284,9 @@ class VectorStore:
                 else:
                     selected = False
                 missing_cnt = len(doc_hashes) - cnt
-                model_check.append(ModelCheck({'embedding_count':cnt,
+                model_check.append(ModelCheck({'document_count': cnt,
+                                               'embedding_count':emb_cnt,
+                                               'embedding_dim': dim,
                                                'debris_count': debris_cnt,
                                                'deleted_count': deleted_cnt,
                                                'missing_count': missing_cnt,
@@ -289,7 +294,9 @@ class VectorStore:
                                                'enabled': model['enabled'],
                                                'selected': selected}))
             else:
-                model_check.append(ModelCheck({'embedding_count':0,
+                model_check.append(ModelCheck({'document_count':0,
+                                               'embedding_count': 0,
+                                               'embedding_dim': 0,
                                                'debris_count': 0,
                                                'deleted_count': 0,
                                                'missing_count': 0,
@@ -419,10 +426,10 @@ class VectorStore:
                 y=ny
             else:
                 if ny != y:
-                    self.log.error("Tensor dimensions in axis 1 differ! That can't be")
+                    self.log.error("Tensor dimensions in axis 1 differ! That can't be! Rebuild index completely!")
                     raise ValueError
         return x,y
-        
+
     def get_embeddings_matrix(self, model_name:str|None=None) -> tuple[np.typing.NDArray[np.float32], list[tuple[str,int]]]:
         emb_array: np.typing.NDArray[np.float32] = np.array([], dtype=np.float32)
         hashes: list[tuple[str,int]] = []
@@ -434,7 +441,6 @@ class VectorStore:
             if model['enabled'] is True:
                 indices_path = self.model_embedding_path(model['model_name'])
                 x, y = self.get_embeddings_size(indices_path)
-                print(f"Tensor size: {x}x{y}, loading...")
                 cx:int= 0
                 emb_array = np.zeros((x,y), dtype=np.float32)
                 file_list = get_files_of_extensions(indices_path, ["pt"])
@@ -447,7 +453,7 @@ class VectorStore:
                     emb_array[cx:cx+dx, :] = emb_part
                     cx += dx
                     hashes += [(hash, ind) for ind in range(emb_part.shape[0])]
-        print("Tensor loaded.")
+                self.log.info(f"Tensor size: {x}x{y}, loaded")
         return emb_array, hashes
 
     @staticmethod
@@ -1407,14 +1413,6 @@ class DocumentStore:
         if cache_changed is True:
             self.save_library()
         
-    def check(self, mode: list[str] | None = None):
-        print()
-        if mode is None or mode == [] or "clean" in mode or 'pdf' in mode:
-            # self.log.info("Checking PDF cache consistency")
-            if mode is None:
-                mode = []
-            self.check_pdf_cache(mode)
-
     def get_sources_ext_cnts(self) -> tuple[dict[str, int], dict[str, dict[str, int]]]:
         exts: list[str] = []
         sum_ext_cnts: dict[str,int] = {}
