@@ -48,7 +48,27 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 log.info("Starting sync...")
                 ds.sync_texts(arguments)
             elif command == 'check':
-                ds.check(arguments)
+                if len(arguments) == 0 or 'pdf' in arguments:
+                    if 'clean' in arguments:
+                        clean = True
+                    else:
+                        clean = False
+                    entry_count, failure_count, orphan_count, orphan2_count, deleted_count, deleted2_count, missing_count, cache_changed = ds.check_pdf_cache(clean)
+                    header = ["PDF Cache", "Count"]
+                    al_p: list[bool|None]|None = [True, False]
+                    rows_p: list[list[str]] = []
+                    rows_p.append(["Cache entries", f"{entry_count}"])
+                    rows_p.append(["Extract failures", f"{failure_count}"])
+                    rows_p.append(["Orphans", f"{orphan_count}+{orphan2_count}"])
+                    if deleted_count > 0:
+                        rows_p.append(["Debris removed", f"{deleted_count}"])
+                    if deleted_count > 0:
+                        rows_p.append(["Records removed", f"{deleted2_count}"])
+                    rows_p.append(["Missing cache files", f"{missing_count}"])
+                    _ = tf.print_table(header, rows_p, al_p)
+                    if cache_changed is True:
+                        print("PDF cache file updated")
+                    print()
 
                 if len(arguments) == 0 or 'index' in arguments:
                     doc_hashes: list[str] = list(ds.library.keys())
@@ -233,8 +253,11 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     except ValueError:
                         log.error(f"Invalid integer max_results={key_vals['max_results']}, keeping default {count}")
                 search_result_list = vs.search(search_string, ds.library, count, highlight, cutoff, damp)
-                keywords = vs.get_keywords(search_string)
 
+                keywords = tp.parse(search_string)
+                if keywords is None:
+                    keywords = []
+                
                 for index, result in enumerate(search_result_list):
                     header = [f"{result['cosine']:.3f}", result['entry']['descriptor']]
                     text = result['text']

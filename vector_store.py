@@ -16,8 +16,6 @@ import pymupdf4llm  # pyright: ignore[reportMissingTypeStubs]  # XXX currently l
 import torch
 from sentence_transformers import SentenceTransformer
 
-from text_format import TextParse
-
 support_dim3d = False
 try:
     import umap  # pyright: ignore[reportMissingTypeStubs]
@@ -26,9 +24,6 @@ except ImportError:
     umap = None
     pass
 
-from text_format import TextFormat
-
-tf = TextFormat()
 
 class DocumentSource(TypedDict):
     type: str
@@ -434,7 +429,7 @@ class VectorStore:
             if model['enabled'] is True:
                 indices_path = self.model_embedding_path(model['model_name'])
                 x, y = self.get_embeddings_size(indices_path)
-                print(f"Tensor size: {x}x{y}, loading...")
+                # print(f"Tensor size: {x}x{y}, loading...")
                 cx:int= 0
                 emb_array = np.zeros((x,y), dtype=np.float32)
                 file_list = get_files_of_extensions(indices_path, ["pt"])
@@ -447,7 +442,7 @@ class VectorStore:
                     emb_array[cx:cx+dx, :] = emb_part
                     cx += dx
                     hashes += [(hash, ind) for ind in range(emb_part.shape[0])]
-        print("Tensor loaded.")
+        # print("Tensor loaded.")
         return emb_array, hashes
 
     @staticmethod
@@ -641,13 +636,6 @@ class VectorStore:
             name = self.select(current_index)
             self.log.info(f"Reactivated {name} after indexing all.")
     
-    def get_keywords(self, text:str) -> list[str]:
-        tp = TextParse()
-        keys = tp.parse(text)
-        if keys is None:
-            keys = []
-        return keys
-
     def get_significance(self, text: str, search_tensor: torch.Tensor, context_length: int, context_steps: int, cutoff:float=0.0) -> list[float]:
         clr: list[str] = []
         if self.model is None:
@@ -743,9 +731,9 @@ class VectorStore:
         return search_results
     
     def prepare_visualization_data(self, library:dict[str, LibraryEntry], max_points: int | None = None) -> dict[str, Any]:  # pyright:ignore[reportExplicitAny]
-        print("Compiling source matrix\r", end="", flush=True)
+        # print("Compiling source matrix\r", end="", flush=True)
         matrix, hashes = self.get_embeddings_matrix()
-        print(f"Compiled source matrix: {matrix.shape}")
+        # print(f"Compiled source matrix: {matrix.shape}")
         if umap is None:
             return {"error": "UMAP module is not available"}
         
@@ -1067,7 +1055,7 @@ class DocumentStore:
         return full_path
     
     def load_library(self):
-        print("Loading library data...", end="", flush=True)
+        self.log.info("Loading library data...")
         if os.path.exists(self.library_file):
             with open(self.library_file, "r") as f:
                 self.library = json.load(f)
@@ -1090,11 +1078,9 @@ class DocumentStore:
 #            self.save_library()
 #        else:
 #            print("not upgraded. ", end="")
-            
-        print(" Done.")
 
     def save_library(self):
-        print("Saving library data...", end="", flush=True)
+        # print("Saving library data...", end="", flush=True)
         temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.library_file))
         try:
             with os.fdopen(temp_fd, 'w') as temp_file:            
@@ -1114,7 +1100,7 @@ class DocumentStore:
             self.log.error("PDF Index update was interrupted, atomic file update cancelled.")
             os.remove(temp_path)
             raise e
-        print(" Done.")
+        self.log.info("Library data saved")
 
     def get_pdf_cache_filename(self, sha256_hash:str) -> str:
         basename = sha256_hash+".txt"
@@ -1347,7 +1333,7 @@ class DocumentStore:
         else:
             self.log.info(f"No changes")
 
-    def check_pdf_cache(self, mode:list[str]|None):
+    def check_pdf_cache(self, clean:bool) -> tuple[int, int, int, int, int, int , int, bool]:
         failure_count = 0
         entry_count = 0
         orphan_count = 0
@@ -1356,12 +1342,7 @@ class DocumentStore:
         deleted_count = 0
         deleted2_count = 0
         cache_changed = False
-        if mode is None:
-            mode = []
-        if 'clean' in mode:
-            clean = True
-        else:
-            clean = False
+
         for cache_entry_hash in list(self.pdf_index.keys()):
             cache_entry = self.pdf_index[cache_entry_hash]
             entry_count += 1
@@ -1390,31 +1371,10 @@ class DocumentStore:
                     if os.path.exists(pdf_cache_filename):
                         os.remove(pdf_cache_filename)
                         deleted_count += 1
-                    
-        header = ["PDF Cache", "Count"]
-        alignment: list[bool|None]|None = [True, False]
-        rows: list[list[str]] = []
-        rows.append(["Cache entries", f"{entry_count}"])
-        rows.append(["Extract failures", f"{failure_count}"])
-        rows.append(["Orphans", f"{orphan_count}+{orphan2_count}"])
-        if deleted_count > 0:
-            rows.append(["Debris removed", f"{deleted_count}"])
-        if deleted_count > 0:
-            rows.append(["Records removed", f"{deleted2_count}"])
-        rows.append(["Missing cache files", f"{missing_count}"])
-        _ = tf.print_table(header, rows, alignment)
-        print()
         if cache_changed is True:
             self.save_library()
-        
-    def check(self, mode: list[str] | None = None):
-        print()
-        if mode is None or mode == [] or "clean" in mode or 'pdf' in mode:
-            # self.log.info("Checking PDF cache consistency")
-            if mode is None:
-                mode = []
-            self.check_pdf_cache(mode)
-
+        return (entry_count, failure_count, orphan_count, orphan2_count, deleted_count, deleted2_count, missing_count, cache_changed)
+                    
     def get_sources_ext_cnts(self) -> tuple[dict[str, int], dict[str, dict[str, int]]]:
         exts: list[str] = []
         sum_ext_cnts: dict[str,int] = {}
