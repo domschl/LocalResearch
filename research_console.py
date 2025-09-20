@@ -123,7 +123,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 print(f"Args: {arguments}")
 
                 if 'models' in arguments or len(arguments) == 0:
-                    header = ["ID", "Embeddings", "Model"]
+                    header = ["ID", "Docs", "Model"]
                     m_rows: list[list[str]] = []
                     selected: int|None = None
                     for ind, model in enumerate(vs.model_list):
@@ -260,6 +260,11 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     vs.index3d(ds.library, None)                
             elif command == 'search':
                 search_results: int = cast(int, ds.get_var('search_results'))
+                if 'search_results' in key_vals:
+                    try:
+                        search_results = int(key_vals['search_results'])
+                    except ValueError:
+                        log.error(f"Invalid integer format: {key_vals['search_results']}")
                 highlight: bool = cast(bool, ds.get_var('highlight'))
                 cutoff = cast(float, ds.get_var('highlight_cutoff'))
                 damp:float = cast(float, ds.get_var('highlight_dampening'))
