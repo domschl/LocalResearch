@@ -3,6 +3,8 @@ import readline
 import os
 import atexit
 from typing import cast
+from text_format import TextFormat
+from vector_store import get_files_of_extensions
 
 print("\rStarting...\r", end="", flush=True)
 
@@ -11,6 +13,7 @@ from text_format import TextParse
 
 def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
     history_file = os.path.join(os.path.expanduser("~/.config/local_research"), "repl_history")
+    tf = TextFormat()
     try:
         readline.read_history_file(history_file)
     except FileNotFoundError:
@@ -46,12 +49,113 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 ds.sync_texts(arguments)
             elif command == 'check':
                 ds.check(arguments)
-                doc_hashes: list[str] = list(ds.library.keys())
-                vs.check(arguments, doc_hashes)
+
+                if len(arguments) == 0 or 'index' in arguments:
+                    doc_hashes: list[str] = list(ds.library.keys())
+
+                    if 'clean' in arguments:
+                        clean = True
+                    else:
+                        clean = False
+                    model_check = vs.check_indices(doc_hashes, clean)
+
+                    hint_missing: bool = False
+                    hint_clean: bool = False
+                    c_rows: list[list[str]] = []
+                    c_selected: int|None = None
+                    for ind, ms in enumerate(model_check):
+                        if ms['enabled'] is True:
+                            if ms['missing_count'] > 0:
+                                hint_missing = True
+                            if ms['debris_count'] > 0:
+                                hint_clean = True
+                            if ms['selected'] is True:
+                                c_rows.append([f">{ind+1}<", str(ms['embedding_count']), str(ms['debris_count']), str(ms['deleted_count']), str(ms['missing_count']), ms['model_name']])
+                                c_selected = ind
+                            else:
+                                c_rows.append([f" {ind+1} ", str(ms['embedding_count']), str(ms['debris_count']), str(ms['deleted_count']), str(ms['missing_count']), ms['model_name']])
+                        else:
+                            c_rows.append([f">{ind+1}<", "DISABLED", "", "", "", ms['model_name']])                    
+                    header = ["ID", "Embeddings", "Debris", "Deleted", "Missing", "Model"]
+                    alignment: list[bool|None]|None = [True, False, False, False, False, True]
+                    _ = tf.print_table(header, c_rows, alignment, selected=c_selected)
+                    print()
+                    if hint_missing is True:
+                        log.info("To calculate the missing indices, use 'select <ID>' and 'index' for each model with missing indices")
+                    if hint_clean is True:
+                        log.info("Use 'check index clean' to clean up debris indices")
+                    if hint_missing is False and hint_clean is False:
+                        log.info("All model indices are fully up-to-date")                
             elif command == 'list':
                 print(f"Args: {arguments}")
-                ds.list_info(arguments)
-                vs.list_info(arguments)
+
+                if 'models' in arguments or len(arguments) == 0:
+                    header = ["ID", "Embeddings", "Model"]
+                    m_rows: list[list[str]] = []
+                    selected: int|None = None
+                    for ind, model in enumerate(vs.model_list):
+                        path = vs.model_embedding_path(model['model_name'])
+                        cnt = len(get_files_of_extensions(path, ['pt']))
+                        if model['enabled'] == False:
+                            post = ' DISABLED'
+                        else:
+                            post = ''
+                        if model['model_name'] == vs.config['embeddings_model_name']:
+                            m_rows.append([f">{ind+1}<", str(cnt), f"{model['model_name']}{post}"])
+                            selected = ind
+                        else:
+                            m_rows.append([f" {ind+1}", str(cnt), f"{model['model_name']}{post}"])
+                    _ = tf.print_table(header, m_rows, [True, False, True], selected=selected)
+                    print()
+                    print("Use 'select <ID>' to change the active model, 'enable|disable <ID>' to activate/deactivate")
+
+                if 'sources' in arguments or len(arguments) == 0:
+                    sum_ext_cnts, sources_ext_cnts = ds.get_sources_ext_cnts()
+                    exts = list(sum_ext_cnts.keys())
+                    sum_cnt = 0
+                    for ext in sum_ext_cnts:
+                        sum_cnt += sum_ext_cnts[ext]
+                    s_rows: list[list[str]] = []
+                    for source_name in sources_ext_cnts:
+                        ext_cnts = sources_ext_cnts[source_name]
+                        cnt = 0
+                        for ext in ext_cnts:
+                            cnt += ext_cnts[ext]
+                        row = [f"{source_name}", str(cnt)]
+                        for ext in exts:
+                            if ext in ext_cnts:
+                                row.append(str(ext_cnts[ext]))
+                            else:
+                                row.append("0")
+                        row.append(ds.config['document_sources'][source_name]['path'])
+                        s_rows.append(row)
+
+                    header = ["Source", "Docs"] + exts + ["Path"]
+                    al_s: list[bool|None]|None = [True, False]
+                    al_s += [False] * len(exts) + [True]
+
+                    row = ["Total", str(sum_cnt)]
+                    for ext in exts:
+                        if ext in sum_ext_cnts:
+                            row.append(str(sum_ext_cnts[ext]))
+                        else:
+                            row.append("0")
+                    row.append("")
+                    s_rows.append(row)
+                    _ = tf.print_table(header, s_rows, al_s)
+                    print()
+
+                if 'vars' in arguments or len(arguments) == 0:
+                    print()
+                    header = ['Variable', 'Value', 'Type']
+                    al:list[bool|None]|None = [True, True, False]
+                    rows_v: list[list[str]] = []
+                    for name in ds.config['vars']:
+                        val, type = ds.config['vars'][name]
+                        rows_v.append([name, val, type])
+                    _ = tf.print_table(header, rows_v, al)
+                    print()
+
             elif command == 'set':
                 comps = arguments
                 if len(comps) != 2:
@@ -120,7 +224,27 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 highlight: bool = cast(bool, ds.get_var('highlight'))
                 cutoff = cast(float, ds.get_var('highlight_cutoff'))
                 damp:float = cast(float, ds.get_var('highlight_dampening'))
-                vs.search(text_argument, ds.library, search_results, highlight, cutoff, damp)
+                count = search_results
+                search_string = ' '.join(arguments)
+                print(f"Searching: {search_string}")
+                if 'max_results' in key_vals:
+                    try:
+                        count = int(key_vals['max_results'])
+                    except ValueError:
+                        log.error(f"Invalid integer max_results={key_vals['max_results']}, keeping default {count}")
+                search_result_list = vs.search(search_string, ds.library, count, highlight, cutoff, damp)
+                keywords = vs.get_keywords(search_string)
+
+                for index, result in enumerate(search_result_list):
+                    header = [f"{result['cosine']:.3f}", result['entry']['descriptor']]
+                    text = result['text']
+                    if text is None:
+                        text = ""
+                    rows: list[list[str]] = [[str(len(search_result_list) - index), text]]
+                    print()
+                    _ = tf.print_table(header, rows, multi_line=True, keywords=keywords, significance=[[None, result['significance']]])
+                print()
+
             elif command == 'publish':
                 _ = ds.publish(arguments)
             elif command == 'import':

@@ -67,6 +67,16 @@ class PDFIndex(TypedDict):
     file_size: int
 
 
+class ModelCheck(TypedDict):
+    embedding_count: int
+    debris_count: int
+    deleted_count: int
+    missing_count: int
+    model_name: str
+    enabled: bool
+    selected: bool
+
+
 class EmbeddingModel(TypedDict):
     model_hf_name: str
     model_name: str
@@ -83,6 +93,8 @@ class SearchResultEntry(TypedDict):
     hash: str
     chunk_index: int
     entry: LibraryEntry
+    text: str|None
+    significance: list[float]|None
 
 
 def get_files_of_extensions(path:str, extensions: list[str]):
@@ -242,44 +254,11 @@ class VectorStore:
                 return ind+1
         return None
 
-    def list_models(self, current_model: str|None = None):
-        header = ["ID", "Embeddings", "Model"]
-        rows: list[list[str]] = []
-        selected: int|None = None
-        for ind, model in enumerate(self.model_list):
-            path = self.model_embedding_path(model['model_name'])
-            cnt = len(get_files_of_extensions(path, ['pt']))
-            if model['enabled'] == False:
-                post = ' DISABLED'
-            else:
-                post = ''
-            if model['model_name'] == current_model:
-                rows.append([f">{ind+1}<", str(cnt), f"{model['model_name']}{post}"])
-                selected = ind
-            else:
-                rows.append([f" {ind+1}", str(cnt), f"{model['model_name']}{post}"])
-        _ = tf.print_table(header, rows, [True, False, True], selected=selected)
-        print()
-        print("Use 'select <ID>' to change the active model, 'enable|disable <ID>' to activate/deactivate")
-
-    def list_info(self, mode: list[str]|None):
-        print()
-        if mode is None or mode == [] or 'models' in mode:
-            self.list_models(self.config['embeddings_model_name'])
-
-    def check_indices(self, current_model:str, doc_hashes:list[str], mode:list[str]):
-        if 'clean' in mode:
-            clean = True
-        else:
-            clean = False
+    def check_indices(self, doc_hashes:list[str], clean:bool) -> list[ModelCheck]:
         all_deleted = 0
-        hint_clean = False
-        hint_missing = False
-        header = ["ID", "Embeddings", "Debris", "Deleted", "Missing", "Model"]
-        alignment: list[bool|None]|None = [True, False, False, False, False, True]
-        rows: list[list[str]] = []
-        selected: int|None = None
-        for ind, model in enumerate(self.model_list):
+        model_check:list[ModelCheck] = []
+        
+        for model in self.model_list:
             cnt = 0
             debris_cnt = 0
             deleted_cnt = 0
@@ -297,35 +276,27 @@ class VectorStore:
                             os.remove(os.path.join(indices_path, filename))
                             deleted_cnt += 1
                             all_deleted += 1
-                        else:
-                            hint_clean = True
-                missing = len(doc_hashes) - cnt
-                if missing > 0:
-                    hint_missing = True
-                if model['model_name'] == current_model:
-                    rows.append([f">{ind+1}<", str(cnt), str(debris_cnt), str(deleted_cnt), str(missing), model['model_name']])
-                    selected = ind
+                if model['model_name'] == self.config['embeddings_model_name']:
+                    selected = True
                 else:
-                    rows.append([f" {ind+1} ", str(cnt), str(debris_cnt), str(deleted_cnt), str(missing), model['model_name']])
+                    selected = False
+                missing_cnt = len(doc_hashes) - cnt
+                model_check.append(ModelCheck({'embedding_count':cnt,
+                                               'debris_count': debris_cnt,
+                                               'deleted_count': deleted_cnt,
+                                               'missing_count': missing_cnt,
+                                               'model_name': model['model_name'],
+                                               'enabled': model['enabled'],
+                                               'selected': selected}))
             else:
-                rows.append([f">{ind+1}<", "DISABLED", "", "", "", model['model_name']])
-        _ = tf.print_table(header, rows, alignment, selected=selected)
-        print()
-        if all_deleted > 0:
-            self.log.info(f"{all_deleted} unused index files removed")
-        if hint_missing is True:
-            self.log.info("To calculate the missing indices, use 'select <ID>' and 'index' for each model with missing indices")
-        if hint_clean is True:
-            self.log.info("Use 'check index clean' to clean up debris indices")
-        if hint_missing is False and hint_clean is False:
-            self.log.info("All model indices are fully up-to-date")
-        
-    def check(self, mode:list[str]|None, doc_hashes:list[str]):
-        print()
-        if mode is None:
-            mode = []
-        if mode == [] or "clean" in mode or 'index' in mode:
-            self.check_indices(self.config['embeddings_model_name'], doc_hashes, mode)
+                model_check.append(ModelCheck({'embedding_count':0,
+                                               'debris_count': 0,
+                                               'deleted_count': 0,
+                                               'missing_count': 0,
+                                               'model_name': model['model_name'],
+                                               'enabled': False,
+                                               'selected': False}))                
+        return model_check
                     
     def select(self, ind: int) -> str | None:
         if ind<1 or ind>len(self.model_list):
@@ -721,11 +692,11 @@ class VectorStore:
         return cosines
 
     def search(self, search_text:str, library:dict[str,LibraryEntry], max_results:int=10, highlight:bool=False,
-               highlight_cutoff:float=0.0, highlight_dampening:float=1.0):
+               highlight_cutoff:float=0.0, highlight_dampening:float=1.0) -> list[SearchResultEntry]:
         self.load_model()
         if self.model is None or self.engine is None:
             self.log.error("Failed to load model, cannot index!")
-            return
+            return []
         search_results: list[SearchResultEntry] = []
         device = torch.device(self.resolve_device())
         search_tensor = cast(torch.Tensor, self.engine.encode_query(search_text, convert_to_tensor=True, show_progress_bar=False, normalize_embeddings=True)).to(device)  # pyright:ignore[reportUnknownMemberType]
@@ -741,11 +712,10 @@ class VectorStore:
             max_ind:int = int(torch.argmax(cosines).item())
             cosine:float = cosines[max_ind].item()
             if best_min_cosine is None or cosine > best_min_cosine:
-                search_results.append(SearchResultEntry({'cosine': cosine, 'hash': hash, 'chunk_index': max_ind, 'entry': library[hash]}))
+                search_results.append(SearchResultEntry({'cosine': cosine, 'hash': hash, 'chunk_index': max_ind, 'entry': library[hash], 'text': None, 'significance': None}))
                 search_results = sorted(search_results, key=lambda res: res['cosine'])
                 search_results = search_results[-max_results:]
                 best_min_cosine = search_results[0]['cosine']
-                # print(f"{search_results[0]['cosine']}:{search_results[-1]['cosine']}, added: {library[hash]['descriptor']}")
         for index, result in enumerate(search_results):
             result_text = self.get_chunk_context_aware(result['entry']['text'], result['chunk_index'], self.config['chunk_size'], self.config['chunk_overlap'])
             replacers = [("\n", " "), ("\r", " "), ("\b", " "), ("\t", " "), ("  ", " ")]
@@ -756,12 +726,11 @@ class VectorStore:
                 old_text = result_text
                 for rep in replacers:
                     result_text = result_text.replace(rep[0], rep[1])
-            header = [f"{result['cosine']:.3f}", result['entry']['descriptor']]
-            rows: list[list[str]] = [[str(len(search_results) - index), result_text]]
-            print()
-            keywords = self.get_keywords(search_text)
-            significance: list[float] = [0.0] * len(result_text)
+
+            search_results[index]['text'] = result_text
+
             if highlight is True:
+                significance: list[float] = [0.0] * len(result_text)
                 context_steps = 4
                 context_length = 16
                 stepped_significance: list[float] = self.get_significance(result_text, search_tensor, context_length, context_steps, highlight_cutoff)
@@ -770,13 +739,8 @@ class VectorStore:
                     highlight_dampening = 1.0
                 for ind in range(len(result_text)):
                     significance[ind] = stepped_significance[ind // context_steps] * result['cosine'] / highlight_dampening
-
-                # for ind in range(len(significance)):
-                #     print(f"{significance[ind]:.2f} ", end="")
-                # print()
-                
-            _ = tf.print_table(header, rows, multi_line=True, keywords=keywords, significance=[[None, significance]])
-        print()
+                search_results[index]['significance'] = significance
+        return search_results
     
     def prepare_visualization_data(self, library:dict[str, LibraryEntry], max_points: int | None = None) -> dict[str, Any]:  # pyright:ignore[reportExplicitAny]
         print("Compiling source matrix\r", end="", flush=True)
@@ -1450,20 +1414,20 @@ class DocumentStore:
             if mode is None:
                 mode = []
             self.check_pdf_cache(mode)
-        
-    def list_sources(self):
-        print()
-        exts = ['pdf', 'txt', 'md']
-        header = ["Source", "Docs"] + exts + ["Path"]
-        al: list[bool|None]|None = [True, False]
-        al += [False] * len(exts) + [True]
-        rows: list[list[str]] = []
+
+    def get_sources_ext_cnts(self) -> tuple[dict[str, int], dict[str, dict[str, int]]]:
+        exts: list[str] = []
         sum_ext_cnts: dict[str,int] = {}
+        source_ext_cnts: dict[str, dict[str, int]] = {}
         sum_cnt = 0
         for source_name in self.config['document_sources']:
-            source = self.config['document_sources'][source_name]
+            for ext in self.config['document_sources'][source_name]['file_types']:
+                if ext not in exts:
+                    exts.append(ext)
+        for source_name in self.config['document_sources']:
+            # source = self.config['document_sources'][source_name]
             cnt = 0
-            ext_cnts: dict[str,int] = {}
+            source_ext_cnts[source_name] = {}
             for hsh in self.library:
                 if self.library[hsh]['source_name'] == source_name:
                     cnt += 1
@@ -1472,49 +1436,15 @@ class DocumentStore:
                     if ext and len(ext) > 0:
                         ext = ext[1:]
                     if ext and ext in exts:
-                        if ext in ext_cnts:
-                            ext_cnts[ext] += 1
+                        if ext in source_ext_cnts[source_name]:
+                            source_ext_cnts[source_name][ext] += 1
                         else:
-                            ext_cnts[ext] = 1
+                            source_ext_cnts[source_name][ext] = 1
                         if ext in sum_ext_cnts:
                             sum_ext_cnts[ext] += 1
                         else:
                             sum_ext_cnts[ext] = 1
-            row = [f"{source_name}", str(cnt)]
-            for ext in exts:
-                if ext in ext_cnts:
-                    row.append(str(ext_cnts[ext]))
-                else:
-                    row.append("0")
-            row.append(source['path'])
-            rows.append(row)
-        row = ["Total", str(sum_cnt)]
-        for ext in exts:
-            if ext in sum_ext_cnts:
-                row.append(str(sum_ext_cnts[ext]))
-            else:
-                row.append("0")
-        row.append("")
-        rows.append(row)
-        _ = tf.print_table(header, rows, al)
-        print()
-
-    def list_vars(self):
-        print()
-        header = ['Variable', 'Value', 'Type']
-        al:list[bool|None]|None = [True, True, False]
-        rows: list[list[str]] = []
-        for name in self.config['vars']:
-            val, type = self.config['vars'][name]
-            rows.append([name, val, type])
-        _ = tf.print_table(header, rows, al)
-        print()
-
-    def list_info(self, mode:list[str]|None):
-        if mode is None or mode == [] or 'vars' in mode:
-            self.list_vars()
-        if mode is None or mode == [] or 'sources' in mode:
-            self.list_sources()
+        return sum_ext_cnts, source_ext_cnts
         
     def publish(self, parameters:list[str]|None) -> bool:
         if parameters is None:
