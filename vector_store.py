@@ -5,7 +5,7 @@ import time
 import datetime
 import hashlib
 import tempfile
-from typing import TypedDict, cast, Any
+from typing import TypedDict, cast, Any, Callable
 import subprocess
 import colorsys
 import math
@@ -92,6 +92,13 @@ class SearchResultEntry(TypedDict):
     entry: LibraryEntry
     text: str|None
     significance: list[float]|None
+
+
+class ProgressState(TypedDict):
+    issues: int
+    state: str
+    percent_completion: float
+    vars: dict[str, str]
 
 
 def get_files_of_extensions(path:str, extensions: list[str]):
@@ -583,11 +590,13 @@ class VectorStore:
         self.save_tensor(embeddings_tensor, filename)
         del embeddings_tensor
     
-    def index(self, library:dict[str,LibraryEntry]):
+    def index(self, library:dict[str,LibraryEntry], progress_callback:Callable[[ProgressState], None ]|None=None, abort_check_callback:Callable[[], bool]|None=None) -> list[str]:
+        errors:list[str] = []
         self.load_model()
         if self.model is None or self.engine is None:
             self.log.error("Failed to load model, cannot index!")
-            return
+            errors.append("Failed to load model, cannot index!")
+            return errors
         new_chunks: int = 0
         for hash in library:
             filename = self.get_embedding_filename(hash)
@@ -598,12 +607,15 @@ class VectorStore:
 
         if new_chunks == 0:
             self.log.info("Index already complete, no new documents found")
-            return
+            errors.append("Index already complete, no new documents found")
+            return errors
         
         current_chunks:int = 0
         start_time = time.time()
-        last_output = time.time()
+        last_status = time.time()
         for hash in library:
+            if abort_check_callback is not None and abort_check_callback() is True:
+                return errors
             filename = self.get_embedding_filename(hash)
             name = library[hash]['descriptor']
             if os.path.exists(filename):
@@ -621,15 +633,21 @@ class VectorStore:
                 eta = f"{eta_str}, in {h}:{m:02d}:{s:02d}"
             else:
                 eta = "calculating..."
-            if time.time() - last_output > 0.5:
-                print(f"\rIndexing: {perc*100:.4f}% {name[-80:]:80s}, eta={eta}", end="")
-                last_output = time.time()
+            if time.time() - last_status > 1 or current_chunks == new_chunks:
+                state = f"Indexing: {perc*100:.4f}% {name[-80:]:80s}, eta={eta}"
+                if progress_callback is not None:
+                    progress_state = ProgressState({'issues': len(errors), 'state': state, 'percent_completion': perc, 'vars': {}})
+                    progress_callback(progress_state)
+                last_status = time.time()
+
+                
             self.save_embeddings_tensor(library[hash]['text'], filename)
             current_chunks += VectorStore.get_chunk_count(library[hash]['text'], self.config['chunk_size'], self.config['chunk_overlap'])
-        print(" "*80)
         self.log.info("Index completed")
+        return errors
 
-    def index_all(self, library:dict[str, LibraryEntry]):
+    def index_all(self, library:dict[str, LibraryEntry], progress_callback:Callable[[ProgressState], None ]|None=None, abort_check_callback:Callable[[], bool]|None=None) -> list[str]:
+        errors:list[str] = []
         current_old = self.config['embeddings_model_name']
         current_index = self.get_model_index(current_old)
         for ind in range(len(self.model_list)):
@@ -637,10 +655,11 @@ class VectorStore:
                 continue
             name = self.select(ind+1)
             self.log.info(f"{ind+1}., indexing {name}")
-            self.index(library)
+            errors += self.index(library, progress_callback, abort_check_callback)
         if current_index is not None:
             name = self.select(current_index)
             self.log.info(f"Reactivated {name} after indexing all.")
+        return errors
     
     def get_significance(self, text: str, search_tensor: torch.Tensor, context_length: int, context_steps: int, cutoff:float=0.0) -> list[float]:
         clr: list[str] = []
@@ -737,9 +756,7 @@ class VectorStore:
         return search_results
     
     def prepare_visualization_data(self, library:dict[str, LibraryEntry], max_points: int | None = None) -> dict[str, Any]:  # pyright:ignore[reportExplicitAny]
-        # print("Compiling source matrix\r", end="", flush=True)
         matrix, hashes = self.get_embeddings_matrix()
-        # print(f"Compiled source matrix: {matrix.shape}")
         if umap is None:
             return {"error": "UMAP module is not available"}
         
@@ -1080,13 +1097,10 @@ class DocumentStore:
 #                self.library[entry]['descriptor'] = descriptor
 #                upgraded = True
 #        if upgraded is True:
-#            print("upgraded... ", end="")
 #            self.save_library()
 #        else:
-#            print("not upgraded. ", end="")
 
     def save_library(self):
-        # print("Saving library data...", end="", flush=True)
         temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.library_file))
         try:
             with os.fdopen(temp_fd, 'w') as temp_file:            
@@ -1125,7 +1139,6 @@ class DocumentStore:
         if sha256_hash in self.pdf_index:
             cached_info = self.pdf_index[sha256_hash]
             if cached_info['previous_failure']:
-                print()
                 self.log.debug(f"Skipping PDF {full_path}: previously failed extraction.")
                 return None, False
             else:                
@@ -1136,10 +1149,8 @@ class DocumentStore:
                             pdf_text = f.read()
                         return pdf_text, False # Return cached text, index not changed
                     except Exception as e:
-                        print()
                         self.log.warning(f"Failed to read PDF cache file {pdf_cache_filename} for {full_path}: {e}. Re-extracting.")
                 else:
-                    print()
                     self.log.warning(f"PDF cache index points to non-existent file {pdf_cache_filename} for {full_path}. Re-extracting.")
 
         if pdf_text is None:
@@ -1212,13 +1223,13 @@ class DocumentStore:
             return True
         return False
     
-    def sync_texts(self, parameters:list[str]|None):
-        if parameters is None:
-            parameters = []
+    def sync_texts(self, force:bool, progress_callback:Callable[[ProgressState], None ]|None=None, abort_check_callback:Callable[[], bool]|None=None) -> list[str]:
+        errors:list[str] = []
         if self.local_update_required() is True:
-            if 'force' not in parameters:
+            if force is False:
                 self.log.warning("Please first update local data using 'import', since remote has newer data! (use 'force' to override)")
-                return
+                errors.append("Please first update local data using 'import', since remote has newer data! (use 'force' to override)")
+                return errors
             else:
                 self.log.warning("Override active, syncing even so remote has newer data!")
         library_changed = False
@@ -1227,37 +1238,49 @@ class DocumentStore:
         last_saved = time.time()
 
         existing_hashes: list[str] = list(self.library.keys())
-        abort_scan = False
         pdf_cache_hits = 0
         duplicate_count = 0
-        nl_required = False
         last_status = time.time()
+
+        doc_count = 0
+        current_doc_count = 0
+        source_file_count:dict[str,int]={}
         for source_name in self.config['document_sources']:
             source = self.config['document_sources'][source_name]
             if source['type'] not in self.valid_source_types:
                 self.log.error(f"{source_name} has invalid type {source['type']}, use one of {self.valid_source_types}")
-                return
-            if abort_scan: 
-                break
+                errors.append(f"{source_name} has invalid type {source['type']}, use one of {self.valid_source_types}")
+                return errors
+            if abort_check_callback is not None and abort_check_callback() is True: 
+                return errors
             source_path = os.path.expanduser(source['path'])
             self.log.info(f"Scanning source '{source_name}' at '{source_path}'...")
-            source_file_count = 0
-            for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: self.log.warning(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
+            source_file_count[source_name] = 0
+            for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: errors.append(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
                 for filename in files:
                     if self.skip_file_in_sync(root, filename, source['file_types']) is True:
                         continue
-                    source_file_count += 1
+                    source_file_count[source_name] += 1
+                    doc_count += 1
+        
+        for source_name in self.config['document_sources']:
+            source = self.config['document_sources'][source_name]
+            if abort_check_callback is not None and abort_check_callback() is True: 
+                break
+            source_path = os.path.expanduser(source['path'])
+            self.log.info(f"Scanning source '{source_name}' at '{source_path}'...")
             file_count = 0
             for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: self.log.warning(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
-                if abort_scan: 
+                if abort_check_callback is not None and abort_check_callback() is True: 
                     break
                 for filename in files:
-                    if abort_scan: 
+                    if abort_check_callback is not None and abort_check_callback() is True: 
                         break
                     if self.skip_file_in_sync(root, filename, source['file_types']) is True:
                         continue
 
                     file_count += 1
+                    current_doc_count += 1
                     full_path = os.path.join(root, filename)
                     descriptor = self.get_descriptor_from_path(full_path, source_name)
                     sha256_hash = DocumentStore._get_sha256(full_path)
@@ -1265,22 +1288,22 @@ class DocumentStore:
                     ext = ext_with_dot[1:].lower() if ext_with_dot else ""
 
                     if sha256_hash in self.library and descriptor != self.library[sha256_hash]['descriptor']:
-                        if nl_required:
-                            print()
-                            nl_required = False
                         self.log.warning(f"File {full_path} is a duplicate of {self.library[sha256_hash]['descriptor']}, ignoring this copy.")
+                        errors.append(f"File {full_path} is a duplicate of {self.library[sha256_hash]['descriptor']}, ignoring this copy.")
                         duplicate_count += 1
                         continue
 
                     if sha256_hash in existing_hashes:
                         existing_hashes.remove(sha256_hash)
-                        if time.time() - last_status > 1 or file_count==source_file_count:
-                            if file_count == source_file_count:
-                                print(f"\rChecked  {file_count}/{source_file_count}   ", end="", flush=True)
-                            else:
-                                print(f"\rChecking {file_count}/{source_file_count}...", end="", flush=True)
+                        if time.time() - last_status > 1 or file_count==source_file_count[source_name]:
+                            perc = 0.0
+                            if doc_count > 0.0:
+                                perc = current_doc_count / doc_count * 100.0
+                            state = f"Checking source: {source_name}"
+                            if progress_callback is not None:
+                                progress_state = ProgressState({'issues': len(errors), 'state': state, 'percent_completion': perc, 'vars': {}})
+                                progress_callback(progress_state)
                             last_status = time.time()
-                            nl_required = True
                         continue
 
                     current_text: str | None = None
@@ -1288,22 +1311,37 @@ class DocumentStore:
                     if ext in ['md', 'txt']:
                         with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
                             current_text = f.read()
-                        print(f"\r {file_count}/{source_file_count} | {full_path[-80:]:80s} Text       ", end="")
-                        nl_required = True
+                        if time.time() - last_status > 1 or file_count==source_file_count[source_name]:
+                            perc = 0.0
+                            if doc_count > 0.0:
+                                perc = current_doc_count / doc_count * 100.0
+                            state = f"{current_doc_count}/{doc_count} | {full_path[-80:]:80s} Text"
+                            if progress_callback is not None:
+                                progress_state = ProgressState({'issues': len(errors), 'state': state, 'percent_completion': perc, 'vars': {}})
+                                progress_callback(progress_state)
+                            last_status = time.time()
                     elif ext == 'pdf':
-                        print(f"\r {file_count}/{source_file_count} | {full_path[-80:]:80s} Scanning...", end="")
                         current_text, pdf_index_changed_during_get = self.get_pdf_text(full_path, sha256_hash)
                         if pdf_index_changed_during_get is True:
                             pdf_index_changed = True
                         else:
                             pdf_cache_hits += 1
-                        print(f"\r {file_count}/{source_file_count} | {full_path[-80:]:80s} PDF        ", end="")
-                        nl_required = True
+                        if time.time() - last_status > 1 or file_count==source_file_count[source_name]:
+                            perc = 0.0
+                            if doc_count > 0.0:
+                                perc = current_doc_count / doc_count * 100.0
+                            state = f"{current_doc_count}/{doc_count} | {full_path[-80:]:80s} PDF "
+                            if progress_callback is not None:
+                                progress_state = ProgressState({'issues': len(errors), 'state': state, 'percent_completion': perc, 'vars': {}})
+                                progress_callback(progress_state)
+                            last_status = time.time()
                     else:
                         self.log.error(f"Handling for file-type {ext} not implemented!")
+                        errors.append(f"Handling for file-type {ext} not implemented!")
 
                     if current_text is None:
                         self.log.error(f"{full_path} has no content or doesnt exist!")
+                        errors.append(f"{full_path} has no content or doesnt exist!")
                         existing_hashes.remove(sha256_hash)
                         continue
                                             
@@ -1314,30 +1352,31 @@ class DocumentStore:
                         self.save_library()
                         library_changed = False
                         last_saved =  time.time()
-            if nl_required is True:
-                print()
-                nl_required = False
         new_library_size = len(list(self.library.keys()))
         if duplicate_count > 0:
             self.log.warning(f"{duplicate_count} duplicates were ignored during import, please re-run sync.")
+            errors.append(f"{duplicate_count} duplicates were ignored during import, please re-run sync.")
             
         if len(existing_hashes) > 0:
             self.log.warning(f"{len(existing_hashes)} debris entries")
             for debris in existing_hashes:
                 if debris in self.library:
                     self.log.info(f"Deleting library entry {self.library[debris]['descriptor']}")
+                    errors.append(f"Deleting debris library entry {self.library[debris]['descriptor']}")
                     del self.library[debris]
                     library_changed = True
                 if debris in self.pdf_index:
                     del self.pdf_index[debris]
                     pdf_index_changed = True
             self.log.warning("Please use 'check clean' to remove superflucious indices")
+            errors.append("Please use 'check clean' to remove superflucious indices")
                 
         if library_changed is True or pdf_index_changed is True:
             self.save_library()
             self.log.info(f"Library size {old_library_size} -> {new_library_size}")
         else:
             self.log.info(f"No changes")
+        return errors
 
     def check_pdf_cache(self, clean:bool) -> tuple[int, int, int, int, int, int , int, bool]:
         failure_count = 0

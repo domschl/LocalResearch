@@ -8,7 +8,7 @@ from vector_store import get_files_of_extensions
 
 print("\rStarting...\r", end="", flush=True)
 
-from vector_store import DocumentStore, VectorStore
+from vector_store import DocumentStore, VectorStore, ProgressState
 from text_format import TextParse
 
 def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
@@ -46,9 +46,20 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 continue
             elif command == 'sync':
                 log.info("Starting sync...")
-                ds.sync_texts(arguments)
+                if 'force' in arguments:
+                    force = True
+                else:
+                    force = False
+
+                def progress_sync(ps: ProgressState):
+                    print(f"{ps['percent_completion']:3.3f} {ps['state']}")
+                    
+                errors = ds.sync_texts(force, progress_sync, None)
+                for error in errors:
+                    print(error)
+                    
             elif command == 'check':
-                if len(arguments) == 0 or 'pdf' in arguments:
+                if len(arguments) == 0 or 'pdf' in arguments or (len(arguments)==1 and 'clean' in arguments):
                     if 'clean' in arguments:
                         clean = True
                     else:
@@ -70,7 +81,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                         print("PDF cache file updated")
                     print()
 
-                if len(arguments) == 0 or 'index' in arguments:
+                if len(arguments) == 0 or 'index' in arguments or (len(arguments)==1 and 'clean' in arguments):
                     doc_hashes: list[str] = list(ds.library.keys())
 
                     if 'clean' in arguments:
@@ -226,10 +237,16 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                         continue
                     else:
                         log.warning("Version override, starting indexing")
+
+                def progress_index(ps:ProgressState):
+                    print(f"{ps['percent_completion']:3.2f} {ps['state']}")
+                    
                 if 'all' in arguments:
-                    vs.index_all(ds.library)
+                    errors = vs.index_all(ds.library, progress_index)
                 else:
-                    vs.index(ds.library)
+                    errors = vs.index(ds.library, progress_index)
+                for error in errors:
+                    print(error)
             elif command == 'index3d':
                 if ds.local_update_required() is True:
                     if 'force' not in arguments:
