@@ -82,7 +82,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     print()
 
                 if len(arguments) == 0 or 'index' in arguments or (len(arguments)==1 and 'clean' in arguments):
-                    doc_hashes: list[str] = list(ds.library.keys())
+                    doc_hashes: list[str] = list(ds.text_library.keys())
 
                     if 'clean' in arguments:
                         clean = True
@@ -242,9 +242,9 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     print(f"{ps['percent_completion']:3.2f} {ps['state']}")
                     
                 if 'all' in arguments:
-                    errors = vs.index_all(ds.library, progress_index)
+                    errors = vs.index_all(ds.text_library, progress_index)
                 else:
-                    errors = vs.index(ds.library, progress_index)
+                    errors = vs.index(ds.text_library, progress_index)
                 for error in errors:
                     print(error)
             elif command == 'index3d':
@@ -255,9 +255,9 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     else:
                         log.warning("Version override, starting 3D-indexing")
                 if 'all' in arguments:
-                    vs.index3d_all(ds.library)
+                    vs.index3d_all(ds.text_library)
                 else:
-                    vs.index3d(ds.library, None)                
+                    vs.index3d(ds.text_library, None)                
             elif command == 'search':
                 search_results: int = cast(int, ds.get_var('search_results', key_vals))
                 highlight: bool = cast(bool, ds.get_var('highlight', key_vals))
@@ -273,7 +273,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                         count = int(key_vals['max_results'])
                     except ValueError:
                         log.error(f"Invalid integer max_results={key_vals['max_results']}, keeping default {count}")
-                search_result_list = vs.search(search_string, ds.library, count,
+                search_result_list = vs.search(search_string, ds.text_library, count,
                                                highlight, cutoff, damp,
                                                context_length, context_steps)
                 keywords = tp.parse(search_string)

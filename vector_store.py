@@ -25,6 +25,26 @@ except ImportError:
     pass
 
 
+class DocumentRepresentation(TypedDict):
+    descriptor: str
+    hash: str
+    format: str
+    
+class Metadata(TypedDict):
+    uuid: str
+    representations: list[DocumentRepresentation]
+    authors: list[str]
+    identifiers: list[str]
+    languages: list[str]
+    context: str
+    creation_date: str
+    publication_date: str
+    series: str
+    series_index: str
+    tags: list[str]
+    title: str
+    title_sort: str
+
 class DocumentSource(TypedDict):
     type: str
     path: str
@@ -51,7 +71,7 @@ class VectorConfig(TypedDict):
     umap_metric: str
 
 
-class LibraryEntry(TypedDict):
+class TextLibraryEntry(TypedDict):
     source_name: str
     descriptor: str
     text: str
@@ -89,7 +109,7 @@ class SearchResultEntry(TypedDict):
     cosine: float
     hash: str
     chunk_index: int
-    entry: LibraryEntry
+    entry: TextLibraryEntry
     text: str|None
     significance: list[float]|None
 
@@ -590,7 +610,7 @@ class VectorStore:
         self.save_tensor(embeddings_tensor, filename)
         del embeddings_tensor
     
-    def index(self, library:dict[str,LibraryEntry], progress_callback:Callable[[ProgressState], None ]|None=None, abort_check_callback:Callable[[], bool]|None=None) -> list[str]:
+    def index(self, text_library:dict[str,TextLibraryEntry], progress_callback:Callable[[ProgressState], None ]|None=None, abort_check_callback:Callable[[], bool]|None=None) -> list[str]:
         errors:list[str] = []
         self.load_model()
         if self.model is None or self.engine is None:
@@ -598,12 +618,12 @@ class VectorStore:
             errors.append("Failed to load model, cannot index!")
             return errors
         new_chunks: int = 0
-        for hash in library:
+        for hash in text_library:
             filename = self.get_embedding_filename(hash)
-            name = library[hash]['descriptor']
+            name = text_library[hash]['descriptor']
             if os.path.exists(filename):
                 continue
-            new_chunks += VectorStore.get_chunk_count(library[hash]['text'], self.config['chunk_size'], self.config['chunk_overlap'])
+            new_chunks += VectorStore.get_chunk_count(text_library[hash]['text'], self.config['chunk_size'], self.config['chunk_overlap'])
 
         if new_chunks == 0:
             self.log.info("Index already complete, no new documents found")
@@ -613,11 +633,11 @@ class VectorStore:
         current_chunks:int = 0
         start_time = time.time()
         last_status = time.time()
-        for hash in library:
+        for hash in text_library:
             if abort_check_callback is not None and abort_check_callback() is True:
                 return errors
             filename = self.get_embedding_filename(hash)
-            name = library[hash]['descriptor']
+            name = text_library[hash]['descriptor']
             if os.path.exists(filename):
                 continue
             perc:float = current_chunks / new_chunks
@@ -641,12 +661,12 @@ class VectorStore:
                 last_status = time.time()
 
                 
-            self.save_embeddings_tensor(library[hash]['text'], filename)
-            current_chunks += VectorStore.get_chunk_count(library[hash]['text'], self.config['chunk_size'], self.config['chunk_overlap'])
+            self.save_embeddings_tensor(text_library[hash]['text'], filename)
+            current_chunks += VectorStore.get_chunk_count(text_library[hash]['text'], self.config['chunk_size'], self.config['chunk_overlap'])
         self.log.info("Index completed")
         return errors
 
-    def index_all(self, library:dict[str, LibraryEntry], progress_callback:Callable[[ProgressState], None ]|None=None, abort_check_callback:Callable[[], bool]|None=None) -> list[str]:
+    def index_all(self, text_library:dict[str, TextLibraryEntry], progress_callback:Callable[[ProgressState], None ]|None=None, abort_check_callback:Callable[[], bool]|None=None) -> list[str]:
         errors:list[str] = []
         current_old = self.config['embeddings_model_name']
         current_index = self.get_model_index(current_old)
@@ -655,7 +675,7 @@ class VectorStore:
                 continue
             name = self.select(ind+1)
             self.log.info(f"{ind+1}., indexing {name}")
-            errors += self.index(library, progress_callback, abort_check_callback)
+            errors += self.index(text_library, progress_callback, abort_check_callback)
         if current_index is not None:
             name = self.select(current_index)
             self.log.info(f"Reactivated {name} after indexing all.")
@@ -704,7 +724,7 @@ class VectorStore:
                     cosines[ind] = 0.0
         return cosines
 
-    def search(self, search_text:str, library:dict[str,LibraryEntry], max_results:int=10, highlight:bool=False,
+    def search(self, search_text:str, text_library:dict[str,TextLibraryEntry], max_results:int=10, highlight:bool=False,
                highlight_cutoff:float=0.0, highlight_dampening:float=1.0, context_length:int=16, context_steps:int=4) -> list[SearchResultEntry]:
         self.load_model()
         if self.model is None or self.engine is None:
@@ -725,7 +745,7 @@ class VectorStore:
             max_ind:int = int(torch.argmax(cosines).item())
             cosine:float = cosines[max_ind].item()
             if best_min_cosine is None or cosine > best_min_cosine:
-                search_results.append(SearchResultEntry({'cosine': cosine, 'hash': hash, 'chunk_index': max_ind, 'entry': library[hash], 'text': None, 'significance': None}))
+                search_results.append(SearchResultEntry({'cosine': cosine, 'hash': hash, 'chunk_index': max_ind, 'entry': text_library[hash], 'text': None, 'significance': None}))
                 search_results = sorted(search_results, key=lambda res: res['cosine'])
                 search_results = search_results[-max_results:]
                 best_min_cosine = search_results[0]['cosine']
@@ -753,7 +773,7 @@ class VectorStore:
                 search_results[index]['significance'] = significance
         return search_results
     
-    def prepare_visualization_data(self, library:dict[str, LibraryEntry], max_points: int | None = None) -> dict[str, Any]:  # pyright:ignore[reportExplicitAny]
+    def prepare_visualization_data(self, text_library:dict[str, TextLibraryEntry], max_points: int | None = None) -> dict[str, Any]:  # pyright:ignore[reportExplicitAny]
         matrix, hashes = self.get_embeddings_matrix()
         if umap is None:
             return {"error": "UMAP module is not available"}
@@ -783,8 +803,8 @@ class VectorStore:
             return {"error": f"UMAP reduction failed: {str(e)}"}
 
         points:list[list[float]] = cast(list[list[float]], reduced_embeddings_np.tolist())
-        texts = [library[hash]['descriptor']+f"[{chunk_id}]" for hash, chunk_id in hashes]
-        doc_ids = [library[hash]['descriptor'] for hash, _chunk_id in hashes]
+        texts = [text_library[hash]['descriptor']+f"[{chunk_id}]" for hash, chunk_id in hashes]
+        doc_ids = [text_library[hash]['descriptor'] for hash, _chunk_id in hashes]
 
         unique_doc_ids = list(set(doc_ids))
 
@@ -795,7 +815,7 @@ class VectorStore:
             rgb_float = colorsys.hls_to_rgb(hue, 0.5, 0.8) 
             color_map[doc_id_val] = [int(c * 255) for c in rgb_float]
 
-        colors: list[list[int]] = [color_map.get(library[hash]['descriptor'], [128,128,128]) for hash, _chunk_id in hashes]
+        colors: list[list[int]] = [color_map.get(text_library[hash]['descriptor'], [128,128,128]) for hash, _chunk_id in hashes]
         sizes = [5.0] * len(points)
         self.log.info("UMAP finished")
 
@@ -812,13 +832,13 @@ class VectorStore:
         }
 
 
-    def index3d(self, library:dict[str, LibraryEntry], max_points:int|None=None):
-        point_cloud = self.prepare_visualization_data(library, max_points)
+    def index3d(self, text_library:dict[str, TextLibraryEntry], max_points:int|None=None):
+        point_cloud = self.prepare_visualization_data(text_library, max_points)
         filename = os.path.join(self.visualization_3d, self.config['embeddings_model_name']+'.json')
         with open(filename, "w") as f:
             json.dump(point_cloud, f, indent=2)
     
-    def index3d_all(self, library:dict[str, LibraryEntry], max_points:int|None=None):
+    def index3d_all(self, text_library:dict[str, TextLibraryEntry], max_points:int|None=None):
         current_old = self.config['embeddings_model_name']
         current_index = self.get_model_index(current_old)
         for ind in range(len(self.model_list)):
@@ -826,7 +846,7 @@ class VectorStore:
                 continue
             name = self.select(ind+1)
             self.log.info(f"{ind+1}., 3D-indexing {name}")
-            self.index3d(library, max_points)
+            self.index3d(text_library, max_points)
         if current_index is not None:
             name = self.select(current_index)
             self.log.info(f"Reactivated {name} after indexing all.")
@@ -843,7 +863,7 @@ class DocumentStore:
         self.config_file:str = os.path.join(self.config_path, "document_store.json")
         self.valid_source_types: list[str] = ['calibre', 'md_notes']
         self.config: DocumentConfig = self.get_config()
-        self.library: dict[str, LibraryEntry] = {}
+        self.text_library: dict[str, TextLibraryEntry] = {}
         self.pdf_index:dict[str, PDFIndex] = {}
 
         self.publish_path: str = os.path.expanduser(self.config['publish_path'])
@@ -861,7 +881,7 @@ class DocumentStore:
             os.makedirs(self.pdf_cache_path, exist_ok=True)
         self.pdf_index_file: str = os.path.join(self.pdf_cache_path, "pdf_index.json")
 
-        self.load_library()
+        self.load_text_library()
         remote, local = self.load_sequence_versions()
         self.log.info(f"DocumentStore initialized: remote data version: {remote}, local version: {local}")
         if self.local_update_required() is True:
@@ -1079,13 +1099,13 @@ class DocumentStore:
             return descriptor
         return full_path
     
-    def load_library(self):
-        self.log.info("Loading library data...")
+    def load_text_library(self):
+        self.log.info("Loading text_library data...")
         if os.path.exists(self.library_file):
             with open(self.library_file, "r") as f:
-                self.library = json.load(f)
+                self.text_library = json.load(f)
         else:
-            self.library = {}
+            self.text_library = {}
         if os.path.exists(self.pdf_index_file):
             with open(self.pdf_index_file, "r") as f:
                 self.pdf_index = json.load(f)
@@ -1093,20 +1113,20 @@ class DocumentStore:
             self.pdf_index = {}
             
 #        upgraded = False
-#        for entry in self.library:
-#            if self.library[entry]['descriptor'].startswith('{') is False:
-#                descriptor = self.get_descriptor_from_path(self.library[entry]['descriptor'], self.library[entry]['source_name'])
-#                self.library[entry]['descriptor'] = descriptor
+#        for entry in self.text_library:
+#            if self.text_library[entry]['descriptor'].startswith('{') is False:
+#                descriptor = self.get_descriptor_from_path(self.text_library[entry]['descriptor'], self.text_library[entry]['source_name'])
+#                self.text_library[entry]['descriptor'] = descriptor
 #                upgraded = True
 #        if upgraded is True:
-#            self.save_library()
+#            self.save_text_library()
 #        else:
 
-    def save_library(self):
+    def save_text_library(self):
         temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.library_file))
         try:
             with os.fdopen(temp_fd, 'w') as temp_file:            
-                json.dump(self.library, temp_file)
+                json.dump(self.text_library, temp_file)
             os.replace(temp_path, self.library_file)               
         except Exception as e:
             self.log.error("Library update was interrupted, atomic file update cancelled.")
@@ -1236,10 +1256,10 @@ class DocumentStore:
                 self.log.warning("Override active, syncing even so remote has newer data!")
         library_changed = False
         pdf_index_changed = False
-        old_library_size = len(list(self.library.keys()))
+        old_library_size = len(list(self.text_library.keys()))
         last_saved = time.time()
 
-        existing_hashes: list[str] = list(self.library.keys())
+        existing_hashes: list[str] = list(self.text_library.keys())
         pdf_cache_hits = 0
         duplicate_count = 0
         last_status = time.time()
@@ -1289,9 +1309,9 @@ class DocumentStore:
                     ext_with_dot = os.path.splitext(filename)[1]
                     ext = ext_with_dot[1:].lower() if ext_with_dot else ""
 
-                    if sha256_hash in self.library and descriptor != self.library[sha256_hash]['descriptor']:
-                        self.log.warning(f"File {full_path} is a duplicate of {self.library[sha256_hash]['descriptor']}, ignoring this copy.")
-                        errors.append(f"File {full_path} is a duplicate of {self.library[sha256_hash]['descriptor']}, ignoring this copy.")
+                    if sha256_hash in self.text_library and descriptor != self.text_library[sha256_hash]['descriptor']:
+                        self.log.warning(f"File {full_path} is a duplicate of {self.text_library[sha256_hash]['descriptor']}, ignoring this copy.")
+                        errors.append(f"File {full_path} is a duplicate of {self.text_library[sha256_hash]['descriptor']}, ignoring this copy.")
                         duplicate_count += 1
                         continue
 
@@ -1347,14 +1367,14 @@ class DocumentStore:
                         existing_hashes.remove(sha256_hash)
                         continue
                                             
-                    self.library[sha256_hash] = LibraryEntry({'source_name': source_name, 'descriptor': descriptor, 'text': current_text})
+                    self.text_library[sha256_hash] = TextLibraryEntry({'source_name': source_name, 'descriptor': descriptor, 'text': current_text})
                     library_changed = True
 
                     if time.time() - last_saved > 180:
-                        self.save_library()
+                        self.save_text_library()
                         library_changed = False
                         last_saved =  time.time()
-        new_library_size = len(list(self.library.keys()))
+        new_library_size = len(list(self.text_library.keys()))
         if duplicate_count > 0:
             self.log.warning(f"{duplicate_count} duplicates were ignored during import, please re-run sync.")
             errors.append(f"{duplicate_count} duplicates were ignored during import, please re-run sync.")
@@ -1362,10 +1382,10 @@ class DocumentStore:
         if len(existing_hashes) > 0:
             self.log.warning(f"{len(existing_hashes)} debris entries")
             for debris in existing_hashes:
-                if debris in self.library:
-                    self.log.info(f"Deleting library entry {self.library[debris]['descriptor']}")
-                    errors.append(f"Deleting debris library entry {self.library[debris]['descriptor']}")
-                    del self.library[debris]
+                if debris in self.text_library:
+                    self.log.info(f"Deleting text_library entry {self.text_library[debris]['descriptor']}")
+                    errors.append(f"Deleting debris text_library entry {self.text_library[debris]['descriptor']}")
+                    del self.text_library[debris]
                     library_changed = True
                 if debris in self.pdf_index:
                     del self.pdf_index[debris]
@@ -1374,7 +1394,7 @@ class DocumentStore:
             errors.append("Please use 'check clean' to remove superflucious indices")
                 
         if library_changed is True or pdf_index_changed is True:
-            self.save_library()
+            self.save_text_library()
             self.log.info(f"Library size {old_library_size} -> {new_library_size}")
         else:
             self.log.info(f"No changes")
@@ -1396,7 +1416,7 @@ class DocumentStore:
             if cache_entry['previous_failure'] is True:
                 failure_count += 1
             pdf_cache_filename = self.get_pdf_cache_filename(cache_entry_hash)
-            if cache_entry_hash not in self.library:
+            if cache_entry_hash not in self.text_library:
                 orphan_count += 1
                 if clean is True:
                     if os.path.exists(pdf_cache_filename):
@@ -1419,7 +1439,7 @@ class DocumentStore:
                         os.remove(pdf_cache_filename)
                         deleted_count += 1
         if cache_changed is True:
-            self.save_library()
+            self.save_text_library()
         return (entry_count, failure_count, orphan_count, orphan2_count, deleted_count, deleted2_count, missing_count, cache_changed)
                     
     def get_sources_ext_cnts(self) -> tuple[dict[str, int], dict[str, dict[str, int]]]:
@@ -1435,11 +1455,11 @@ class DocumentStore:
             # source = self.config['document_sources'][source_name]
             cnt = 0
             source_ext_cnts[source_name] = {}
-            for hsh in self.library:
-                if self.library[hsh]['source_name'] == source_name:
+            for hsh in self.text_library:
+                if self.text_library[hsh]['source_name'] == source_name:
                     cnt += 1
                     sum_cnt += 1
-                    ext = os.path.splitext(self.library[hsh]['descriptor'].lower())[1]
+                    ext = os.path.splitext(self.text_library[hsh]['descriptor'].lower())[1]
                     if ext and len(ext) > 0:
                         ext = ext[1:]
                     if ext and ext in exts:
