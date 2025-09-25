@@ -25,14 +25,16 @@ except ImportError:
     pass
 
 
-class DocumentRepresentation(TypedDict):
-    descriptor: str
+class DocumentRepresentationEntry(TypedDict):
+    doc_descriptor: str
     hash: str
     format: str
+    creation_date: str
+
     
-class Metadata(TypedDict):
+class MetadataEntry(TypedDict):
     uuid: str
-    representations: list[DocumentRepresentation]
+    representations: list[DocumentRepresentationEntry]
     authors: list[str]
     identifiers: list[str]
     languages: list[str]
@@ -40,11 +42,14 @@ class Metadata(TypedDict):
     creation_date: str
     publication_date: str
     series: str
-    series_index: str
     tags: list[str]
     title: str
     title_sort: str
+    normalized_filename: str
+    description: str
+    icon: str
 
+    
 class DocumentSource(TypedDict):
     type: str
     path: str
@@ -864,6 +869,7 @@ class DocumentStore:
         self.valid_source_types: list[str] = ['calibre', 'md_notes']
         self.config: DocumentConfig = self.get_config()
         self.text_library: dict[str, TextLibraryEntry] = {}
+        self.metadata_library: dict[str, MetadataEntry]
         self.pdf_index:dict[str, PDFIndex] = {}
 
         self.publish_path: str = os.path.expanduser(self.config['publish_path'])
@@ -873,7 +879,8 @@ class DocumentStore:
         self.storage_path: str = os.path.join(os.path.expanduser("~/.local/share"), "local_research")
         if os.path.isdir(self.storage_path) is False:
             os.makedirs(self.storage_path)
-        self.library_file:str = os.path.join(self.storage_path, "document_library.json")
+        self.text_document_library_file:str = os.path.join(self.storage_path, "document_library.json")
+        self.metadata_library_file:str = os.path.join(self.storage_path, "metadata_library.json")
         self.sequence_file:str = os.path.join(self.storage_path, "version_seq.json")
         self.remote_sequence_file:str = os.path.join(self.publish_path, "version_seq.json")
         self.pdf_cache_path: str = os.path.join(self.storage_path, "pdf_cache")
@@ -881,6 +888,7 @@ class DocumentStore:
             os.makedirs(self.pdf_cache_path, exist_ok=True)
         self.pdf_index_file: str = os.path.join(self.pdf_cache_path, "pdf_index.json")
 
+        self.load_metadata_library()
         self.load_text_library()
         remote, local = self.load_sequence_versions()
         self.log.info(f"DocumentStore initialized: remote data version: {remote}, local version: {local}")
@@ -898,9 +906,17 @@ class DocumentStore:
                     if config['version'] < self.current_version:
                         self.log.error(f"Config file {self.config_file} is outdated version, upgrading to new defaults!")
                         valid = False
+                    else:
+                        for source_name in config['document_sources']:
+                            source = config['document_sources'][source_name]
+                            if source['type'] not in self.valid_source_types:
+                                self.log.error(f"{source_name} has invalid type {source['type']}, use one of {self.valid_source_types}")
+                                valid = False
+                                break                        
             except Exception as e:
                 self.log.error(f"Failed to read config-file {self.config_file}: {e}, resetting to default configuration!")
                 valid = False
+
         if valid is False or config is None:
             config = DocumentConfig({
                 'version': self.current_version,
@@ -1101,8 +1117,8 @@ class DocumentStore:
     
     def load_text_library(self):
         self.log.info("Loading text_library data...")
-        if os.path.exists(self.library_file):
-            with open(self.library_file, "r") as f:
+        if os.path.exists(self.text_document_library_file):
+            with open(self.text_document_library_file, "r") as f:
                 self.text_library = json.load(f)
         else:
             self.text_library = {}
@@ -1122,12 +1138,20 @@ class DocumentStore:
 #            self.save_text_library()
 #        else:
 
+    def load_metadata_library(self):
+        self.log.info("Loading metadata_library data...")
+        if os.path.exists(self.metadata_library_file):
+            with open(self.metadata_library_file, "r") as f:
+                self.metadata_library = json.load(f)
+        else:
+            self.metadata_library = {}
+
     def save_text_library(self):
-        temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.library_file))
+        temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.text_document_library_file))
         try:
             with os.fdopen(temp_fd, 'w') as temp_file:            
                 json.dump(self.text_library, temp_file)
-            os.replace(temp_path, self.library_file)               
+            os.replace(temp_path, self.text_document_library_file)               
         except Exception as e:
             self.log.error("Library update was interrupted, atomic file update cancelled.")
             os.remove(temp_path)
@@ -1144,6 +1168,17 @@ class DocumentStore:
             raise e
         self.log.info("Library data saved")
 
+    def save_metadata_library(self):
+        temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.metadata_library_file))
+        try:
+            with os.fdopen(temp_fd, 'w') as temp_file:            
+                json.dump(self.metadata_library, temp_file)
+            os.replace(temp_path, self.metadata_library_file)               
+        except Exception as e:
+            self.log.error("Metadata library update was interrupted, atomic file update cancelled.")
+            os.remove(temp_path)
+            raise e
+        
     def get_pdf_cache_filename(self, sha256_hash:str) -> str:
         basename = sha256_hash+".txt"
         return os.path.join(self.pdf_cache_path, basename)
@@ -1228,22 +1263,22 @@ class DocumentStore:
         return pdf_text, index_changed
 
     def skip_file_in_sync(self, root_path:str, filename:str, valid_types:list[str]) -> bool:
-        base, ext_with_dot = os.path.splitext(filename)
+        _base, ext_with_dot = os.path.splitext(filename)
         ext = ext_with_dot[1:].lower() if ext_with_dot else ""
         if '.caltrash' in root_path:
             return True
         if ext not in valid_types: 
             return True
-        preferred_ext_exists = False
-        preferred_order = ['txt', 'md']
-        if ext == 'pdf':
-             for pref_ext in preferred_order:
-                 if os.path.exists(os.path.join(root_path, base + '.' + pref_ext)):
-                     preferred_ext_exists = True
-                     break
-        if preferred_ext_exists:
-            return True
         return False
+        # referred_order = ['txt', 'md']
+        # if ext == 'pdf':
+        #      for pref_ext in preferred_order:
+        #          if os.path.exists(os.path.join(root_path, base + '.' + pref_ext)):
+        #              preferred_ext_exists = True
+        #              break
+        # if preferred_ext_exists:
+        #     return True
+        # return False
     
     def sync_texts(self, force:bool, progress_callback:Callable[[ProgressState], None ]|None=None, abort_check_callback:Callable[[], bool]|None=None) -> list[str]:
         errors:list[str] = []
@@ -1254,9 +1289,10 @@ class DocumentStore:
                 return errors
             else:
                 self.log.warning("Override active, syncing even so remote has newer data!")
-        library_changed = False
+        text_library_changed = False
+        metadata_library_changed = False
         pdf_index_changed = False
-        old_library_size = len(list(self.text_library.keys()))
+        old_text_library_size = len(list(self.text_library.keys()))
         last_saved = time.time()
 
         existing_hashes: list[str] = list(self.text_library.keys())
@@ -1269,21 +1305,33 @@ class DocumentStore:
         source_file_count:dict[str,int]={}
         for source_name in self.config['document_sources']:
             source = self.config['document_sources'][source_name]
-            if source['type'] not in self.valid_source_types:
-                self.log.error(f"{source_name} has invalid type {source['type']}, use one of {self.valid_source_types}")
-                errors.append(f"{source_name} has invalid type {source['type']}, use one of {self.valid_source_types}")
-                return errors
             if abort_check_callback is not None and abort_check_callback() is True: 
                 return errors
             source_path = os.path.expanduser(source['path'])
             self.log.info(f"Scanning source '{source_name}' at '{source_path}'...")
             source_file_count[source_name] = 0
-            for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: errors.append(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
-                for filename in files:
-                    if self.skip_file_in_sync(root, filename, source['file_types']) is True:
-                        continue
-                    source_file_count[source_name] += 1
-                    doc_count += 1
+            if source['type'] == 'md_text':
+                for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: errors.append(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
+                    for filename in files:
+                        if self.skip_file_in_sync(root, filename, source['file_types']) is True:
+                            continue
+                        source_file_count[source_name] += 1
+                        doc_count += 1
+                        doc_path = os.path.join(root, filename)
+                        descriptor = self.get_descriptor_from_path(doc_path)
+                        if descriptor not in self.metadata_library:
+                            metadata = {}
+                            metadata_library_changed = True
+            elif source['type'] == 'calibre':
+                for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: errors.append(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
+                    for filename in files:
+                        if self.skip_file_in_sync(root, filename, source['file_types']) is True:
+                            continue
+                        source_file_count[source_name] += 1
+                        doc_count += 1
+            else:
+                self.log.error(f"Ignoring unknown source_type {source['type']}")
+                continue
         
         for source_name in self.config['document_sources']:
             source = self.config['document_sources'][source_name]
@@ -1368,13 +1416,13 @@ class DocumentStore:
                         continue
                                             
                     self.text_library[sha256_hash] = TextLibraryEntry({'source_name': source_name, 'descriptor': descriptor, 'text': current_text})
-                    library_changed = True
+                    text_library_changed = True
 
                     if time.time() - last_saved > 180:
                         self.save_text_library()
-                        library_changed = False
+                        text_library_changed = False
                         last_saved =  time.time()
-        new_library_size = len(list(self.text_library.keys()))
+        new_text_library_size = len(list(self.text_library.keys()))
         if duplicate_count > 0:
             self.log.warning(f"{duplicate_count} duplicates were ignored during import, please re-run sync.")
             errors.append(f"{duplicate_count} duplicates were ignored during import, please re-run sync.")
@@ -1386,16 +1434,16 @@ class DocumentStore:
                     self.log.info(f"Deleting text_library entry {self.text_library[debris]['descriptor']}")
                     errors.append(f"Deleting debris text_library entry {self.text_library[debris]['descriptor']}")
                     del self.text_library[debris]
-                    library_changed = True
+                    text_library_changed = True
                 if debris in self.pdf_index:
                     del self.pdf_index[debris]
                     pdf_index_changed = True
             self.log.warning("Please use 'check clean' to remove superflucious indices")
             errors.append("Please use 'check clean' to remove superflucious indices")
                 
-        if library_changed is True or pdf_index_changed is True:
+        if text_library_changed is True or pdf_index_changed is True:
             self.save_text_library()
-            self.log.info(f"Library size {old_library_size} -> {new_library_size}")
+            self.log.info(f"Library size {old_text_library_size} -> {new_text_library_size}")
         else:
             self.log.info(f"No changes")
         return errors
