@@ -124,6 +124,7 @@ class ProgressState(TypedDict):
     state: str
     percent_completion: float
     vars: dict[str, str]
+    finished: bool
 
 
 def get_files_of_extensions(path:str, extensions: list[str]):
@@ -661,15 +662,16 @@ class VectorStore:
             else:
                 eta = "calculating..."
             if time.time() - last_status > 1 or current_chunks == new_chunks:
-                state = f"Indexing: {perc*100:.4f}% {name[-80:]:80s}, eta={eta}"
+                state = f"Indexing: {name[-80:]:80s}, eta={eta}"
                 if progress_callback is not None:
-                    progress_state = ProgressState({'issues': len(errors), 'state': state, 'percent_completion': perc, 'vars': {}})
+                    progress_state = ProgressState({'issues': len(errors), 'state': state, 'percent_completion': perc, 'vars': {}, 'finished': False})
                     progress_callback(progress_state)
-                last_status = time.time()
-
-                
+                Last_status = time.time()
             self.save_embeddings_tensor(text_library[hash]['text'], filename)
             current_chunks += VectorStore.get_chunk_count(text_library[hash]['text'], self.config['chunk_size'], self.config['chunk_overlap'])
+        if progress_callback is not None:
+            progress_state = ProgressState({'issues': len(errors), 'state': "Index complete", 'percent_completion': 1.0, 'vars': {}, 'finished': True})
+            progress_callback(progress_state)
         self.log.info("Index completed")
         return errors
 
@@ -1312,7 +1314,7 @@ class DocumentStore:
             source_path = os.path.expanduser(source['path'])
             self.log.info(f"Scanning source '{source_name}' at '{source_path}'...")
             source_file_count[source_name] = 0
-            if source['type'] == 'md_text':
+            if source['type'] == 'md_notes':
                 for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: errors.append(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
                     for filename in files:
                         if self.skip_file_in_sync(root, filename, source['file_types']) is True:
@@ -1370,10 +1372,10 @@ class DocumentStore:
                         if time.time() - last_status > 1 or file_count==source_file_count[source_name]:
                             perc = 0.0
                             if doc_count > 0.0:
-                                perc = current_doc_count / doc_count * 100.0
+                                perc = current_doc_count / doc_count
                             state = f"Checking source: {source_name}"
                             if progress_callback is not None:
-                                progress_state = ProgressState({'issues': len(errors), 'state': state, 'percent_completion': perc, 'vars': {}})
+                                progress_state = ProgressState({'issues': len(errors), 'state': state, 'percent_completion': perc, 'vars': {}, 'finished': False})
                                 progress_callback(progress_state)
                             last_status = time.time()
                         continue
@@ -1386,10 +1388,10 @@ class DocumentStore:
                         if time.time() - last_status > 1 or file_count==source_file_count[source_name]:
                             perc = 0.0
                             if doc_count > 0.0:
-                                perc = current_doc_count / doc_count * 100.0
+                                perc = current_doc_count / doc_count
                             state = f"{current_doc_count}/{doc_count} | {full_path[-80:]:80s} Text"
                             if progress_callback is not None:
-                                progress_state = ProgressState({'issues': len(errors), 'state': state, 'percent_completion': perc, 'vars': {}})
+                                progress_state = ProgressState({'issues': len(errors), 'state': state, 'percent_completion': perc, 'vars': {}, 'finished': False})
                                 progress_callback(progress_state)
                             last_status = time.time()
                     elif ext == 'pdf':
@@ -1404,7 +1406,7 @@ class DocumentStore:
                                 perc = current_doc_count / doc_count * 100.0
                             state = f"{current_doc_count}/{doc_count} | {full_path[-80:]:80s} PDF "
                             if progress_callback is not None:
-                                progress_state = ProgressState({'issues': len(errors), 'state': state, 'percent_completion': perc, 'vars': {}})
+                                progress_state = ProgressState({'issues': len(errors), 'state': state, 'percent_completion': perc, 'vars': {}, 'finished': False})
                                 progress_callback(progress_state)
                             last_status = time.time()
                     else:
@@ -1414,7 +1416,10 @@ class DocumentStore:
                     if current_text is None:
                         self.log.error(f"{full_path} has no content or doesnt exist!")
                         errors.append(f"{full_path} has no content or doesnt exist!")
-                        existing_hashes.remove(sha256_hash)
+                        try:
+                            existing_hashes.remove(sha256_hash)
+                        except:
+                            self.log.warning("No pre-existing hash found.")
                         continue
                                             
                     self.text_library[sha256_hash] = TextLibraryEntry({'source_name': source_name, 'descriptor': descriptor, 'text': current_text})
@@ -1424,6 +1429,9 @@ class DocumentStore:
                         self.save_text_library()
                         text_library_changed = False
                         last_saved =  time.time()
+            if progress_callback is not None:
+                progress_state = ProgressState({'issues': len(errors), 'state': "", 'percent_completion': 1.0, 'vars': {}, 'finished': True})
+                progress_callback(progress_state)
         new_text_library_size = len(list(self.text_library.keys()))
         if duplicate_count > 0:
             self.log.warning(f"{duplicate_count} duplicates were ignored during import, please re-run sync.")

@@ -52,11 +52,21 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     force = False
 
                 def progress_sync(ps: ProgressState):
-                    print(f"{ps['percent_completion']:3.3f} {ps['state']}")
+                    cols, _= os.get_terminal_size()
+                    blnk = "\r" + ' ' * (cols - 1)
+                    print(blnk, end="")
+                    progress = tf.progress_bar_string(ps['percent_completion'], 8)
+                    print(f"\r{progress} {ps['state']}", end="", flush=True)
+                    if ps['finished'] is True:
+                        print()
                     
                 errors = ds.sync_texts(force, progress_sync, None)
-                for error in errors:
-                    print(error)
+                print()
+
+                if len(errors) > 0:
+                    print("Errors and issues:")
+                    for error in errors:
+                        print(error)
                     
             elif command == 'check':
                 if len(arguments) == 0 or 'pdf' in arguments or (len(arguments)==1 and 'clean' in arguments):
@@ -239,14 +249,24 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                         log.warning("Version override, starting indexing")
 
                 def progress_index(ps:ProgressState):
-                    print(f"{ps['percent_completion']:3.2f} {ps['state']}")
+                    cols, _= os.get_terminal_size()
+                    blnk = "\r" + ' ' * (cols - 1)
+                    print(blnk, end="")
+                    progress = tf.progress_bar_string(ps['percent_completion'], 8)
+                    print(f"\r{progress} {ps['state']}", end="", flush=True)
+                    if ps['finished'] is True:
+                        print()
                     
                 if 'all' in arguments:
                     errors = vs.index_all(ds.text_library, progress_index)
                 else:
                     errors = vs.index(ds.text_library, progress_index)
-                for error in errors:
-                    print(error)
+                print()
+                if len(errors) > 0:
+                    print("Errors and issues:")
+                    for error in errors:
+                        print(error)
+                        
             elif command == 'index3d':
                 if ds.local_update_required() is True:
                     if 'force' not in arguments:

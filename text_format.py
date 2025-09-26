@@ -105,6 +105,23 @@ class TextFormat:
                 return text[-w:] + ellipsis
 
     @staticmethod
+    def progress_bar_string(progress: float, bar_length: int=20, start_bracket: str | None="⦃", end_bracket: str | None="⦄") -> str:
+        """ progress: 0..1 """
+        num_blocks = int(bar_length * progress)
+        rem = bar_length * progress - num_blocks
+        blocks = " ▏▎▍▌▋▊▉█"
+        remainder_index = int(rem * len(blocks))
+        bar = blocks[-1] * num_blocks
+        if remainder_index > 0:
+            bar += blocks[remainder_index]
+        bar += " " * (bar_length - len(bar))
+        if start_bracket is not None:
+            bar = start_bracket + bar
+        if end_bracket is not None:
+            bar += end_bracket
+        return bar
+
+    @staticmethod
     def fg(col:Color):
         print(f"\033[38;2;{col.r};{col.g};{col.b}m", end="")  # Set foreground color as RGB.
 
