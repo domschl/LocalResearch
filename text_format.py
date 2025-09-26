@@ -106,7 +106,9 @@ class TextFormat:
 
     @staticmethod
     def progress_bar_string(progress: float, bar_length: int=20, start_bracket: str | None="⦃", end_bracket: str | None="⦄") -> str:
-        """ progress: 0..1 """
+        """ progress: float (0%) 0.0 .. 1.0 (100%) """
+        if progress < 0.0 or progress > 1.0:
+            raise ValueError
         num_blocks = int(bar_length * progress)
         rem = bar_length * progress - num_blocks
         blocks = " ▏▎▍▌▋▊▉█"
