@@ -16,6 +16,9 @@ import pymupdf4llm  # pyright: ignore[reportMissingTypeStubs]  # XXX currently l
 import torch
 from sentence_transformers import SentenceTransformer
 
+from research_defs import DocumentRepresentationEntry, MetadataEntry
+from markdown_handler import MarkdownTools
+
 support_dim3d = False
 try:
     import umap  # pyright: ignore[reportMissingTypeStubs]
@@ -25,31 +28,6 @@ except ImportError:
     pass
 
 
-class DocumentRepresentationEntry(TypedDict):
-    doc_descriptor: str
-    hash: str
-    format: str
-    creation_date: str
-
-    
-class MetadataEntry(TypedDict):
-    uuid: str
-    representations: list[DocumentRepresentationEntry]
-    authors: list[str]
-    identifiers: list[str]
-    languages: list[str]
-    context: str
-    creation_date: str
-    publication_date: str
-    series: str
-    tags: list[str]
-    title: str
-    title_sort: str
-    normalized_filename: str
-    description: str
-    icon: str
-
-    
 class DocumentSource(TypedDict):
     type: str
     path: str
@@ -666,7 +644,7 @@ class VectorStore:
                 if progress_callback is not None:
                     progress_state = ProgressState({'issues': len(errors), 'state': state, 'percent_completion': perc, 'vars': {}, 'finished': False})
                     progress_callback(progress_state)
-                Last_status = time.time()
+                last_status = time.time()
             self.save_embeddings_tensor(text_library[hash]['text'], filename)
             current_chunks += VectorStore.get_chunk_count(text_library[hash]['text'], self.config['chunk_size'], self.config['chunk_overlap'])
         if progress_callback is not None:
@@ -865,6 +843,7 @@ class DocumentStore:
     def __init__(self):
         self.current_version: int = 5
         self.log: logging.Logger = logging.getLogger("DocumentStore")
+        self.md_tools:dict[str, MarkdownTools] = {}
         self.config_changed:bool = False
         self.config_path: str = os.path.expanduser("~/.config/local_research")
         if os.path.isdir(self.config_path) is False:
@@ -949,6 +928,9 @@ class DocumentStore:
             self.save_config(config)
             self.log.warning(f"Default configuration created at {self.config_file}, please review!")
         self.config_changed = False
+        for source_name in config['document_sources']:
+            if config['document_sources'][source_name]['type'] == 'md_notes':
+                self.md_tools[source_name] = MarkdownTools(config['document_sources'][source_name]['path'])
         return config
 
     @staticmethod
@@ -1307,6 +1289,9 @@ class DocumentStore:
         doc_count = 0
         current_doc_count = 0
         source_file_count:dict[str,int]={}
+
+        hash_cache:dict[str, str] = {}
+        
         for source_name in self.config['document_sources']:
             source = self.config['document_sources'][source_name]
             if abort_check_callback is not None and abort_check_callback() is True: 
@@ -1322,10 +1307,31 @@ class DocumentStore:
                         source_file_count[source_name] += 1
                         doc_count += 1
                         doc_path = os.path.join(root, filename)
+                        try:
+                            with open(doc_path, 'r') as f:
+                                text = f.read()
+                        except Exception as e:
+                            self.log.error(f"Failed to read {doc_path}, {e}")
+                            text = ""
                         descriptor = self.get_descriptor_from_path(doc_path)
+                        if descriptor in hash_cache:
+                            sha256_hash = hash_cache[descriptor]
+                        else:
+                            sha256_hash = DocumentStore._get_sha256(doc_path)
+                            hash_cache[descriptor] = sha256_hash
                         if descriptor not in self.metadata_library:
-                            metadata = {}
-                            metadata_library_changed = True
+                            metadata, _content, _meta_changed, mandatory_changed = self.md_tools[source_name].parse_markdown(doc_path, sha256_hash, descriptor, text)
+                            if mandatory_changed:
+                                self.log.info(f"Markdown doc {doc_path} requires frontmatter update")
+                                metadata_library_changed = True
+                            self.metadata_library[descriptor] = metadata
+                        else:
+                            for doc_repr in self.metadata_library[descriptor]['representations']:
+                                if doc_repr['doc_descriptor'] == descriptor and doc_repr['hash'] != sha256_hash:
+                                    self.log.warning(f"{descriptor} has changed!")
+                                    metadata, _content, _meta_changed, mandatory_changed = self.md_tools[source_name].parse_markdown(doc_path, sha256_hash, descriptor, text)
+                                    metadata_library_changed = True
+                                    self.metadata_library[descriptor] = metadata
             elif source['type'] == 'calibre':
                 for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: errors.append(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
                     for filename in files:
@@ -1357,7 +1363,11 @@ class DocumentStore:
                     current_doc_count += 1
                     full_path = os.path.join(root, filename)
                     descriptor = self.get_descriptor_from_path(full_path, source_name)
-                    sha256_hash = DocumentStore._get_sha256(full_path)
+                    if descriptor in hash_cache:
+                        sha256_hash = hash_cache[descriptor]
+                    else:
+                        sha256_hash = DocumentStore._get_sha256(full_path)
+                        hash_cache[descriptor] = sha256_hash
                     ext_with_dot = os.path.splitext(filename)[1]
                     ext = ext_with_dot[1:].lower() if ext_with_dot else ""
 
@@ -1450,7 +1460,9 @@ class DocumentStore:
                     pdf_index_changed = True
             self.log.warning("Please use 'check clean' to remove superflucious indices")
             errors.append("Please use 'check clean' to remove superflucious indices")
-                
+
+        if metadata_library_changed is True:
+            self.save_metadata_library()
         if text_library_changed is True or pdf_index_changed is True:
             self.save_text_library()
             self.log.info(f"Library size {old_text_library_size} -> {new_text_library_size}")
