@@ -18,6 +18,7 @@ from sentence_transformers import SentenceTransformer
 
 from research_defs import DocumentRepresentationEntry, MetadataEntry
 from markdown_handler import MarkdownTools
+from calibre_handler import CalibreTools
 
 support_dim3d = False
 try:
@@ -844,6 +845,7 @@ class DocumentStore:
         self.current_version: int = 5
         self.log: logging.Logger = logging.getLogger("DocumentStore")
         self.md_tools:dict[str, MarkdownTools] = {}
+        self.cb_tools:dict[str, CalibreTools] = {}
         self.config_changed:bool = False
         self.config_path: str = os.path.expanduser("~/.config/local_research")
         if os.path.isdir(self.config_path) is False:
@@ -931,6 +933,10 @@ class DocumentStore:
         for source_name in config['document_sources']:
             if config['document_sources'][source_name]['type'] == 'md_notes':
                 self.md_tools[source_name] = MarkdownTools(config['document_sources'][source_name]['path'])
+            elif config['document_sources'][source_name]['type'] == 'calibre':
+                self.cb_tools[source_name] = CalibreTools(config['document_sources'][source_name]['path'])
+            else:
+                self.log.warning(f"Unexpected type for document source {source_name}")
         return config
 
     @staticmethod
@@ -1335,10 +1341,18 @@ class DocumentStore:
             elif source['type'] == 'calibre':
                 for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: errors.append(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
                     for filename in files:
-                        if self.skip_file_in_sync(root, filename, source['file_types']) is True:
-                            continue
-                        source_file_count[source_name] += 1
-                        doc_count += 1
+                        if filename == 'metadata.opf':
+                            filepath = os.path.join(root, filename)
+                            metadata = self.cb_tools[source_name].parse_calibre_metadata(filepath)
+                            if metadata is not None:
+                                main_descriptor = self.get_descriptor_from_path(root)
+                                if main_descriptor not in self.metadata_library:
+                                    self.metadata_library[main_descriptor] = metadata
+                                else:
+                                    ### XXX Changed?
+                                    pass
+                                source_file_count[source_name] += 1
+                                doc_count += 1
             else:
                 self.log.error(f"Ignoring unknown source_type {source['type']}")
                 continue

@@ -55,7 +55,10 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     cols, _= os.get_terminal_size()
                     blnk = "\r" + ' ' * (cols - 1)
                     print(blnk, end="")
-                    progress = tf.progress_bar_string(ps['percent_completion'], 8)
+                    try:
+                        progress = tf.progress_bar_string(ps['percent_completion'], 8)
+                    except:
+                        progress = ' ' * 10
                     print(f"\r{progress} {ps['state']}", end="", flush=True)
                     if ps['finished'] is True:
                         print()
