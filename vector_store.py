@@ -16,7 +16,7 @@ import pymupdf4llm  # pyright: ignore[reportMissingTypeStubs]  # XXX currently l
 import torch
 from sentence_transformers import SentenceTransformer
 
-from research_defs import DocumentRepresentationEntry, MetadataEntry
+from research_defs import MetadataEntry
 from markdown_handler import MarkdownTools
 from calibre_handler import CalibreTools
 
@@ -50,6 +50,7 @@ class VectorConfig(TypedDict):
     batch_base_multiplier: int
     chunk_size: int
     chunk_overlap: int
+    chunk_batch_size: int
     umap_n_neighbors: int
     umap_min_dist: float
     umap_metric: str
@@ -124,7 +125,7 @@ def get_files_of_extensions(path:str, extensions: list[str]):
 
 class VectorStore:
     def __init__(self, storage_path:str, config_path:str):
-        self.current_version: int = 2
+        self.current_version: int = 4
         self.log: logging.Logger = logging.getLogger("VectorStore")
         self.storage_path:str = storage_path
         self.config_path:str = config_path
@@ -236,6 +237,7 @@ class VectorStore:
                 'batch_base_multiplier': 1,
                 'chunk_size': 3072,
                 'chunk_overlap': 1024,
+                'chunk_batch_size': 2,
                 'umap_n_neighbors': 15,
                 'umap_min_dist': 0.1,
                 'umap_metric': 'cosine',
@@ -458,10 +460,10 @@ class VectorStore:
                     tensor_path = os.path.join(indices_path, filename)
                     emb_tensor = cast(torch.Tensor, torch.load(tensor_path, map_location='cpu'))
                     dx, _dy = emb_tensor.shape
-                    emb_part = cast(np.typing.NDArray[np.float32], emb_tensor.numpy(force=True))  # pyright:ignore[reportUnknownMemberType]
+                    emb_part = cast(np.typing.NDArray[np.float32], emb_tensor.numpy(force=True))
                     emb_array[cx:cx+dx, :] = emb_part
                     cx += dx
-                    hashes += [(hash, ind) for ind in range(emb_part.shape[0])]
+                    hashes += [(hash, ind) for ind in range(cast(int, emb_part.shape[0]))]
                 self.log.info(f"Tensor size: {x}x{y}, loaded")
         return emb_array, hashes
 
@@ -588,15 +590,6 @@ class VectorStore:
                     self.log.warning(f"Removed leftover temp tensor file in finally: {temp_path}")
                 except OSError as rm_e: self.log.error(f"Failed to remove leftover temp tensor file {temp_path} in finally: {rm_e}")
         
-    def save_embeddings_tensor(self, text:str, filename:str):
-        if self.model is None or self.engine is None:
-            return
-        batch_size = self.config['batch_base_multiplier'] * self.model['batch_multiplier']
-        chunks: list[str] = VectorStore.get_chunks(text, self.config['chunk_size'], self.config['chunk_overlap'])
-        embeddings_tensor = cast(torch.Tensor, self.engine.encode_document(chunks, convert_to_tensor=True, show_progress_bar=False, batch_size=batch_size, normalize_embeddings=True))  # pyright:ignore[reportUnknownMemberType]
-        self.save_tensor(embeddings_tensor, filename)
-        del embeddings_tensor
-    
     def index(self, text_library:dict[str,TextLibraryEntry], progress_callback:Callable[[ProgressState], None ]|None=None, abort_check_callback:Callable[[], bool]|None=None) -> list[str]:
         errors:list[str] = []
         self.load_model()
@@ -627,27 +620,41 @@ class VectorStore:
             name = text_library[hash]['descriptor']
             if os.path.exists(filename):
                 continue
-            perc:float = current_chunks / new_chunks
-            current_time:float = time.time()
-            delta:float = current_time - start_time
-            if delta > 5.0 and perc > 0:
-                # eta_t:float = start_time + delta/perc
-                eta_s:float = delta/perc - delta
-                h = int(eta_s // 3600)
-                m = int((eta_s % 3600) // 60)
-                s = int(eta_s % 60)
-                eta_str = (datetime.datetime.now()+datetime.timedelta(seconds=int(eta_s))).strftime("%H:%M:%S")                
-                eta = f"{eta_str}, in {h}:{m:02d}:{s:02d}"
-            else:
-                eta = "calculating..."
-            if time.time() - last_status > 1 or current_chunks == new_chunks:
-                state = f"Indexing: {name[-80:]:80s}, eta={eta}"
-                if progress_callback is not None:
-                    progress_state = ProgressState({'issues': len(errors), 'state': state, 'percent_completion': perc, 'vars': {}, 'finished': False})
-                    progress_callback(progress_state)
-                last_status = time.time()
-            self.save_embeddings_tensor(text_library[hash]['text'], filename)
-            current_chunks += VectorStore.get_chunk_count(text_library[hash]['text'], self.config['chunk_size'], self.config['chunk_overlap'])
+            # self.save_embeddings_tensor(text_library[hash]['text'], filename)
+            batch_size = self.config['batch_base_multiplier'] * self.model['batch_multiplier']
+            chunks: list[str] = VectorStore.get_chunks(text_library[hash]['text'], self.config['chunk_size'], self.config['chunk_overlap'])
+            chunk_batch_size = self.config['chunk_batch_size'] * self.model['batch_multiplier']
+            embeddings_tensor: torch.Tensor | None = None
+            for ind in range(0, len(chunks), chunk_batch_size):
+                perc:float = current_chunks / new_chunks
+                current_time:float = time.time()
+                delta:float = current_time - start_time
+                if delta > 5.0 and perc > 0:
+                    # eta_t:float = start_time + delta/perc
+                    eta_s:float = delta/perc - delta
+                    h = int(eta_s // 3600)
+                    m = int((eta_s % 3600) // 60)
+                    s = int(eta_s % 60)
+                    eta_str = (datetime.datetime.now()+datetime.timedelta(seconds=int(eta_s))).strftime("%H:%M:%S")                
+                    eta = f"{eta_str}, in {h}:{m:02d}:{s:02d}"
+                else:
+                    eta = "calculating..."
+                if time.time() - last_status > 1 or current_chunks == new_chunks:
+                    state = f"Indexing: {name[-80:]:80s}, eta={eta}"
+                    if progress_callback is not None:
+                        progress_state = ProgressState({'issues': len(errors), 'state': state, 'percent_completion': perc, 'vars': {}, 'finished': False})
+                        progress_callback(progress_state)
+                    last_status = time.time()
+                sub_chunks = chunks[ind:ind+chunk_batch_size]
+                embeddings_sub_tensor = cast(torch.Tensor, self.engine.encode_document(sub_chunks, convert_to_tensor=True, show_progress_bar=False, batch_size=batch_size, normalize_embeddings=True))  # pyright:ignore[reportUnknownMemberType]
+                if embeddings_tensor is None:
+                    embeddings_tensor = embeddings_sub_tensor
+                else:
+                    embeddings_tensor = torch.cat((embeddings_tensor, embeddings_sub_tensor), dim=0)
+                current_chunks += len(sub_chunks)
+            if embeddings_tensor is not None:
+                self.save_tensor(embeddings_tensor, filename)
+                del embeddings_tensor
         if progress_callback is not None:
             progress_state = ProgressState({'issues': len(errors), 'state': "Index complete", 'percent_completion': 1.0, 'vars': {}, 'finished': True})
             progress_callback(progress_state)
@@ -767,7 +774,7 @@ class VectorStore:
             return {"error": "UMAP module is not available"}
         
         self.log.info(f"Loaded matrix {matrix.shape}, hash-count: {len(hashes)}")
-        num_available_points = matrix.shape[0]
+        num_available_points = cast(int, matrix.shape[0])
         if max_points is not None:
             matrix = matrix[:max_points, :]
             hashes = hashes[:max_points]
