@@ -51,6 +51,7 @@ class VectorConfig(TypedDict):
     chunk_size: int
     chunk_overlap: int
     chunk_batch_size: int
+    oom_recoveries: int
     umap_n_neighbors: int
     umap_min_dist: float
     umap_metric: str
@@ -125,7 +126,7 @@ def get_files_of_extensions(path:str, extensions: list[str]):
 
 class VectorStore:
     def __init__(self, storage_path:str, config_path:str):
-        self.current_version: int = 4
+        self.current_version: int = 5
         self.log: logging.Logger = logging.getLogger("VectorStore")
         self.storage_path:str = storage_path
         self.config_path:str = config_path
@@ -238,6 +239,7 @@ class VectorStore:
                 'chunk_size': 3072,
                 'chunk_overlap': 1024,
                 'chunk_batch_size': 2,
+                'oom_recoveries': 2,
                 'umap_n_neighbors': 15,
                 'umap_min_dist': 0.1,
                 'umap_metric': 'cosine',
@@ -598,6 +600,7 @@ class VectorStore:
             errors.append("Failed to load model, cannot index!")
             return errors
         new_chunks: int = 0
+        retries: int = 0
         for hash in text_library:
             filename = self.get_embedding_filename(hash)
             name = text_library[hash]['descriptor']
@@ -646,7 +649,23 @@ class VectorStore:
                         progress_callback(progress_state)
                     last_status = time.time()
                 sub_chunks = chunks[ind:ind+chunk_batch_size]
-                embeddings_sub_tensor = cast(torch.Tensor, self.engine.encode_document(sub_chunks, convert_to_tensor=True, show_progress_bar=False, batch_size=batch_size, normalize_embeddings=True))  # pyright:ignore[reportUnknownMemberType]
+                try:
+                    embeddings_sub_tensor = cast(torch.Tensor, self.engine.encode_document(sub_chunks, convert_to_tensor=True, show_progress_bar=False, batch_size=batch_size, normalize_embeddings=True))  # pyright:ignore[reportUnknownMemberType]
+                except torch.OutOfMemoryError as e:
+                    self.log.warning(f"Out of Memory at {name}[{ind}]")
+                    errors.append(f"Out-of-memory trying to index: {name} with {self.model['model_name']}")
+                    retries += 1
+                    if retries > self.config['oom_recoveries']:
+                        self.log.error(f"Out-of-memory errors for {self.model['model_name']} exceeded oom_recoveries count, aborting: {e}")
+                        raise
+                    else:
+                        if embeddings_tensor is not None:
+                            del embeddings_tensor
+                        embeddings_tensor = None
+                        break
+                except:
+                    raise
+                
                 if embeddings_tensor is None:
                     embeddings_tensor = embeddings_sub_tensor
                 else:
@@ -655,6 +674,7 @@ class VectorStore:
             if embeddings_tensor is not None:
                 self.save_tensor(embeddings_tensor, filename)
                 del embeddings_tensor
+                embeddings_tensor = None
         if progress_callback is not None:
             progress_state = ProgressState({'issues': len(errors), 'state': "Index complete", 'percent_completion': 1.0, 'vars': {}, 'finished': True})
             progress_callback(progress_state)
