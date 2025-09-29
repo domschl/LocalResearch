@@ -1217,13 +1217,13 @@ class DocumentStore:
             if cached_info['previous_failure'] is True and retry is False:
                 self.log.debug(f"Skipping PDF {full_path}: previously failed extraction.")
                 return None, False
-            else:                
+            else:
                 pdf_cache_filename = self.get_pdf_cache_filename(sha256_hash)
                 if os.path.exists(pdf_cache_filename):
                     try:
                         with open(pdf_cache_filename, 'r', encoding='utf-8') as f:
                             pdf_text = f.read()
-                        return pdf_text, False # Return cached text, index not changed
+                        return pdf_text, True # Return cached text, index not changed
                     except Exception as e:
                         self.log.warning(f"Failed to read PDF cache file {pdf_cache_filename} for {full_path}: {e}. Re-extracting.")
                 else:
@@ -1530,10 +1530,15 @@ class DocumentStore:
         for cache_entry_hash in list(self.pdf_index.keys()):
             cache_entry = self.pdf_index[cache_entry_hash]
             entry_count += 1
-            if cache_entry['previous_failure'] is True:
-                failure_count += 1
-                continue
             pdf_cache_filename = self.get_pdf_cache_filename(cache_entry_hash)
+            if cache_entry['previous_failure'] is True:
+                if os.path.exists(pdf_cache_filename) is False:
+                    failure_count += 1
+                    continue
+                else:
+                    if clean is True:
+                        self.pdf_index[cache_entry_hash]['previous_failure'] = False
+                        cache_changed = True
             if cache_entry_hash not in self.text_library:
                 orphan_count += 1
                 if clean is True:
