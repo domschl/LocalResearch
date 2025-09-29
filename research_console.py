@@ -50,6 +50,10 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     force = True
                 else:
                     force = False
+                if 'retry' in arguments:
+                    retry = True
+                else:
+                    retry = False
 
                 def progress_sync(ps: ProgressState):
                     cols, _= os.get_terminal_size()
@@ -63,7 +67,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     if ps['finished'] is True:
                         print()
                     
-                errors = ds.sync_texts(force, progress_sync, None)
+                errors = ds.sync_texts(force, retry, progress_sync, None)
                 print()
 
                 if len(errors) > 0:
@@ -325,7 +329,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 else:
                     log.error("Import failed")
             elif command == 'help':
-                print("Use 'list [models|sources|vars]', 'sync', 'check [index|pdf] [clean]', 'select <model-ID>', 'index [force] [all]', 'search <search-string>', 'publish', 'import', set <var-name> <value>")
+                print("Use 'list [models|sources|vars]', 'sync [force] [retry]', 'check [index|pdf] [clean]', 'select <model-ID>', 'index [force] [all]', 'search <search-string>', 'publish', 'import', set <var-name> <value>")
             elif command == 'exit' or command == 'quit':
                 break
 

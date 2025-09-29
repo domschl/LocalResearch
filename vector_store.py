@@ -1202,7 +1202,7 @@ class DocumentStore:
         basename = sha256_hash+".txt"
         return os.path.join(self.pdf_cache_path, basename)
     
-    def get_pdf_text(self, full_path:str, sha256_hash: str) -> tuple[str | None, bool]:
+    def get_pdf_text(self, full_path:str, sha256_hash: str, retry:bool=False) -> tuple[str | None, bool]:
         pdf_text: str | None = None
         index_changed: bool = False
         current_file_size: int = -1
@@ -1214,7 +1214,7 @@ class DocumentStore:
         
         if sha256_hash in self.pdf_index:
             cached_info = self.pdf_index[sha256_hash]
-            if cached_info['previous_failure']:
+            if cached_info['previous_failure'] is True and retry is False:
                 self.log.debug(f"Skipping PDF {full_path}: previously failed extraction.")
                 return None, False
             else:                
@@ -1243,6 +1243,7 @@ class DocumentStore:
                         self.log.warning(f"Failed extraction on page {page_num+1} of {full_path}: {page_e}")
                 doc.close()
                 combined_text = "\n".join(extracted_pages)  # pyright:ignore[reportUnknownArgumentType]
+                combined_text = combined_text.replace('-----\n', '')
                 if combined_text.strip() != "" and len(combined_text.strip()) > 7:
                     extracted_text = combined_text
             except Exception as e:
@@ -1250,7 +1251,8 @@ class DocumentStore:
                 
             if extracted_text is None:
                 try:
-                    md_text = pymupdf4llm.to_markdown(full_path)  # pyright:ignore[reportUnknownMemberType]
+                    md_text = pymupdf4llm.to_markdown(full_path, ignore_images=True)  # pyright:ignore[reportUnknownMemberType]
+                    md_text= md_text.replace('-----\n', '')
                     if md_text.strip() != "":
                         extracted_text = md_text # Use the markdown text
                     else:
@@ -1301,7 +1303,7 @@ class DocumentStore:
         #     return True
         # return False
     
-    def sync_texts(self, force:bool, progress_callback:Callable[[ProgressState], None ]|None=None, abort_check_callback:Callable[[], bool]|None=None) -> list[str]:
+    def sync_texts(self, force:bool, retry:bool=False, progress_callback:Callable[[ProgressState], None ]|None=None, abort_check_callback:Callable[[], bool]|None=None) -> list[str]:
         errors:list[str] = []
         if self.local_update_required() is True:
             if force is False:
@@ -1448,7 +1450,7 @@ class DocumentStore:
                                 progress_callback(progress_state)
                             last_status = time.time()
                     elif ext == 'pdf':
-                        current_text, pdf_index_changed_during_get = self.get_pdf_text(full_path, sha256_hash)
+                        current_text, pdf_index_changed_during_get = self.get_pdf_text(full_path, sha256_hash, retry)
                         if pdf_index_changed_during_get is True:
                             pdf_index_changed = True
                         else:
@@ -1467,12 +1469,14 @@ class DocumentStore:
                         errors.append(f"Handling for file-type {ext} not implemented!")
 
                     if current_text is None:
+                        if sha256_hash in self.pdf_index and self.pdf_index[sha256_hash]['previous_failure'] is True and retry is False:
+                            if sha256_hash in existing_hashes:
+                                existing_hashes.remove(sha256_hash)
+                            continue
                         self.log.error(f"{full_path} has no content or doesnt exist!")
                         errors.append(f"{full_path} has no content or doesnt exist!")
-                        try:
+                        if sha256_hash in existing_hashes:
                             existing_hashes.remove(sha256_hash)
-                        except:
-                            self.log.warning("No pre-existing hash found.")
                         continue
                                             
                     self.text_library[sha256_hash] = TextLibraryEntry({'source_name': source_name, 'descriptor': descriptor, 'text': current_text})
@@ -1528,6 +1532,7 @@ class DocumentStore:
             entry_count += 1
             if cache_entry['previous_failure'] is True:
                 failure_count += 1
+                continue
             pdf_cache_filename = self.get_pdf_cache_filename(cache_entry_hash)
             if cache_entry_hash not in self.text_library:
                 orphan_count += 1
