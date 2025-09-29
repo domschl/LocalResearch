@@ -1237,7 +1237,7 @@ class DocumentStore:
                 for page_num, page in enumerate(doc):  # pyright:ignore[reportArgumentType, reportUnknownVariableType]
                     try:
                         page_text = page.get_text()  # pyright:ignore[reportUnknownMemberType, reportUnknownVariableType]
-                        if isinstance(page_text, str) and len(page_text)>7: 
+                        if isinstance(page_text, str) and len(page_text)>7 and page_text.strip()!='-----': 
                             extracted_pages.append(page_text)  # pyright: ignore[reportUnknownMemberType]
                     except Exception as page_e: 
                         self.log.warning(f"Failed extraction on page {page_num+1} of {full_path}: {page_e}")
@@ -1251,8 +1251,10 @@ class DocumentStore:
             if extracted_text is None:
                 try:
                     md_text = pymupdf4llm.to_markdown(full_path)  # pyright:ignore[reportUnknownMemberType]
-                    if md_text and md_text.strip():
+                    if md_text.strip() != "":
                         extracted_text = md_text # Use the markdown text
+                    else:
+                        self.log.info(f"pymupdf4llm text empty for {full_path}")
                 except Exception as e:
                     self.log.error(f"Failed pymupdf4llm fallback extraction for {full_path}: {e}", exc_info=True)
 
@@ -1538,6 +1540,10 @@ class DocumentStore:
                     cache_changed = True
                     continue
             if os.path.exists(pdf_cache_filename) is False:
+                if clean is True:
+                    del self.pdf_index[cache_entry_hash]
+                    deleted2_count += 1
+                    cache_changed = True
                 missing_count += 1
         cache_files = get_files_of_extensions(self.pdf_cache_path, ['pdf'])
         for cache_file in cache_files:
