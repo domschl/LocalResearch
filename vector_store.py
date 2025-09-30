@@ -1532,13 +1532,8 @@ class DocumentStore:
             entry_count += 1
             pdf_cache_filename = self.get_pdf_cache_filename(cache_entry_hash)
             if cache_entry['previous_failure'] is True:
-                if os.path.exists(pdf_cache_filename) is False:
+                if os.path.exists(pdf_cache_filename) is False and cache_entry_hash not in self.text_library:
                     failure_count += 1
-                    continue
-                else:
-                    if clean is True:
-                        self.pdf_index[cache_entry_hash]['previous_failure'] = False
-                        cache_changed = True
             if cache_entry_hash not in self.text_library:
                 orphan_count += 1
                 if clean is True:
