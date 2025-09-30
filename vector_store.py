@@ -1293,15 +1293,24 @@ class DocumentStore:
         if ext not in valid_types: 
             return True
         return False
-        # referred_order = ['txt', 'md']
-        # if ext == 'pdf':
-        #      for pref_ext in preferred_order:
-        #          if os.path.exists(os.path.join(root_path, base + '.' + pref_ext)):
-        #              preferred_ext_exists = True
-        #              break
-        # if preferred_ext_exists:
-        #     return True
-        # return False
+    
+    def skip_file_in_sync_alternate(self, root_path:str, filename:str, valid_types:list[str]) -> bool:
+        base, ext_with_dot = os.path.splitext(filename)
+        ext = ext_with_dot[1:].lower() if ext_with_dot else ""
+        if '.caltrash' in root_path:
+            return True
+        if ext not in valid_types: 
+            return True
+        preferred_order: list[str] = ['txt', 'md']
+        preferred_ext_exists:bool = False
+        if ext == 'pdf':
+             for pref_ext in preferred_order:
+                 if os.path.exists(os.path.join(root_path, base + '.' + pref_ext)):
+                     preferred_ext_exists = True
+                     break
+        if preferred_ext_exists:
+            return True
+        return False
     
     def sync_texts(self, force:bool, retry:bool=False, progress_callback:Callable[[ProgressState], None ]|None=None, abort_check_callback:Callable[[], bool]|None=None) -> list[str]:
         errors:list[str] = []
@@ -1401,8 +1410,8 @@ class DocumentStore:
                 for filename in files:
                     if abort_check_callback is not None and abort_check_callback() is True: 
                         break
-                    if self.skip_file_in_sync(root, filename, source['file_types']) is True:
-                        continue
+                    if self.skip_file_in_sync_alternate(root, filename, source['file_types']) is True:
+                        continue  ### XXX change, once metadata is primary ref
 
                     file_count += 1
                     current_doc_count += 1
