@@ -156,6 +156,7 @@ class VectorStore:
         required_transformers_version = "4.57.0"
         if self.check_version(transformers.__version__, required_transformers_version) is False:
             self.log.error(f"Required minimal version {required_transformers_version} for transformers not found, you are on your own!")
+            self.log.info("While .57 is not yet released, use: pip install git+https://github.com/huggingface/transformers@v4.56.0-Embedding-Gemma-preview")
 
     def check_version(self, current:str, required_minimal:str) -> bool:
         cur = current.split('.')
