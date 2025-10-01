@@ -14,6 +14,7 @@ import numpy as np
 import pymupdf  # pyright: ignore[reportMissingTypeStubs]
 import pymupdf4llm  # pyright: ignore[reportMissingTypeStubs]  # XXX currently locked to 0.19, otherwise export returns empty docs, requires investigation!
 import torch
+import transformers
 from sentence_transformers import SentenceTransformer
 
 from research_defs import MetadataEntry
@@ -151,7 +152,25 @@ class VectorStore:
         self.model: EmbeddingModel | None = None
         self.engine: SentenceTransformer | None = None
         self.device: torch.device = torch.device(self.resolve_device())
-            
+        self.log.info(f"VectorStore initialized, using device {self.device} with transformers {transformers.__version__}")
+        required_transformers_version = "4.57.0"
+        if self.check_version(transformers.__version__, required_transformers_version) is False:
+            self.log.error(f"Required minimal version {required_transformers_version} for transformers not found, you are on your own!")
+
+    def check_version(self, current:str, required_minimal:str) -> bool:
+        cur = current.split('.')
+        req = required_minimal.split('.')
+        if len(cur)<len(req):
+            it = len(cur)
+        else:
+            it = len(req)
+        for i in range(it):
+            if int(cur[i]) < int(req[i]):
+                return False
+            if int(cur[i]) > int(req[i]):
+                return True
+        return True
+        
     def model_embedding_path(self, model_name: str) -> str:
         return os.path.join(self.embeddings_path, model_name)
 
