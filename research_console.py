@@ -159,6 +159,19 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     print()
                     print("Use 'select <ID>' to change the active model, 'enable|disable <ID>' to activate/deactivate")
 
+                if 'perf' in arguments or len(arguments) == 0:
+                    print()
+                    header = ["Metric", "Duration (s)"]
+                    p_rows: list[list[str]] = []
+                    for key in vs.perf.keys():
+                        p_rows.append([key, f"{vs.perf[key]:2.3f}"])
+                    for key in ds.perf.keys():
+                        p_rows.append([key, f"{ds.perf[key]:2.3f}"])
+                    _ = tf.print_table(header, p_rows, [True, False])
+                    if len(p_rows)==0:
+                        print("No performance data generated (yet)")
+                    print()
+                        
                 if 'sources' in arguments or len(arguments) == 0:
                     sum_ext_cnts, sources_ext_cnts = ds.get_sources_ext_cnts()
                     exts = list(sum_ext_cnts.keys())
@@ -211,8 +224,12 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 if len(comps) != 2:
                     log.error('Usage: set <name> <value>')
                     log.info("Use `list vars` for a list of known variable names and types")
+                    log.info("Additional:  set device auto|cpu|cuda|mps|xpu")
                 else:
-                    _ = ds.set_var(comps[0], comps[1])
+                    if comps[0] == 'device':
+                        vs.set_device(comps[1])
+                    else:
+                        _ = ds.set_var(comps[0], comps[1])
             elif command == 'select':
                 ind = -1
                 try:
@@ -329,7 +346,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 else:
                     log.error("Import failed")
             elif command == 'help':
-                print("Use 'list [models|sources|vars]', 'sync [force] [retry]', 'check [index|pdf] [clean]', 'select <model-ID>', 'index [force] [all]', 'search <search-string>', 'publish', 'import', set <var-name> <value>")
+                print("Use 'list [models|sources|vars|perf]', 'sync [force] [retry]', 'check [index|pdf] [clean]', 'select <model-ID>', 'index [force] [all]', 'search <search-string>', 'publish', 'import', set <var-name> <value>")
             elif command == 'exit' or command == 'quit':
                 break
 

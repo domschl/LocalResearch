@@ -154,6 +154,7 @@ class VectorStore:
                 os.makedirs(model_path, exist_ok=True)
         self.model: EmbeddingModel | None = None
         self.engine: SentenceTransformer | None = None
+        self.perf: dict[str, float] = {}
         self.device: torch.device = torch.device(self.resolve_device())
         self.log.info(f">{self.config['embeddings_model_name']}< on device >{self.device}< using transformers {transformers.__version__}")
         required_transformers_version = "4.57.0"
@@ -404,8 +405,11 @@ class VectorStore:
         current_embeddings_path = os.path.join(self.embeddings_path, self.config['embeddings_model_name'])
         return os.path.join(current_embeddings_path, hash+".pt")
 
-    def resolve_device(self) -> str:
-        dev = self.config.get('embeddings_device', 'auto')
+    def resolve_device(self, device_name:str|None = None) -> str:
+        if device_name is None:
+            dev = self.config.get('embeddings_device', 'auto')
+        else:
+            dev = device_name
         if dev == 'auto':
             if torch.cuda.is_available(): 
                 return 'cuda'
@@ -430,7 +434,16 @@ class VectorStore:
             self.log.warning(f"Undefined device {dev}, using 'cpu' fallback")
             return 'cpu'
 
-    def load_model(self):
+    def set_device(self, device_name:str):
+        device_name = self.resolve_device(device_name)
+        if device_name != self.config['embeddings_device'] or device_name != str(self.device):
+            self.device = torch.device(device_name)
+            self.config['embeddings_device'] = device_name
+            self.save_config(self.config)
+            self.log.info(f"(Re-)loading model on device {device_name}")
+            self.load_model()
+        
+    def load_model(self, reload:bool = False):
         if self.model is None:
             for model in self.model_list:
                 if model['model_name'] == self.config['embeddings_model_name']:
@@ -444,13 +457,17 @@ class VectorStore:
                         self.log.error(f"Model {self.config['embeddings_model_name']} is disabled, use 'list models' and 'select <ID>' to activate a different model.")
                         return
                     else:
-                        self.model = model
+                        self.model = model                    
         if self.model is None:
             self.log.error(f"Invalid model {self.config['embeddings_model_name']} could not be identified, load_model failed!")
             return
-        if self.engine is None:
+        if self.engine is None or reload is True:
+            if self.engine is not None:
+                del self.engine
             self.engine = SentenceTransformer(self.model['model_hf_name'], device=str(self.device), trust_remote_code=self.config['embeddings_model_trust_code']) # .to(self.device)
-
+            current_device = next(self.engine.parameters()).device
+            self.log.info(f"{self.config['embeddings_model_name']} loaded to device {current_device}")
+            
     def get_embeddings_size(self, embeddings_path:str) -> tuple[int,int]:
         file_list = get_files_of_extensions(embeddings_path, ["pt"])
         x:int = 0
@@ -676,7 +693,7 @@ class VectorStore:
                     last_status = time.time()
                 sub_chunks = chunks[ind:ind+chunk_batch_size]
                 try:
-                    embeddings_sub_tensor = cast(torch.Tensor, self.engine.encode_document(sub_chunks, convert_to_tensor=True, show_progress_bar=False, batch_size=batch_size, normalize_embeddings=True))  # pyright:ignore[reportUnknownMemberType]
+                    embeddings_sub_tensor = cast(torch.Tensor, self.engine.encode_document(sub_chunks, device=str(self.device), convert_to_tensor=True, show_progress_bar=False, batch_size=batch_size, normalize_embeddings=True))  # pyright:ignore[reportUnknownMemberType]
                 except torch.OutOfMemoryError as e:
                     self.log.warning(f"Out of Memory at {name}[{ind}]")
                     errors.append(f"Out-of-memory trying to index: {name} with {self.model['model_name']}")
@@ -745,7 +762,7 @@ class VectorStore:
 
         if self.engine is None:
             raise ValueError
-        context_tensor: torch.Tensor = cast(torch.Tensor, self.engine.encode_document(clr, convert_to_tensor=True, show_progress_bar=False, batch_size=batch_size, normalize_embeddings=True))  # pyright:ignore[reportUnknownMemberType]
+        context_tensor: torch.Tensor = cast(torch.Tensor, self.engine.encode_document(clr, device=str(self.device), convert_to_tensor=True, show_progress_bar=False, batch_size=batch_size, normalize_embeddings=True))  # pyright:ignore[reportUnknownMemberType]
         cosines: list[float] = cast(list[float], self.engine.similarity(context_tensor, search_tensor).reshape((-1,)).tolist())  # pyright:ignore[reportUnknownMemberType]
 
         min_cos = 1.0
@@ -771,9 +788,10 @@ class VectorStore:
         if self.model is None or self.engine is None:
             self.log.error("Failed to load model, cannot index!")
             return []
+        start_time = time.time()
         search_results: list[SearchResultEntry] = []
         device = torch.device(self.resolve_device())
-        search_tensor = cast(torch.Tensor, self.engine.encode_query(search_text, convert_to_tensor=True, show_progress_bar=False, normalize_embeddings=True)).to(device)  # pyright:ignore[reportUnknownMemberType]
+        search_tensor = cast(torch.Tensor, self.engine.encode_query(search_text, device=str(self.device), convert_to_tensor=True, show_progress_bar=False, normalize_embeddings=True))  # pyright:ignore[reportUnknownMemberType]
         path = self.model_embedding_path(self.model['model_name'])
         tensor_file_list = get_files_of_extensions(path, ['pt'])
         best_min_cosine: float | None = None
@@ -812,6 +830,13 @@ class VectorStore:
                 for ind in range(len(result_text)):
                     significance[ind] = stepped_significance[ind // context_steps] * result['cosine'] / highlight_dampening
                 search_results[index]['significance'] = significance
+        if len(search_results) > 0:
+            search_time = (time.time() - start_time) / len(search_results)
+            key = f"{str(self.device)} search time per record"
+            if key in self.perf:
+                self.perf[key] = (4 * self.perf[key] + search_time) / 5.0
+            else:
+                self.perf[key] = search_time
         return search_results
     
     def prepare_visualization_data(self, text_library:dict[str, TextLibraryEntry], max_points: int | None = None) -> dict[str, Any]:  # pyright:ignore[reportExplicitAny]
@@ -909,6 +934,7 @@ class DocumentStore:
         self.text_library: dict[str, TextLibraryEntry] = {}
         self.metadata_library: dict[str, MetadataEntry]
         self.pdf_index:dict[str, PDFIndex] = {}
+        self.perf: dict[str, float] = {}
 
         self.publish_path: str = os.path.expanduser(self.config['publish_path'])
         if os.path.isdir(self.publish_path) is False:
@@ -1163,13 +1189,22 @@ class DocumentStore:
     def load_text_library(self):
         self.log.info("Loading text_library data...")
         if os.path.exists(self.text_document_library_file):
+            start_time = time.time()
             with open(self.text_document_library_file, "r") as f:
                 self.text_library = json.load(f)
+            if len(self.text_library.keys()) > 0:
+                delta = (time.time() - start_time) / len(self.text_library.keys()) * 1000.0
+                self.perf['load text library (1000 recs)'] = delta
+                
         else:
             self.text_library = {}
         if os.path.exists(self.pdf_index_file):
+            start_time = time.time()
             with open(self.pdf_index_file, "r") as f:
                 self.pdf_index = json.load(f)
+            if len(self.pdf_index.keys()) > 0:
+                delta = (time.time() - start_time) / len(self.pdf_index.keys()) * 1000000.0
+                self.perf['load pdf cache (10^6 recs)'] = delta
         else:
             self.pdf_index = {}
             
