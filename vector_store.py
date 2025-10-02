@@ -415,12 +415,15 @@ class VectorStore:
                 return 'mps'
             else: 
                 return 'cpu'
-        elif dev in ['cuda', 'mps', 'cpu']:
+        elif dev in ['cuda', 'mps', 'cpu', 'xpu']:
             if dev == 'cuda' and not torch.cuda.is_available(): 
                 self.log.warning("CUDA requested but not available, fallback CPU.")
                 return 'cpu'
             if dev == 'mps' and not torch.backends.mps.is_available(): 
                 self.log.warning("MPS requested but not available, fallback CPU.")
+                return 'cpu'
+            if dev == 'xpu' and not torch.xpu.is_available():
+                self.log.warning("XPU requested but not avaiable, fallback to CPU.")
                 return 'cpu'
             return dev
         else:
