@@ -17,6 +17,9 @@ import torch
 import transformers
 from sentence_transformers import SentenceTransformer
 
+# INTEL XPU incantation:
+# uv pip install -U --pre torch --index-url https://download.pytorch.org/whl/nightly/xpu
+
 from research_defs import MetadataEntry
 from markdown_handler import MarkdownTools
 from calibre_handler import CalibreTools
@@ -443,7 +446,7 @@ class VectorStore:
             self.log.error(f"Invalid model {self.config['embeddings_model_name']} could not be identified, load_model failed!")
             return
         if self.engine is None:
-            self.engine = SentenceTransformer(self.model['model_hf_name'], trust_remote_code=self.config['embeddings_model_trust_code']).to(self.device)
+            self.engine = SentenceTransformer(self.model['model_hf_name'], device=str(self.device), trust_remote_code=self.config['embeddings_model_trust_code']) # .to(self.device)
 
     def get_embeddings_size(self, embeddings_path:str) -> tuple[int,int]:
         file_list = get_files_of_extensions(embeddings_path, ["pt"])
