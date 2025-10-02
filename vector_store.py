@@ -152,7 +152,7 @@ class VectorStore:
         self.model: EmbeddingModel | None = None
         self.engine: SentenceTransformer | None = None
         self.device: torch.device = torch.device(self.resolve_device())
-        self.log.info(f"VectorStore initialized, using device {self.device} with transformers {transformers.__version__}")
+        self.log.info(f">{self.config['embeddings_model_name']}< on device >{self.device}< using transformers {transformers.__version__}")
         required_transformers_version = "4.57.0"
         if self.check_version(transformers.__version__, required_transformers_version) is False:
             self.log.error(f"Required minimal version {required_transformers_version} for transformers not found, you are on your own!")
