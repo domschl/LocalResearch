@@ -808,6 +808,10 @@ class VectorStore:
                 search_results = sorted(search_results, key=lambda res: res['cosine'])
                 search_results = search_results[-max_results:]
                 best_min_cosine = search_results[0]['cosine']
+        search_time = time.time() - start_time
+        key = f"{self.config['embeddings_model_name']}-{str(self.device)}"
+        self.perf[key] = search_time
+        highlight_start = time.time()
         for index, result in enumerate(search_results):
             result_text = self.get_chunk_context_aware(result['entry']['text'], result['chunk_index'], self.config['chunk_size'], self.config['chunk_overlap'])
             replacers = [("\n", " "), ("\r", " "), ("\b", " "), ("\t", " "), ("  ", " ")]
@@ -830,13 +834,11 @@ class VectorStore:
                 for ind in range(len(result_text)):
                     significance[ind] = stepped_significance[ind // context_steps] * result['cosine'] / highlight_dampening
                 search_results[index]['significance'] = significance
+        
         if len(search_results) > 0:
-            search_time = (time.time() - start_time) / len(search_results)
-            key = f"{str(self.device)} search time per record"
-            if key in self.perf:
-                self.perf[key] = (4 * self.perf[key] + search_time) / 5.0
-            else:
-                self.perf[key] = search_time
+            highlight_time = (time.time() - highlight_start) / len(search_results)
+            key = f"{self.config['embeddings_model_name']}-{str(self.device)} highlight time per record"
+            self.perf[key] = highlight_time
         return search_results
     
     def prepare_visualization_data(self, text_library:dict[str, TextLibraryEntry], max_points: int | None = None) -> dict[str, Any]:  # pyright:ignore[reportExplicitAny]
