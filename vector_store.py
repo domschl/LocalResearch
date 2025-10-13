@@ -22,6 +22,7 @@ from sentence_transformers import SentenceTransformer
 
 from research_defs import MetadataEntry
 from markdown_handler import MarkdownTools
+from orgmode_handler import OrgmodeTools
 from calibre_handler import CalibreTools
 
 support_dim3d = False
@@ -925,13 +926,14 @@ class DocumentStore:
         self.current_version: int = 5
         self.log: logging.Logger = logging.getLogger("DocumentStore")
         self.md_tools:dict[str, MarkdownTools] = {}
+        self.org_tools:dict[str, OrgmodeTools] = {}
         self.cb_tools:dict[str, CalibreTools] = {}
         self.config_changed:bool = False
         self.config_path: str = os.path.expanduser("~/.config/local_research")
         if os.path.isdir(self.config_path) is False:
             os.makedirs(self.config_path)            
         self.config_file:str = os.path.join(self.config_path, "document_store.json")
-        self.valid_source_types: list[str] = ['calibre', 'md_notes']
+        self.valid_source_types: list[str] = ['calibre', 'md_notes', 'orgmode']
         self.config: DocumentConfig = self.get_config()
         self.text_library: dict[str, TextLibraryEntry] = {}
         self.metadata_library: dict[str, MetadataEntry]
@@ -996,7 +998,12 @@ class DocumentStore:
                         'type': 'md_notes',
                         'path': '~/Notes',
                         'file_types': ['md']
-                    })
+                    }),
+                    'Orgmode': DocumentSource({
+                        'type': 'orgmode',
+                        'path': '~/OrgNotes',
+                        'file_types': ['org']
+                        })
                 },
                 'publish_path': '~/LocalResearch',
                 'vars': {
@@ -1014,6 +1021,8 @@ class DocumentStore:
         for source_name in config['document_sources']:
             if config['document_sources'][source_name]['type'] == 'md_notes':
                 self.md_tools[source_name] = MarkdownTools(config['document_sources'][source_name]['path'])
+            elif config['document_sources'][source_name]['type'] == 'orgmode':
+                self.org_tools[source_name] = OrgmodeTools(config['document_sources'][source_name]['path'])
             elif config['document_sources'][source_name]['type'] == 'calibre':
                 self.cb_tools[source_name] = CalibreTools(config['document_sources'][source_name]['path'])
             else:
@@ -1364,7 +1373,7 @@ class DocumentStore:
             return True
         if ext not in valid_types: 
             return True
-        preferred_order: list[str] = ['txt', 'md']
+        preferred_order: list[str] = ['txt', 'md', 'org']
         preferred_ext_exists:bool = False
         if ext == 'pdf':
              for pref_ext in preferred_order:
@@ -1408,7 +1417,7 @@ class DocumentStore:
             source_path = os.path.expanduser(source['path'])
             self.log.info(f"Scanning source '{source_name}' at '{source_path}'...")
             source_file_count[source_name] = 0
-            if source['type'] == 'md_notes':
+            if source['type'] in ['md_notes', 'orgmode']:
                 for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: errors.append(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
                     for filename in files:
                         if self.skip_file_in_sync(root, filename, source['file_types']) is True:
@@ -1429,7 +1438,13 @@ class DocumentStore:
                             sha256_hash = DocumentStore._get_sha256(doc_path)
                             hash_cache[descriptor] = sha256_hash
                         if descriptor not in self.metadata_library:
-                            metadata, _content, _meta_changed, mandatory_changed = self.md_tools[source_name].parse_markdown(doc_path, sha256_hash, descriptor, text)
+                            if source['type'] == 'md_notes':
+                                metadata, _content, _meta_changed, mandatory_changed = self.md_tools[source_name].parse_markdown(doc_path, sha256_hash, descriptor, text)
+                            elif source['type'] == 'orgmode':
+                                metadata, _prefix, _content, _meta_changed, mandatory_changed = self.org_tools[source_name].parse_orgmode(doc_path, sha256_hash, descriptor, text)
+                            else:
+                                self.log.error(f"Invalid type {source['type']} at {descriptor}")
+                                continue                                    
                             if mandatory_changed:
                                 self.log.info(f"Markdown doc {doc_path} requires frontmatter update")
                                 metadata_library_changed = True
@@ -1438,7 +1453,13 @@ class DocumentStore:
                             for doc_repr in self.metadata_library[descriptor]['representations']:
                                 if doc_repr['doc_descriptor'] == descriptor and doc_repr['hash'] != sha256_hash:
                                     self.log.warning(f"{descriptor} has changed!")
-                                    metadata, _content, _meta_changed, mandatory_changed = self.md_tools[source_name].parse_markdown(doc_path, sha256_hash, descriptor, text)
+                                    if source['type'] == 'md_notes':
+                                        metadata, _content, _meta_changed, mandatory_changed = self.md_tools[source_name].parse_markdown(doc_path, sha256_hash, descriptor, text)
+                                    elif source['type'] == 'orgmode':
+                                        metadata, _prefix, _content, _meta_changed, mandatory_changed = self.org_tools[source_name].parse_orgmode(doc_path, sha256_hash, descriptor, text)
+                                    else:
+                                        self.log.error(f"Invalid type {source['type']} at {descriptor}")
+                                        continue                                    
                                     metadata_library_changed = True
                                     self.metadata_library[descriptor] = metadata
             elif source['type'] == 'calibre':
@@ -1509,7 +1530,7 @@ class DocumentStore:
 
                     current_text: str | None = None
                     
-                    if ext in ['md', 'txt']:
+                    if ext in ['md', 'txt', 'org']:
                         with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
                             current_text = f.read()
                         if time.time() - last_status > 1 or file_count==source_file_count[source_name]:
