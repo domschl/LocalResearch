@@ -130,9 +130,11 @@ class OrgmodeTools:
         metadata, changed, mandatory_changed = self.rm.normalize_metadata(self.orgmode_folder, filepath, hash, descriptor, metadata_raw)
         return metadata, prefix, content, changed, mandatory_changed
         
-    def assemble_orgmode(self, metadata: dict[str, Any]|MetadataEntry, prefix:str, content: str) -> str:  # pyright: ignore[reportExplicitAny]
+    def assemble_orgmode(self, metadata: dict[str, Any]|MetadataEntry, prefix:str, content: str, timedate_fields:list[str]|None=None) -> str:  # pyright: ignore[reportExplicitAny]
         if metadata  == {}:
             return prefix + content
+        if timedate_fields is None:
+            timedate_fields = ['pubdate', 'publication_date', 'creation', 'creation_date']
         meta_header:list[str] = [":PROPERTIES:"]
         for props in metadata.keys():
             line: str = f":{props}:"
@@ -144,10 +146,13 @@ class OrgmodeTools:
                     else:
                         line += ' ' + cast(str, vali)
             else:
-                if ' ' in val:
-                    line += ' "' + cast(str, val) + '"'
+                if props in timedate_fields:
+                    line += f">{cast(str, val)}<"
                 else:
-                    line += ' ' + cast(str, val)            
+                    if ' ' in val:
+                        line += ' "' + cast(str, val) + '"'
+                    else:
+                        line += ' ' + cast(str, val)            
             meta_header.append(line)
         meta_header.append(":END")
         org_doc:str = prefix + '\n'.join(meta_header) + content
