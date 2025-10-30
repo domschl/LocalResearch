@@ -21,6 +21,7 @@ from sentence_transformers import SentenceTransformer
 # uv pip install -U --pre torch --index-url https://download.pytorch.org/whl/nightly/xpu
 
 from research_defs import MetadataEntry
+from research_tools import DocumentTable
 from markdown_handler import MarkdownTools
 from orgmode_handler import OrgmodeTools
 from calibre_handler import CalibreTools
@@ -157,7 +158,7 @@ class VectorStore:
         self.engine: SentenceTransformer | None = None
         self.perf: dict[str, float] = {}
         self.device: torch.device = torch.device(self.resolve_device())
-        self.log.info(f">{self.config['embeddings_model_name']}< on device >{self.device}< using transformers {transformers.__version__}")
+        self.log.info(f">{self.config['embeddings_model_name']}< on device >{self.device}< using transformers {transformers.__version__} on torch {torch.__version__}")
         required_transformers_version = "4.57.0"
         if self.check_version(transformers.__version__, required_transformers_version) is False:
             self.log.error(f"Required minimal version {required_transformers_version} for transformers not found, you are on your own!")
@@ -1383,9 +1384,15 @@ class DocumentStore:
         if preferred_ext_exists:
             return True
         return False
+
+    def get_source_type_from_name(self, source_name:str) -> str|None:
+        if source_name not in self.config['document_sources']:
+            return None
+        return self.config['document_sources'][source_name]['type']
     
     def sync_texts(self, force:bool, retry:bool=False, progress_callback:Callable[[ProgressState], None ]|None=None, abort_check_callback:Callable[[], bool]|None=None) -> list[str]:
         errors:list[str] = []
+        tables:list[DocumentTable] = []
         if self.local_update_required() is True:
             if force is False:
                 self.log.warning("Please first update local data using 'import', since remote has newer data! (use 'force' to override)")
@@ -1437,9 +1444,11 @@ class DocumentStore:
                         else:
                             sha256_hash = DocumentStore._get_sha256(doc_path)
                             hash_cache[descriptor] = sha256_hash
+                        md_content: str|None = None
+                        metadata: MetadataEntry | None = None
                         if descriptor not in self.metadata_library:
                             if source['type'] == 'md_notes':
-                                metadata, _content, _meta_changed, mandatory_changed = self.md_tools[source_name].parse_markdown(doc_path, sha256_hash, descriptor, text)
+                                metadata, md_content, _meta_changed, mandatory_changed = self.md_tools[source_name].parse_markdown(doc_path, sha256_hash, descriptor, text)
                             elif source['type'] == 'orgmode':
                                 metadata, _prefix, _content, _meta_changed, mandatory_changed = self.org_tools[source_name].parse_orgmode(doc_path, sha256_hash, descriptor, text)
                             else:
@@ -1454,7 +1463,7 @@ class DocumentStore:
                                 if doc_repr['doc_descriptor'] == descriptor and doc_repr['hash'] != sha256_hash:
                                     self.log.warning(f"{descriptor} has changed!")
                                     if source['type'] == 'md_notes':
-                                        metadata, _content, _meta_changed, mandatory_changed = self.md_tools[source_name].parse_markdown(doc_path, sha256_hash, descriptor, text)
+                                        metadata, md_content, _meta_changed, mandatory_changed = self.md_tools[source_name].parse_markdown(doc_path, sha256_hash, descriptor, text)
                                     elif source['type'] == 'orgmode':
                                         metadata, _prefix, _content, _meta_changed, mandatory_changed = self.org_tools[source_name].parse_orgmode(doc_path, sha256_hash, descriptor, text)
                                     else:
@@ -1462,6 +1471,9 @@ class DocumentStore:
                                         continue                                    
                                     metadata_library_changed = True
                                     self.metadata_library[descriptor] = metadata
+                        if md_content is not None and metadata is not None:
+                            uuid:str = metadata['uuid']
+                            tables += self.md_tools[source_name].get_tables(md_content, doc_path, uuid)
             elif source['type'] == 'calibre':
                 for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: errors.append(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
                     for filename in files:

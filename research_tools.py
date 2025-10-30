@@ -2,6 +2,15 @@ import logging
 import os
 import subprocess
 from datetime import datetime
+from typing import TypedDict, Any
+
+
+class DocumentTable(TypedDict):
+    columns: list[str]
+    rows: list[list[str]]
+    metadata: dict[str, Any]  # pyright: ignore[reportExplicitAny]
+    note_uuid: str
+
 
 class ResearchTools:
     def __init__(self):
