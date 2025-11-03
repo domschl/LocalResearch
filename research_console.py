@@ -98,6 +98,25 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                         print("PDF cache file updated")
                     print()
 
+                if len(arguments) == 0 or 'sha256' in arguments or (len(arguments)==1 and 'clean' in arguments):
+                    if 'clean' in arguments:
+                        clean = True
+                    else:
+                        clean = False
+                    entries, debris, deleted = ds.check_sha256_cache(clean)
+                    header = ["SHA256 Cache", "Count"]
+                    al_p: list[bool|None]|None = [True, False]
+                    rows_p: list[list[str]] = []
+                    rows_p.append(["Cache entries", f"{entries}"])
+                    rows_p.append(["Orphans", f"{debris}"])
+                    if deleted > 0:
+                        rows_p.append(["Debris removed", f"{deleted}"])
+                    _ = tf.print_table(header, rows_p, al_p)
+                    if ds.sha256_cache_changed is True:
+                        ds.save_sha256_cache()
+                        print("SHA256 cache file updated")
+                    print()
+
                 if len(arguments) == 0 or 'index' in arguments or (len(arguments)==1 and 'clean' in arguments):
                     doc_hashes: list[str] = list(ds.text_library.keys())
 
@@ -346,7 +365,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 else:
                     log.error("Import failed")
             elif command == 'help':
-                print("Use 'list [models|sources|vars|perf]', 'sync [force] [retry]', 'check [index|pdf] [clean]', 'select <model-ID>', 'index [force] [all]', 'search <search-string>', 'publish', 'import', set <var-name> <value>")
+                print("Use 'list [models|sources|vars|perf]', 'sync [force] [retry]', 'check [index|pdf|sha256] [clean]', 'select <model-ID>', 'index [force] [all]', 'search <search-string>', 'publish', 'import', set <var-name> <value>")
             elif command == 'exit' or command == 'quit':
                 break
 

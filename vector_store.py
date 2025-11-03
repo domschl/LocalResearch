@@ -1667,6 +1667,20 @@ class DocumentStore:
             self.log.info(f"No changes")
         return errors
 
+    def check_sha256_cache(self, clean:bool) -> tuple[int, int, int]:
+        debris = 0
+        deleted = 0
+        entries = 0
+        for filename in list(self.sha256_cache):
+            entries += 1
+            if os.path.exists(filename) is False:
+                debris += 1
+                if clean is True:
+                    del self.sha256_cache[filename]
+                    deleted += 1
+                    self.sha256_cache_changed = True
+        return entries, debris, deleted
+        
     def check_pdf_cache(self, clean:bool) -> tuple[int, int, int, int, int, int , int, bool]:
         failure_count = 0
         entry_count = 0
