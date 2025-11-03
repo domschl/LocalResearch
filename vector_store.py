@@ -113,6 +113,12 @@ class ProgressState(TypedDict):
     vars: dict[str, str]
     finished: bool
 
+    
+class Sha256CacheEntry(TypedDict):
+    size: int
+    modified: float
+    sha256: str
+
 
 def get_files_of_extensions(path:str, extensions: list[str]):
     result: list[str] = []
@@ -933,6 +939,9 @@ class DocumentStore:
         self.config_path: str = os.path.expanduser("~/.config/local_research")
         if os.path.isdir(self.config_path) is False:
             os.makedirs(self.config_path)            
+        self.sha256_cache: dict[str, Sha256CacheEntry] = {}
+        self.sha256_cache_filename: str = os.path.join(self.config_path, 'sha256_cache.json')
+        self.sha256_cache_changed: bool = False
         self.config_file:str = os.path.join(self.config_path, "document_store.json")
         self.valid_source_types: list[str] = ['calibre', 'md_notes', 'orgmode']
         self.config: DocumentConfig = self.get_config()
@@ -967,6 +976,10 @@ class DocumentStore:
     def get_config(self) -> DocumentConfig:
         valid = False
         config: DocumentConfig | None = None
+        if os.path.exists(self.sha256_cache_filename):
+            with open(self.sha256_cache_filename, 'r') as f:
+                self.sha256_cache = json.load(f)
+                self.sha256_cache_changed = False
         if os.path.exists(self.config_file):
             try:
                 with open(self.config_file, "r") as f:
@@ -1030,12 +1043,43 @@ class DocumentStore:
                 self.log.warning(f"Unexpected type for document source {source_name}")
         return config
 
-    @staticmethod
-    def _get_sha256(filename:str):
+    def get_sha256(self, filename:str, cache:bool = True):
+        if cache is True:
+            if filename in self.sha256_cache:
+                cached = self.sha256_cache[filename]
+                stat = os.stat(filename)
+                dt = stat.st_mtime
+                size = stat.st_size
+                if cached['size'] == size and cached['modified'] == dt:
+                    return cached['sha256']
+                    
         with open(filename, 'rb', buffering=0) as f:
-            return hashlib.file_digest(f, 'sha256').hexdigest()
+            hash = hashlib.file_digest(f, 'sha256').hexdigest()
+            if cache is True:
+                stat = os.stat(filename)
+                dt = stat.st_mtime
+                size = stat.st_size
+                cached: Sha256CacheEntry = Sha256CacheEntry({'size': size, 'modified': dt, 'sha256':hash})
+                self.sha256_cache[filename] = cached
+                self.sha256_cache_changed = True
+            return hash
 
+    def save_sha256_cache(self):
+        if self.sha256_cache_changed is False:
+            return
+        temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.sha256_cache_filename))
+        try:
+            with os.fdopen(temp_fd, 'w') as temp_file:            
+                json.dump(self.sha256_cache, temp_file)
+            os.replace(temp_path, self.sha256_cache_filename)  # atomic update
+            self.sha256_cache_changed = False
+        except Exception as e:
+            self.log.error("Sha256Cache-file update interrupted, not updated.")
+            os.remove(temp_path)
+            raise e
+            
     def save_config(self, config: DocumentConfig):
+        self.save_sha256_cache()
         temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.config_file))
         config['version'] = self.current_version
         try:
@@ -1442,7 +1486,7 @@ class DocumentStore:
                         if descriptor in hash_cache:
                             sha256_hash = hash_cache[descriptor]
                         else:
-                            sha256_hash = DocumentStore._get_sha256(doc_path)
+                            sha256_hash = self.get_sha256(doc_path)
                             hash_cache[descriptor] = sha256_hash
                         md_content: str|None = None
                         metadata: MetadataEntry | None = None
@@ -1516,7 +1560,7 @@ class DocumentStore:
                     if descriptor in hash_cache:
                         sha256_hash = hash_cache[descriptor]
                     else:
-                        sha256_hash = DocumentStore._get_sha256(full_path)
+                        sha256_hash = self.get_sha256(full_path)
                         hash_cache[descriptor] = sha256_hash
                     ext_with_dot = os.path.splitext(filename)[1]
                     ext = ext_with_dot[1:].lower() if ext_with_dot else ""
@@ -1613,6 +1657,7 @@ class DocumentStore:
             self.log.warning("Please use 'check clean' to remove superflucious indices")
             errors.append("Please use 'check clean' to remove superflucious indices")
 
+        self.save_sha256_cache()
         if metadata_library_changed is True:
             self.save_metadata_library()
         if text_library_changed is True or pdf_index_changed is True:
