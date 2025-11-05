@@ -6,6 +6,13 @@ from typing import TypedDict, cast, TypeVar, Any
 
 from research_tools import ResearchTools
 
+
+class TextLibraryEntry(TypedDict):
+    source_name: str
+    descriptor: str
+    text: str
+
+
 class DocumentRepresentationEntry(TypedDict):
     doc_descriptor: str
     hash: str

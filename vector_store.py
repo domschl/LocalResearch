@@ -20,11 +20,13 @@ from sentence_transformers import SentenceTransformer
 # INTEL XPU incantation:
 # uv pip install -U --pre torch --index-url https://download.pytorch.org/whl/nightly/xpu
 
-from research_defs import MetadataEntry
+from research_defs import MetadataEntry, TextLibraryEntry
 from research_tools import DocumentTable
 from markdown_handler import MarkdownTools
 from orgmode_handler import OrgmodeTools
 from calibre_handler import CalibreTools
+from time_lines import TimeLines
+
 
 support_dim3d = False
 try:
@@ -61,12 +63,6 @@ class VectorConfig(TypedDict):
     umap_n_neighbors: int
     umap_min_dist: float
     umap_metric: str
-
-
-class TextLibraryEntry(TypedDict):
-    source_name: str
-    descriptor: str
-    text: str
 
 
 class PDFIndex(TypedDict):
@@ -949,6 +945,8 @@ class DocumentStore:
         self.metadata_library: dict[str, MetadataEntry]
         self.pdf_index:dict[str, PDFIndex] = {}
         self.perf: dict[str, float] = {}
+        self.tables:list[DocumentTable] = []
+        self.tl:TimeLines = TimeLines()
 
         self.publish_path: str = os.path.expanduser(self.config['publish_path'])
         if os.path.isdir(self.publish_path) is False:
@@ -1436,7 +1434,6 @@ class DocumentStore:
     
     def sync_texts(self, force:bool, retry:bool=False, progress_callback:Callable[[ProgressState], None ]|None=None, abort_check_callback:Callable[[], bool]|None=None) -> list[str]:
         errors:list[str] = []
-        tables:list[DocumentTable] = []
         if self.local_update_required() is True:
             if force is False:
                 self.log.warning("Please first update local data using 'import', since remote has newer data! (use 'force' to override)")
@@ -1459,7 +1456,7 @@ class DocumentStore:
         current_doc_count = 0
         source_file_count:dict[str,int]={}
 
-        hash_cache:dict[str, str] = {}
+        self.tables = []
         
         for source_name in self.config['document_sources']:
             source = self.config['document_sources'][source_name]
@@ -1483,11 +1480,7 @@ class DocumentStore:
                             self.log.error(f"Failed to read {doc_path}, {e}")
                             text = ""
                         descriptor = self.get_descriptor_from_path(doc_path)
-                        if descriptor in hash_cache:
-                            sha256_hash = hash_cache[descriptor]
-                        else:
-                            sha256_hash = self.get_sha256(doc_path)
-                            hash_cache[descriptor] = sha256_hash
+                        sha256_hash = self.get_sha256(doc_path)
                         md_content: str|None = None
                         metadata: MetadataEntry | None = None
                         if descriptor not in self.metadata_library:
@@ -1515,9 +1508,19 @@ class DocumentStore:
                                         continue                                    
                                     metadata_library_changed = True
                                     self.metadata_library[descriptor] = metadata
+                                else:
+                                    if source['type'] == 'md_notes':
+                                        metadata = self.metadata_library[descriptor]
+                                        _header, md_content = self.md_tools[source_name].split_header_content(text)
                         if md_content is not None and metadata is not None:
                             uuid:str = metadata['uuid']
-                            tables += self.md_tools[source_name].get_tables(md_content, doc_path, uuid)
+                            self.tables += self.md_tools[source_name].get_tables(md_content, doc_path, uuid)
+                        else:
+                            if source['type'] == 'md_notes':
+                                if md_content is None:
+                                    self.log.warning(f"{doc_path} has no content")
+                                if metadata is None:
+                                    self.log.warning(f"{doc_path} has no metadata")
             elif source['type'] == 'calibre':
                 for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: errors.append(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
                     for filename in files:
@@ -1536,6 +1539,8 @@ class DocumentStore:
             else:
                 self.log.error(f"Ignoring unknown source_type {source['type']}")
                 continue
+
+        self.tl.add_notes_events(self.tables)
         
         for source_name in self.config['document_sources']:
             source = self.config['document_sources'][source_name]
@@ -1557,11 +1562,7 @@ class DocumentStore:
                     current_doc_count += 1
                     full_path = os.path.join(root, filename)
                     descriptor = self.get_descriptor_from_path(full_path, source_name)
-                    if descriptor in hash_cache:
-                        sha256_hash = hash_cache[descriptor]
-                    else:
-                        sha256_hash = self.get_sha256(full_path)
-                        hash_cache[descriptor] = sha256_hash
+                    sha256_hash = self.get_sha256(full_path)
                     ext_with_dot = os.path.splitext(filename)[1]
                     ext = ext_with_dot[1:].lower() if ext_with_dot else ""
 

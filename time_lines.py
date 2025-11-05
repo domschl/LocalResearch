@@ -6,8 +6,7 @@ from typing import TypedDict, Any, cast
 from indralib.indra_time import IndraTime, IndraTimeInterval
 from indralib.indra_event import IndraEvent
 
-from vector_store import TextLibraryEntry, DocumentSource
-from research_defs import MetadataEntry
+from research_defs import MetadataEntry, TextLibraryEntry
 from research_tools import DocumentTable
 
 class TimeLineEvent(TypedDict):
@@ -443,20 +442,16 @@ class TimeLines:
         self.sort_tl_events()
         return event_cnt, events_skipped
 
-    def add_notes_events(self, texts: list[TextLibraryEntry], sources:dict[str, DocumentSource]):  
+    def add_notes_events(self, tables:list[DocumentTable]):  
         event_cnt = 0
         skipped_cnt = 0
         tables_unique_domain_names: list[str] = []
-        for text in texts:
-            if sources[text['source_name']]['type'] != 'md_notes':
-                continue
-            tables: list[MDTable] = note["tables"]  # pyright: ignore[reportAny]
-            for table in tables:
-                new_evs, new_skipped = self.add_date_table_events(
-                    table, tables_unique_domain_names, check_order=True
-                )
-                event_cnt += new_evs
-                skipped_cnt += new_skipped
+        for table in tables:
+            new_evs, new_skipped = self.add_date_table_events(
+                table, tables_unique_domain_names, check_order=True
+            )
+            event_cnt += new_evs
+            skipped_cnt += new_skipped
         self.log.info(
             f"Found {len(self.tl_events)} (added {event_cnt}) events in notes, skipped {skipped_cnt}"
         )

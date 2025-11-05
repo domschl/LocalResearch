@@ -14,33 +14,27 @@ class MarkdownTools:
         self.rt:ResearchTools = ResearchTools()
         self.rm:ResearchMetadata = ResearchMetadata()
 
+    def split_header_content(self, text:str) -> tuple[str, str]:
+        separator1 = "---\n"
+        separator2 = "\n---\n"
+        if text.startswith(separator1):
+            d1 = 0
+        else:
+            d1 = text.find(separator2)
+            if d1 > 10 or d1 == -1:
+                return ("", text)
+            d1 += 1
+         
+        d2 = text[d1+len(separator1):].find(separator2)
+        if d2 == -1:
+            return ("", text)
+        d2 += d1+len(separator1)
+        header = text[d1+len(separator1):d2+1]
+        content = text[d2+len(separator2):]
+        return (header, content)
+         
     def parse_markdown(self, filepath:str, hash:str, descriptor:str, md_text:str) -> tuple[MetadataEntry, str, bool, bool]:
-        state:int = 0
-        lines: list[str] = md_text.split("\n")
-        frontmatter_lines: list[str] = []
-        frontmatter: str = ""
-        content_lines: list[str] = []
-        content: str = ""
-        start = True
-        for line in lines:
-            if state == 0:
-                if line == "---" and start is True:
-                    state = 1
-                else:
-                    content_lines.append(line)
-                start = False
-            elif state == 1:
-                if line == "---":
-                    state = 2
-                else:
-                    frontmatter_lines.append(line)
-            elif state == 2:
-                if len(content_lines) == 0:
-                    if line == "":
-                        continue
-                content_lines.append(line)
-        frontmatter = "\n".join(frontmatter_lines)
-        content = "\n".join(content_lines) + "\n"
+        frontmatter, content = self.split_header_content(md_text)
         try:
             yaml_metadata_raw: dict[str, Any]|Any = yaml.safe_load(frontmatter)  # pyright: ignore[reportAny, reportExplicitAny]
             if yaml_metadata_raw is None:
@@ -51,7 +45,7 @@ class MarkdownTools:
         except Exception as e:
             self.log.error(f"Error parsing frontmatter: {e}")
             yaml_metadata = {}
-        # print("YAML: ", yaml_metadata)
+        print("YAML: ", yaml_metadata)
         
         metadata, changed, mandatory_changed = self.rm.normalize_metadata(self.notes_folder, filepath, hash, descriptor, yaml_metadata)
         return metadata, content, changed, mandatory_changed

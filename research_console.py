@@ -83,17 +83,17 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                         clean = False
                     entry_count, failure_count, orphan_count, orphan2_count, deleted_count, deleted2_count, missing_count, cache_changed = ds.check_pdf_cache(clean)
                     header = ["PDF Cache", "Count"]
-                    al_p: list[bool|None]|None = [True, False]
-                    rows_p: list[list[str]] = []
-                    rows_p.append(["Cache entries", f"{entry_count}"])
-                    rows_p.append(["Extract failures", f"{failure_count}"])
-                    rows_p.append(["Orphans", f"{orphan_count}+{orphan2_count}"])
+                    al_p2: list[bool|None]|None = [True, False]
+                    rows_p2: list[list[str]] = []
+                    rows_p2.append(["Cache entries", f"{entry_count}"])
+                    rows_p2.append(["Extract failures", f"{failure_count}"])
+                    rows_p2.append(["Orphans", f"{orphan_count}+{orphan2_count}"])
                     if deleted_count > 0:
-                        rows_p.append(["Debris removed", f"{deleted_count}"])
+                        rows_p2.append(["Debris removed", f"{deleted_count}"])
                     if deleted_count > 0:
-                        rows_p.append(["Records removed", f"{deleted2_count}"])
-                    rows_p.append(["Missing cache files", f"{missing_count}"])
-                    _ = tf.print_table(header, rows_p, al_p)
+                        rows_p2.append(["Records removed", f"{deleted2_count}"])
+                    rows_p2.append(["Missing cache files", f"{missing_count}"])
+                    _ = tf.print_table(header, rows_p2, al_p2)
                     if cache_changed is True:
                         print("PDF cache file updated")
                     print()
@@ -225,6 +225,17 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     row.append("")
                     s_rows.append(row)
                     _ = tf.print_table(header, s_rows, al_s)
+                    print()
+
+                if 'timelines' in arguments or len(arguments) == 0:
+                    tl_cnt = len(ds.tl.tl_events)
+                    print()
+                    header = ['Timeline data', 'Value']
+                    al_t:list[bool|None]|None = [True, False]
+                    rows_t: list[list[str]] = []
+                    rows_t.append(['Table count', str(len(ds.tables))])
+                    rows_t.append(['Event count', str(tl_cnt)])
+                    _ = tf.print_table(header, rows_t, al_t)
                     print()
 
                 if 'vars' in arguments or len(arguments) == 0:
