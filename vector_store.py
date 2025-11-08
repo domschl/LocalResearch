@@ -966,6 +966,9 @@ class DocumentStore:
 
         self.load_metadata_library()
         self.load_text_library()
+        errors:list[str] = []
+        _ = self.parse_documents(errors)
+        
         remote, local = self.load_sequence_versions()
         self.log.info(f"DocumentStore initialized: remote data version: {remote}, local version: {local}")
         if self.local_update_required() is True:
@@ -1431,37 +1434,19 @@ class DocumentStore:
         if source_name not in self.config['document_sources']:
             return None
         return self.config['document_sources'][source_name]['type']
-    
-    def sync_texts(self, force:bool, retry:bool=False, progress_callback:Callable[[ProgressState], None ]|None=None, abort_check_callback:Callable[[], bool]|None=None) -> list[str]:
-        errors:list[str] = []
-        if self.local_update_required() is True:
-            if force is False:
-                self.log.warning("Please first update local data using 'import', since remote has newer data! (use 'force' to override)")
-                errors.append("Please first update local data using 'import', since remote has newer data! (use 'force' to override)")
-                return errors
-            else:
-                self.log.warning("Override active, syncing even so remote has newer data!")
-        text_library_changed = False
-        metadata_library_changed = False
-        pdf_index_changed = False
-        old_text_library_size = len(list(self.text_library.keys()))
-        last_saved = time.time()
 
-        existing_hashes: list[str] = list(self.text_library.keys())
-        pdf_cache_hits = 0
-        duplicate_count = 0
-        last_status = time.time()
 
-        doc_count = 0
-        current_doc_count = 0
-        source_file_count:dict[str,int]={}
-
+    def parse_documents(self, errors:list[str], abort_check_callback:Callable[[], bool]|None=None) ->tuple[bool, int, dict[str, int]]:
         self.tables = []
+        self.tl.tl_events = []
+        metadata_library_changed = False
+        doc_count = 0
+        source_file_count:dict[str,int]={}
         
         for source_name in self.config['document_sources']:
             source = self.config['document_sources'][source_name]
             if abort_check_callback is not None and abort_check_callback() is True: 
-                return errors
+                return metadata_library_changed, doc_count, source_file_count
             source_path = os.path.expanduser(source['path'])
             self.log.info(f"Scanning source '{source_name}' at '{source_path}'...")
             source_file_count[source_name] = 0
@@ -1541,6 +1526,30 @@ class DocumentStore:
                 continue
 
         self.tl.add_notes_events(self.tables)
+        return metadata_library_changed, doc_count, source_file_count
+        
+    def sync_texts(self, force:bool, retry:bool=False, progress_callback:Callable[[ProgressState], None ]|None=None, abort_check_callback:Callable[[], bool]|None=None) -> list[str]:
+        errors:list[str] = []
+        if self.local_update_required() is True:
+            if force is False:
+                self.log.warning("Please first update local data using 'import', since remote has newer data! (use 'force' to override)")
+                errors.append("Please first update local data using 'import', since remote has newer data! (use 'force' to override)")
+                return errors
+            else:
+                self.log.warning("Override active, syncing even so remote has newer data!")
+        text_library_changed = False
+        pdf_index_changed = False
+        old_text_library_size = len(list(self.text_library.keys()))
+        last_saved = time.time()
+
+        existing_hashes: list[str] = list(self.text_library.keys())
+        pdf_cache_hits = 0
+        duplicate_count = 0
+        last_status = time.time()
+
+        current_doc_count = 0
+
+        metadata_library_changed, doc_count, source_file_count = self.parse_documents(errors, abort_check_callback)
         
         for source_name in self.config['document_sources']:
             source = self.config['document_sources'][source_name]
