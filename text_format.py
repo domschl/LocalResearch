@@ -314,6 +314,7 @@ class TextFormat:
                         max_sub_lines = len(sls)
                     sub_lines.append(sls)
                 for sl in range(max_sub_lines):
+                    self.theme_col('text')
                     print(self.sep, end="")
                     for index in range(len(sub_lines)):
                         print(' ', end="")
@@ -323,7 +324,9 @@ class TextFormat:
                         else:
                             self.theme_col('text')
                             print(' ' * col_width[index], end="")
+                        self.theme_col('text')
                         print(' ' + self.sep, end="")
+                    self.defc()
                     print()
         TextFormat.defc()
         return True

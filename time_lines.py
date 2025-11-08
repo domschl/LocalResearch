@@ -194,7 +194,7 @@ class TimeLines:
             result.append(event)
         return result
 
-    def _get_date_string_from_event(self, jd_event: IndraTimeInterval) -> str | None:
+    def get_date_string_from_event(self, jd_event: IndraTimeInterval) -> str | None:
         date_points : list[str] = []
         for date_part in jd_event:
             if date_part is not None:
@@ -209,7 +209,7 @@ class TimeLines:
             date = None
         return date
 
-    def _get_event_text(self, event_data: dict[str, Any]) -> str:  # pyright: ignore[reportExplicitAny]
+    def get_event_text(self, event_data: dict[str, Any]) -> str:  # pyright: ignore[reportExplicitAny]
         event_text = ""
         for ev in event_data:
             event_text += f"{ev}: {event_data[ev]}, "
@@ -255,10 +255,10 @@ class TimeLines:
                     print("| Date                      | Event |")
                     print("|---------------------------|-------|")
             for event in events:
-                event_text = self._get_event_text(event['eventdata'])
+                event_text = self.get_event_text(event['eventdata'])
                 if length is not None and len(event_text) > length:
                     event_text = event_text[:length] + "..."
-                date_text = self._get_date_string_from_event(event['jd_event'])
+                date_text = self.get_date_string_from_event(event['jd_event'])
                 if date_text is not None:
                     if f is not None:
                         _ = f.write(f"| {date_text:24s} | {event_text} |\n")

@@ -363,7 +363,40 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     print()
                     _ = tf.print_table(header, rows, multi_line=True, keywords=keywords, significance=[[None, result['significance']]])
                 print()
-
+            elif command == "timeline":
+                domains = key_vals.get('domains', None)
+                if domains is not None:
+                    domains = domains.split(' ')
+                keywords = key_vals.get('keywords', None)
+                if keywords is not None:
+                    keywords = keywords.split(' ')
+                time = key_vals.get('time', None)
+                partial_overlap = key_vals.get('partial_overlap', "false")
+                if partial_overlap.lower() == 'true':
+                    partial = True
+                else:
+                    partial = False
+                full_overlap = key_vals.get('full_overlap', "false")
+                if full_overlap.lower() == 'true':
+                    full = True
+                else:
+                    full = False
+                
+                tlel = ds.tl.search_events(time, domains, keywords, True, full, partial)
+                header = ['Date', 'Event']
+                rows = []
+                for tle in tlel:
+                    date = ds.tl.get_date_string_from_event(tle['jd_event'])
+                    event = ds.tl.get_event_text(tle['eventdata'])
+                    if date is not None:
+                        rows.append([date, event])
+                print()
+                if keywords is None:
+                    hl_keywords: list[str] = []
+                else:
+                    hl_keywords = keywords
+                _ = tf.print_table(header, rows, multi_line=True, keywords=hl_keywords)
+               
             elif command == 'publish':
                 _ = ds.publish(arguments)
             elif command == 'import':
@@ -376,7 +409,22 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 else:
                     log.error("Import failed")
             elif command == 'help':
-                print("Use 'list [models|sources|vars|perf]', 'sync [force] [retry]', 'check [index|pdf|sha256] [clean]', 'select <model-ID>', 'index [force] [all]', 'search <search-string>', 'publish', 'import', set <var-name> <value>")
+                header = ['Command', 'Options', 'Function']
+                rows = []
+                rows += [['list', '[models|sources|vars|perf]', 'List internal tables'],
+                         ['sync', '[force] [retry]', 'Sync data sources, check for changed documents'],
+                         ['check', '[index|pdf|sha256] [clean]', 'Verify datastructures'],
+                         ['select', '<model-ID>', 'Select model <id> (1..n) as active model for search. `list models` shows IDs and currently active model'],
+                         ['index',  '[force] [all]', 'Generate vector database indices for new or changed documents'],
+                         ['search', '<search-string>', 'Do a vector search with currently active model'],
+                         ['timeline', '[time=1999-01-01[-2100-01-01]] [domains="dom1[ dom2]"] [keywords="key1[ key2]"]', 'Compile a table of events'],
+                         ['publish', '[force]', 'Publish newly created indices'],
+                         ['import', '[force]', 'Import indices created remotely'],
+                         ['set', '<var-name> <value>', 'Set a variable to a value. `list variables` shows available vars'],
+                         ['exit', '', 'Exit (alterative `quite` or Ctrl-D'],
+                         ]
+                _ = tf.print_table(header, rows, multi_line=True)
+                
             elif command == 'exit' or command == 'quit':
                 break
 
