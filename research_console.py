@@ -24,6 +24,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
     readline.set_history_length(1000)
     _ = atexit.register(readline.write_history_file, history_file)
     tp = TextParse()
+    print("`help` for overview, `exit` or Ctrl-D to exit")
     while True:
         try:
             # Get user input with a prompt
