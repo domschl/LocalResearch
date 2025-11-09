@@ -1194,9 +1194,11 @@ class DocumentStore:
 
     def local_update_required(self) -> bool:
         remote, local = self.load_sequence_versions()
-        if remote > local:
+        if remote > local and remote != 0:
             return True
         else:
+            if remote == 0:
+                self.log.warning("Failed to get remote version on update-required check!")
             return False
 
     def get_source_name_from_path(self, path:str) -> str|None:
