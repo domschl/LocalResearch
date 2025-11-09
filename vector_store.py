@@ -1198,7 +1198,8 @@ class DocumentStore:
             return True
         else:
             if remote == 0:
-                self.log.warning("Failed to get remote version on update-required check!")
+                self.log.warning("Failed to get remote version on update-required check! Update may be required after fixing remote data being unavailable!")
+                return True
             return False
 
     def get_source_name_from_path(self, path:str) -> str|None:
