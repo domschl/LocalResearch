@@ -964,15 +964,20 @@ class DocumentStore:
             os.makedirs(self.pdf_cache_path, exist_ok=True)
         self.pdf_index_file: str = os.path.join(self.pdf_cache_path, "pdf_index.json")
 
-        self.load_metadata_library()
-        self.load_text_library()
-        errors:list[str] = []
-        _ = self.parse_documents(errors)
+        if self.local_update_required() is False:
+            self.load_document_data()
         
         remote, local = self.load_sequence_versions()
         self.log.info(f"DocumentStore initialized: remote data version: {remote}, local version: {local}")
         if self.local_update_required() is True:
+            self.log.warning("No document data loaded, since local is outdated. Use 'force_load_docs' to override")
             self.log.info("Please use 'import' to acquire the latest data version")
+
+    def load_document_data(self):
+        self.load_metadata_library()
+        self.load_text_library()            
+        errors:list[str] = []
+        _ = self.parse_documents(errors)
 
     def get_config(self) -> DocumentConfig:
         valid = False
@@ -1264,7 +1269,7 @@ class DocumentStore:
                 self.perf['load pdf cache (10^6 recs)'] = delta
         else:
             self.pdf_index = {}
-            
+        
 #        upgraded = False
 #        for entry in self.text_library:
 #            if self.text_library[entry]['descriptor'].startswith('{') is False:

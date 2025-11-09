@@ -409,6 +409,8 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     vs = VectorStore(ds.storage_path, ds.config_path)
                 else:
                     log.error("Import failed")
+            elif command == 'force_load_docs':
+                ds.load_document_data()
             elif command == 'help':
                 header = ['Command', 'Options', 'Function']
                 rows = []
@@ -421,6 +423,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                          ['timeline', '[time=1999-01-01[-2100-01-01]] [domains="dom1[ dom2]"] [keywords="key1[ key2]"]', 'Compile a table of events'],
                          ['publish', '[force]', 'Publish newly created indices'],
                          ['import', '[force]', 'Import indices created remotely'],
+                         ['force_load_docs', '', 'Load local document database, even if outdated compared to remote'],
                          ['set', '<var-name> <value>', 'Set a variable to a value. `list variables` shows available vars'],
                          ['exit', '', 'Exit (alterative `quite` or Ctrl-D'],
                          ]
