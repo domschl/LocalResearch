@@ -45,7 +45,7 @@ class MarkdownTools:
         except Exception as e:
             self.log.error(f"Error parsing frontmatter: {e}")
             yaml_metadata = {}
-        print("YAML: ", yaml_metadata)
+        # print("YAML: ", yaml_metadata)
         
         metadata, changed, mandatory_changed = self.rm.normalize_metadata(self.notes_folder, filepath, hash, descriptor, yaml_metadata)
         return metadata, content, changed, mandatory_changed

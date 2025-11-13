@@ -45,7 +45,7 @@ class ResearchMetadata:
     def normalize_metadata(self, root_folder:str|None, filepath:str, hash:str, descriptor:str, meta_dict:dict[str, Any]) -> tuple[MetadataEntry, bool, bool]:  # pyright:ignore[reportExplicitAny]
         changed:bool = False
         mandatory_changed:bool = False
-        mandatory_fields: list[str] = ['creation_date', 'context', 'uuid']
+        mandatory_fields: list[str] = ['creation', 'context', 'uuid']
 
         T = TypeVar('T')
         
@@ -103,7 +103,7 @@ class ResearchMetadata:
         authors = get_meta_list(meta_dict, 'authors', [])
         cd: datetime = self.rt.get_note_creation_date(root_folder, filepath)
         default_creation_date: str = cd.isoformat()
-        creation_date = get_meta(meta_dict, 'creation_date', default_creation_date, 'creation')
+        creation_date = get_meta(meta_dict, 'creation', default_creation_date)
         identifiers = get_meta_list(meta_dict, 'identifiers', [])
         languages = get_meta_list(meta_dict, 'languages', [])
         ind1 = descriptor.find('/')
@@ -114,7 +114,7 @@ class ResearchMetadata:
         else:
             default_context = ""
         context = get_meta(meta_dict, 'context', default_context)
-        publication_date = get_meta(meta_dict, 'publication_date', "", 'pubdate')
+        publication_date = get_meta(meta_dict, 'pubdate', "")
         series = get_meta(meta_dict, 'series', "")
         tags = get_meta_list(meta_dict, 'tags', [])
         title = get_meta(meta_dict, 'title', "")
