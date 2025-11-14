@@ -29,6 +29,7 @@ class MetadataEntry(TypedDict):
     context: str
     creation_date: str
     publication_date: str
+    publisher: str
     series: str
     tags: list[str]
     title: str
@@ -115,6 +116,7 @@ class ResearchMetadata:
             default_context = ""
         context = get_meta(meta_dict, 'context', default_context)
         publication_date = get_meta(meta_dict, 'pubdate', "")
+        publisher = get_meta(meta_dict, 'publisher', default="")
         series = get_meta(meta_dict, 'series', "")
         tags = get_meta_list(meta_dict, 'tags', [])
         title = get_meta(meta_dict, 'title', "")
@@ -136,6 +138,7 @@ class ResearchMetadata:
                                   'context': context,
                                   'creation_date': creation_date,
                                   'publication_date': publication_date,
+                                  'publisher': publisher,
                                   'series': series,
                                   'tags': tags,
                                   'title': title,

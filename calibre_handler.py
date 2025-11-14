@@ -79,6 +79,7 @@ class CalibreTools:
         date_md = xml_metadata.find("dc:date", ns)
         date: str = str(date_md.text) if date_md is not None else ""
         # convert to datetime, add utc timezone
+        pub_date:str = ""
         if date != "":
             if '.' in date:                               
                 pub_date = (
@@ -138,18 +139,41 @@ class CalibreTools:
                                 f"Shortened title starts with lowercase: {title_sort}, consider fixing!"
                             )
                             # title_sort = title_sort[0].upper() + title_sort[1:]  # automatic fixing can go wrong (jQuery, etc.)
-        identifiers = []
+        identifiers:list[str] = []
         # Find records of type:
         # <dc:identifier opf:scheme="MOBI-ASIN">B0BTX2378L</dc:identifier>
         for id in xml_metadata.findall("dc:identifier", ns):
             # self.log.info(f"ID: {id.attrib} {id.text}")
             if "{http://www.idpf.org/2007/opf}scheme" in id.attrib:
-                scheme = id.attrib["{http://www.idpf.org/2007/opf}scheme"]
-                sid = id.text
+                scheme:str = id.attrib["{http://www.idpf.org/2007/opf}scheme"]
+                if id.text is not None:
+                    sid:str = id.text
+                else:
+                    sid = ""
                 if scheme not in ["calibre", "uuid"]:
                     identifiers.append(f"{scheme}/{sid}")
                     # self.log.info(f"{title} Identifier: {scheme}: {sid}")
-        metadata: MetadataEntry
-        return None  # XXX
+        if calibre_id != "":
+            identifiers.append(f"calibre_id/{calibre_id}")
+        metadata:MetadataEntry = MetadataEntry({
+            'uuid': uuid,
+            'representations': [],
+            'authors': creators,
+            'identifiers': identifiers,
+            'languages': languages,
+            'context': self.calibre_path,
+            'creation_date': date_added,
+            'publication_date': pub_date,
+            'publisher': publisher,
+            'series': series,
+            'tags': subjects,
+            'title': title,
+            'title_sort': title_sort,
+            'normalized_filename': filename,
+            'description': description,
+            'icon': ""
+            })
+        
+        return metadata
     
     

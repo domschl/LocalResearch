@@ -977,7 +977,11 @@ class DocumentStore:
         self.load_metadata_library()
         self.load_text_library()            
         errors:list[str] = []
-        _ = self.parse_documents(errors)
+        metadata_library_changed, doc_count, source_file_count  = self.parse_documents(errors)
+        if metadata_library_changed is True:
+            self.save_metadata_library()
+        else:
+            self.log.info(f"Metadata unchanged, docs: {doc_count}, sources: {source_file_count}")
 
     def get_config(self) -> DocumentConfig:
         valid = False
@@ -1318,7 +1322,8 @@ class DocumentStore:
         try:
             with os.fdopen(temp_fd, 'w') as temp_file:            
                 json.dump(self.metadata_library, temp_file)
-            os.replace(temp_path, self.metadata_library_file)               
+            os.replace(temp_path, self.metadata_library_file)
+            self.log.info(f"Metadata library saved to {self.metadata_library_file}")
         except Exception as e:
             self.log.error("Metadata library update was interrupted, atomic file update cancelled.")
             os.remove(temp_path)
@@ -1478,29 +1483,30 @@ class DocumentStore:
                         metadata: MetadataEntry | None = None
                         if descriptor not in self.metadata_library:
                             if source['type'] == 'md_notes':
-                                metadata, md_content, _meta_changed, mandatory_changed = self.md_tools[source_name].parse_markdown(doc_path, sha256_hash, descriptor, text)
+                                metadata, md_content, _meta_changed, _mandatory_changed = self.md_tools[source_name].parse_markdown(doc_path, sha256_hash, descriptor, text)
                             elif source['type'] == 'orgmode':
-                                metadata, _prefix, _content, _meta_changed, mandatory_changed = self.org_tools[source_name].parse_orgmode(doc_path, sha256_hash, descriptor, text)
+                                metadata, _prefix, _content, _meta_changed, _mandatory_changed = self.org_tools[source_name].parse_orgmode(doc_path, sha256_hash, descriptor, text)
                             else:
                                 self.log.error(f"Invalid type {source['type']} at {descriptor}")
                                 continue                                    
-                            if mandatory_changed:
-                                self.log.info(f"Markdown doc {doc_path} requires frontmatter update")
-                                metadata_library_changed = True
+                            metadata_library_changed = True
                             self.metadata_library[descriptor] = metadata
+                            self.log.info(f"New metadata entry {descriptor}")
                         else:
                             for doc_repr in self.metadata_library[descriptor]['representations']:
                                 if doc_repr['doc_descriptor'] == descriptor and doc_repr['hash'] != sha256_hash:
                                     self.log.warning(f"{descriptor} has changed!")
                                     if source['type'] == 'md_notes':
-                                        metadata, md_content, _meta_changed, mandatory_changed = self.md_tools[source_name].parse_markdown(doc_path, sha256_hash, descriptor, text)
+                                        metadata, md_content, meta_changed, mandatory_changed = self.md_tools[source_name].parse_markdown(doc_path, sha256_hash, descriptor, text)
                                     elif source['type'] == 'orgmode':
-                                        metadata, _prefix, _content, _meta_changed, mandatory_changed = self.org_tools[source_name].parse_orgmode(doc_path, sha256_hash, descriptor, text)
+                                        metadata, _prefix, _content, meta_changed, mandatory_changed = self.org_tools[source_name].parse_orgmode(doc_path, sha256_hash, descriptor, text)
                                     else:
                                         self.log.error(f"Invalid type {source['type']} at {descriptor}")
-                                        continue                                    
-                                    metadata_library_changed = True
-                                    self.metadata_library[descriptor] = metadata
+                                        continue
+                                    if meta_changed or mandatory_changed:
+                                        metadata_library_changed = True
+                                        self.metadata_library[descriptor] = metadata
+                                        self.log.info(f"Metadata changed for {descriptor}")
                                 else:
                                     if source['type'] == 'md_notes':
                                         metadata = self.metadata_library[descriptor]
@@ -1678,11 +1684,13 @@ class DocumentStore:
         self.save_sha256_cache()
         if metadata_library_changed is True:
             self.save_metadata_library()
+        else:
+            self.log.info("Metadata unchanged")
         if text_library_changed is True or pdf_index_changed is True:
             self.save_text_library()
             self.log.info(f"Library size {old_text_library_size} -> {new_text_library_size}")
         else:
-            self.log.info(f"No changes")
+            self.log.info(f"No text library changes")
         return errors
 
     def check_sha256_cache(self, clean:bool) -> tuple[int, int, int]:
