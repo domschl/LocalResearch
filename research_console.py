@@ -8,7 +8,7 @@ from vector_store import get_files_of_extensions
 
 print("\rStarting...\r", end="", flush=True)
 
-from vector_store import DocumentStore, VectorStore, ProgressState
+from vector_store import DocumentStore, VectorStore, ProgressState, SearchResultEntry
 from text_format import TextParse
 
 def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
@@ -23,6 +23,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
         
     readline.set_history_length(1000)
     _ = atexit.register(readline.write_history_file, history_file)
+    previous_search_results: list[SearchResultEntry] = []
     tp = TextParse()
     print("`help` for overview, `exit` or Ctrl-D to exit")
     while True:
@@ -351,6 +352,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 search_result_list = vs.search(search_string, ds.text_library, count,
                                                highlight, cutoff, damp,
                                                context_length, context_steps)
+                previous_search_results = search_result_list
                 keywords = tp.parse(search_string)
                 if keywords is None:
                     keywords = []
@@ -364,6 +366,15 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     print()
                     _ = tf.print_table(header, rows, multi_line=True, keywords=keywords, significance=[[None, result['significance']]])
                 print()
+            elif command == "text":
+                if len(previous_search_results) == 0:
+                    print("No previous search results available")
+                else:
+                    for index, result in enumerate(previous_search_results):
+                        print(f"Id: {len(previous_search_results)-index}. {result['entry']['descriptor']}")
+                        print(f"Score: {result['cosine']:3.3f}")
+                        print(result['text'])
+                        print()                                     
             elif command == "timeline":
                 domains = key_vals.get('domains', None)
                 if domains is not None:
@@ -420,7 +431,8 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                          ['select', '<model-ID>', 'Select model <id> (1..n) as active model for search. `list models` shows IDs and currently active model'],
                          ['index',  '[force] [all]', 'Generate vector database indices for new or changed documents'],
                          ['search', '<search-string>', 'Do a vector search with currently active model'],
-                         ['timeline', '[time=1999-01-01[-2100-01-01]] [domains="dom1[ dom2]"] [keywords="key1[ key2]"]', 'Compile a table of events'],
+                         ['text', '', 'Print previous result of `search` without formatting for copying'],
+                         ['timeline', '[time=1999-01-01[-2100-01-01]] [domains="dom1[ dom2]"] [keywords="key1[ key2]"]', 'Compile a table of events'],                         
                          ['publish', '[force]', 'Publish newly created indices'],
                          ['import', '[force]', 'Import indices created remotely'],
                          ['force_load_docs', '', 'Load local document database, even if outdated compared to remote'],
