@@ -187,6 +187,10 @@ class MarkdownTools:
                     if len(rows) > 0:
                         if "domain" not in metadata and subfolders is not None:
                             metadata["domain"] = f"{subfolders}"
+                        if "context" not in metadata and subfolders is not None:
+                            metadata["context"] = f"{subfolders}"
+                            for column in columns:
+                                metadata["context"] += f"_{column}"
                         # if len(metadata.keys()) > 0:
                         #     print(f"Table metadata: {metadata}")
                         if note_uuid is None:
