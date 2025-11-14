@@ -1455,6 +1455,7 @@ class DocumentStore:
         metadata_library_changed = False
         doc_count = 0
         source_file_count:dict[str,int]={}
+        old_metadata_keys:list[str] = list(self.metadata_library.keys())
         
         for source_name in self.config['document_sources']:
             source = self.config['document_sources'][source_name]
@@ -1520,9 +1521,15 @@ class DocumentStore:
                                     self.log.warning(f"{doc_path} has no content")
                                 if metadata is None:
                                     self.log.warning(f"{doc_path} has no metadata")
+                        if descriptor in self.metadata_library:
+                            if descriptor in old_metadata_keys:
+                                old_metadata_keys.remove(descriptor)
+                        
             elif source['type'] == 'calibre':
                 for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: errors.append(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
                     for filename in files:
+                        if self.skip_file_in_sync(root, filename, ['opf']) is True:
+                            continue
                         if filename == 'metadata.opf':
                             filepath = os.path.join(root, filename)
                             metadata = self.cb_tools[source_name].parse_calibre_metadata(filepath)
@@ -1530,15 +1537,28 @@ class DocumentStore:
                                 main_descriptor = self.get_descriptor_from_path(root)
                                 if main_descriptor not in self.metadata_library:
                                     self.metadata_library[main_descriptor] = metadata
+                                    metadata_library_changed = True
+                                    self.log.info(f"New metadata for {main_descriptor}")
                                 else:
-                                    ### XXX Changed?
-                                    pass
+                                    if self.metadata_library[main_descriptor] != metadata:
+                                        self.log.info(f"Metadata update for {main_descriptor}")
+                                        self.metadata_library[main_descriptor] = metadata
+                                        metadata_library_changed = True                                        
                                 source_file_count[source_name] += 1
                                 doc_count += 1
+                                if main_descriptor in self.metadata_library:
+                                    if main_descriptor in old_metadata_keys:
+                                        old_metadata_keys.remove(main_descriptor)
             else:
                 self.log.error(f"Ignoring unknown source_type {source['type']}")
                 continue
 
+        if len(old_metadata_keys) > 0:
+            for key in old_metadata_keys:
+                self.log.info(f"Removing metadata for orphan {key}")
+                del self.metadata_library[key]
+                metadata_library_changed = True
+                
         self.tl.add_notes_events(self.tables)
         return metadata_library_changed, doc_count, source_file_count
         
