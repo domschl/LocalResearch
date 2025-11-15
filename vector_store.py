@@ -933,6 +933,7 @@ class DocumentStore:
         self.md_tools:dict[str, MarkdownTools] = {}
         self.org_tools:dict[str, OrgmodeTools] = {}
         self.cb_tools:dict[str, CalibreTools] = {}
+        self.sync_tools:dict[str, SyncTools] = {}
         self.config_changed:bool = False
         self.config_path: str = os.path.expanduser("~/.config/local_research")
         if os.path.isdir(self.config_path) is False:
@@ -949,7 +950,6 @@ class DocumentStore:
         self.perf: dict[str, float] = {}
         self.tables:list[DocumentTable] = []
         self.tl:TimeLines = TimeLines()
-        self.sync_tools:dict[str, SyncTools] = {}
 
         self.publish_path: str = os.path.expanduser(self.config['publish_path'])
         if os.path.isdir(self.publish_path) is False:
