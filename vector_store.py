@@ -26,6 +26,7 @@ from markdown_handler import MarkdownTools
 from orgmode_handler import OrgmodeTools
 from calibre_handler import CalibreTools
 from time_lines import TimeLines
+from sync_tools import SyncTools, SyncTarget
 
 
 support_dim3d = False
@@ -46,6 +47,7 @@ class DocumentSource(TypedDict):
 class DocumentConfig(TypedDict):
     version: int
     document_sources: dict[str, DocumentSource]
+    sync_targets: dict[str, SyncTarget]
     vars: dict[str, tuple[str,str]]
     publish_path: str
 
@@ -134,7 +136,7 @@ def get_files_of_extensions(path:str, extensions: list[str]):
 
 class VectorStore:
     def __init__(self, storage_path:str, config_path:str):
-        self.current_version: int = 5
+        self.current_version: int = 6
         self.log: logging.Logger = logging.getLogger("VectorStore")
         self.storage_path:str = storage_path
         self.config_path:str = config_path
@@ -947,6 +949,7 @@ class DocumentStore:
         self.perf: dict[str, float] = {}
         self.tables:list[DocumentTable] = []
         self.tl:TimeLines = TimeLines()
+        self.sync_tools:dict[str, SyncTools] = {}
 
         self.publish_path: str = os.path.expanduser(self.config['publish_path'])
         if os.path.isdir(self.publish_path) is False:
@@ -1027,8 +1030,15 @@ class DocumentStore:
                         'type': 'orgmode',
                         'path': '~/OrgNotes',
                         'file_types': ['org']
-                        })
+                        }),
                 },
+                'sync_targets': {
+                    'MetaLibrary': SyncTarget({
+                        'types': ["calibre"],
+                        'path': "~/MetaLibrary",
+                        'file_types': ['pdf', 'epub'],
+                        }),
+                    },
                 'publish_path': '~/LocalResearch',
                 'vars': {
                     'search_results': ("3", "int"),
@@ -1051,6 +1061,20 @@ class DocumentStore:
                 self.cb_tools[source_name] = CalibreTools(config['document_sources'][source_name]['path'])
             else:
                 self.log.warning(f"Unexpected type for document source {source_name}")
+        for sync_target_name in config['sync_targets']:
+            sync_target = config['sync_targets'][sync_target_name]
+            valid = True
+            for type in sync_target['types']:
+                if type not in ['md_notes', 'orgmode', 'calibre']:
+                    self.log.error(f"Sync target {sync_target_name} has invalid type {type}, ignoring this")
+                    valid = False
+            if os.path.exists(os.path.expanduser(sync_target['path'])) is False:
+                valid = False
+                self.log.error("Sync target {sync_target_name} destination {sync_target['path']} doesn not exist, ignoring this")
+            if valid is False:
+                del config['sync_targets'][sync_target_name]
+            else:
+                self.sync_tools[sync_target_name] = SyncTools(sync_target)
         return config
 
     def get_sha256(self, filename:str, cache:bool = True):
