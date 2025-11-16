@@ -12,6 +12,7 @@ import math
 import numpy as np
 
 import pymupdf  # pyright: ignore[reportMissingTypeStubs]
+import pymupdf.layout  # pyright: ignore[reportUnusedImport, reportMissingTypeStubs]
 import pymupdf4llm  # pyright: ignore[reportMissingTypeStubs]  # XXX currently locked to 0.19, otherwise export returns empty docs, requires investigation!
 import torch
 import transformers

@@ -9,6 +9,7 @@ dependencies = [
     "huggingface-hub[cli]>=0.34.4",
     "indralib>=0.4.3",
     "pymupdf>=1.26.5",
+    "pymupdf-layout>=1.26.6",
     "pymupdf4llm>=0.0.27",
     "scikit-learn>=1.7.1",
     "sentence-transformers>=5.1.0",
