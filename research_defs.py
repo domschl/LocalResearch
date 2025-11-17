@@ -38,6 +38,31 @@ class MetadataEntry(TypedDict):
     description: str
     icon: str
 
+
+class ProgressState(TypedDict):
+    issues: int
+    state: str
+    percent_completion: float
+    vars: dict[str, str]
+    finished: bool
+
+
+def get_files_of_extensions(path:str, extensions: list[str]):
+    result: list[str] = []
+    if os.path.isdir(path) is False:
+        return result
+    for file in os.listdir(path):
+        if not os.path.isdir(file):
+            ext = os.path.splitext(file)[1]
+            if ext and len(ext)>1:
+                ext = ext[1:]
+            else:
+                continue
+            if ext in extensions:
+                result.append(file)
+    return result
+
+
 class ResearchMetadata:
     def __init__(self):
         self.log:logging.Logger = logging.getLogger("ResearchMetadata")

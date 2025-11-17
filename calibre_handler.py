@@ -1,6 +1,8 @@
 import logging
 from datetime import datetime, timezone
 import xml.etree.ElementTree as ET
+import unicodedata
+
 from typing import TypedDict
 
 from research_defs import DocumentRepresentationEntry, MetadataEntry
@@ -21,8 +23,91 @@ class CalibreTools:
     def __init__(self, calibre_path:str):
         self.log:logging.Logger = logging.getLogger("CalibreTools")
         self.calibre_path:str = calibre_path
-        
 
+    @staticmethod
+    def _is_number(s: str) -> bool:
+        roman = True
+        arabic = True
+        for c in s.strip():
+            if c not in ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]:
+                arabic = False
+            if c not in ["I", "V", "X", "L", "C", "D", "M"]:
+                roman = False
+            if not arabic and not roman:
+                return False
+        return True
+
+    @staticmethod
+    def _clean_filename(s: str) -> str:
+        bad_chars = ["<", ">", ":", '"', "/", "\\", "|", "?", "*"]
+        for c in bad_chars:
+            s = s.replace(c, ",")
+        s = s.replace("__", "_")
+        s = s.replace(" _ ", ", ")
+        s = s.replace("_ ", ", ")
+        s = s.replace("  ", " ")
+        s = s.replace("  ", " ")
+        s = s.replace(",,", ",")
+        s = s.replace(" ,", " ")
+        s = s.replace("  ", " ")
+        s = s.replace("  ", " ")
+        s = s.strip()
+        s = unicodedata.normalize("NFC", s)
+        return s
+
+        
+    def get_human_filename(self, entry:MetadataEntry, use_series_as_subdir:bool = True) -> str:
+        title = entry["title"]
+        short_title = entry["title_sort"]
+        # If title ends with roman or arabic numerals, store them as postfix:
+        endfix = ""
+        efs = title.split(" ")
+        for ef in efs:
+            if CalibreTools._is_number(ef):
+                endfix = ef
+                break
+            else:
+                ef = short_title.split(" ")[-1]
+                if CalibreTools._is_number(ef):
+                    endfix = ef
+                    break
+
+        short_title = CalibreTools._clean_filename(short_title)
+        max_title_len = 70
+        min_title_len = 30
+        if len(short_title) > max_title_len:
+            chars = [",", ".", "-", ":", ";"]
+            p = min(
+                (
+                    short_title.find(c, min_title_len)
+                    for c in chars
+                    if short_title.find(c) != -1
+                ),
+                default=-1,
+            )
+            if p > min_title_len and p < max_title_len:
+                short_title = short_title[:p]
+            else:
+                p = short_title.find(" ", min_title_len, max_title_len)
+                if p == -1:
+                    p = short_title.find("་", min_title_len, max_title_len)
+                    if p != -1:
+                        p = p + 1  # add 1 to include the tsheg
+                if p == -1:
+                    short_title = short_title[:max_title_len]
+                else:
+                    short_title = short_title[:p]
+
+        short_title = short_title.strip()
+        if endfix != "":
+            if endfix not in short_title:
+                short_title = f"{short_title} {endfix}"
+        author = CalibreTools._clean_filename(entry["authors"][0])
+        human_filename = f"{short_title.strip()} - {author}"
+        if use_series_as_subdir is True:
+            human_filename = f"{entry['series']}/{human_filename}"
+        return human_filename
+        
     def parse_calibre_metadata(self, filename:str) -> MetadataEntry|None:
         root_xml = ET.parse(filename).getroot()
         # Namespace map

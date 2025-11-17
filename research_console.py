@@ -4,12 +4,15 @@ import os
 import atexit
 from typing import cast
 from text_format import TextFormat
-from vector_store import get_files_of_extensions
+
 
 print("\rStarting...\r", end="", flush=True)
 
-from vector_store import DocumentStore, VectorStore, ProgressState, SearchResultEntry
+from research_defs import get_files_of_extensions, ProgressState
+from vector_store import VectorStore, SearchResultEntry
+from document_store import DocumentStore
 from text_format import TextParse
+
 
 def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
     history_file = os.path.join(os.path.expanduser("~/.config/local_research"), "repl_history")
