@@ -6,7 +6,8 @@ import json
 import hashlib
 import subprocess
 
-import pymupdf  # pyright: ignore[reportMissingTypeStubs]
+# import pymupdf  # pyright: ignore[reportMissingTypeStubs]
+pymupdf = None
 import pymupdf.layout  # pyright: ignore[reportUnusedImport, reportMissingTypeStubs]
 import pymupdf4llm  # pyright: ignore[reportMissingTypeStubs]  # XXX currently locked to 0.19, otherwise export returns empty docs, requires investigation!
 
@@ -511,23 +512,24 @@ class DocumentStore:
 
         if pdf_text is None:
             extracted_text: str | None = None
-            try:
-                doc = pymupdf.open(full_path)
-                extracted_pages = []
-                for page_num, page in enumerate(doc):  # pyright:ignore[reportArgumentType, reportUnknownVariableType]
-                    try:
-                        page_text = page.get_text()  # pyright:ignore[reportUnknownMemberType, reportUnknownVariableType]
-                        if isinstance(page_text, str) and len(page_text)>7 and page_text.strip()!='-----': 
-                            extracted_pages.append(page_text)  # pyright: ignore[reportUnknownMemberType]
-                    except Exception as page_e: 
-                        self.log.warning(f"Failed extraction on page {page_num+1} of {full_path}: {page_e}")
-                doc.close()
-                combined_text = "\n".join(extracted_pages)  # pyright:ignore[reportUnknownArgumentType]
-                combined_text = combined_text.replace('-----\n', '')
-                if combined_text.strip() != "" and len(combined_text.strip()) > 7:
-                    extracted_text = combined_text
-            except Exception as e:
-                self.log.info(f"Failed pymupdf extraction for {full_path}: {e}", exc_info=True)
+            if pymupdf is not None:
+                try:
+                    doc = pymupdf.open(full_path)
+                    extracted_pages = []
+                    for page_num, page in enumerate(doc):  # pyright:ignore[reportArgumentType, reportUnknownVariableType]
+                        try:
+                            page_text = page.get_text()  # pyright:ignore[reportUnknownMemberType, reportUnknownVariableType]
+                            if isinstance(page_text, str) and len(page_text)>7 and page_text.strip()!='-----': 
+                                extracted_pages.append(page_text)  # pyright: ignore[reportUnknownMemberType]
+                        except Exception as page_e: 
+                            self.log.warning(f"Failed extraction on page {page_num+1} of {full_path}: {page_e}")
+                    doc.close()
+                    combined_text = "\n".join(extracted_pages)  # pyright:ignore[reportUnknownArgumentType]
+                    combined_text = combined_text.replace('-----\n', '')
+                    if combined_text.strip() != "" and len(combined_text.strip()) > 7:
+                        extracted_text = combined_text
+                except Exception as e:
+                    self.log.info(f"Failed pymupdf extraction for {full_path}: {e}", exc_info=True)
                 
             if extracted_text is None:
                 try:
