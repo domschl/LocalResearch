@@ -7,10 +7,21 @@ from typing import TypedDict, cast, TypeVar, Any
 from research_tools import ResearchTools
 
 
+
 class TextLibraryEntry(TypedDict):
     source_name: str
     descriptor: str
     text: str
+
+
+class SearchResultEntry(TypedDict):
+    cosine: float
+    hash: str
+    chunk_index: int
+    entry: TextLibraryEntry
+    text: str|None
+    significance: list[float]|None
+
 
 
 class DocumentRepresentationEntry(TypedDict):

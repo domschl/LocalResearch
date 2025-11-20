@@ -1,21 +1,27 @@
 import logging
 import readline
 import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import atexit
 from typing import cast
+import subprocess
 from text_format import TextFormat
 
 
 print("\rStarting...\r", end="", flush=True)
 
-from research_defs import get_files_of_extensions, ProgressState
-from vector_store import VectorStore, SearchResultEntry
+from research_defs import get_files_of_extensions, ProgressState, SearchResultEntry
+from vector_store import VectorStore
 from document_store import DocumentStore
 from text_format import TextParse
 
 
+from audiobook_handler import AudiobookGenerator
+
 def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
     history_file = os.path.join(os.path.expanduser("~/.config/local_research"), "repl_history")
+    config_path = os.path.expanduser("~/.config/local_research")
+    audiobook_gen = AudiobookGenerator(config_path)
     tf = TextFormat()
     try:
         readline.read_history_file(history_file)
@@ -161,8 +167,6 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     if hint_missing is False and hint_clean is False:
                         log.info("All model indices are fully up-to-date")                
             elif command == 'list':
-                print(f"Args: {arguments}")
-
                 if 'models' in arguments or len(arguments) == 0:
                     header = ["ID", "Docs", "Model"]
                     m_rows: list[list[str]] = []
@@ -369,6 +373,119 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     print()
                     _ = tf.print_table(header, rows, multi_line=True, keywords=keywords, significance=[[None, result['significance']]])
                 print()
+            elif command == 'ksearch':
+                search_string = ' '.join(arguments)
+                print(f"Keyword Searching: {search_string}")
+                search_result_list = ds.keyword_search(search_string)
+                previous_search_results = search_result_list
+                
+                keywords = tp.parse(search_string)
+                if keywords is None:
+                    keywords = []
+
+                for index, result in enumerate(search_result_list):
+                    header = [f"{result['cosine']:.1f}", result['entry']['descriptor']]
+                    text = result['text']
+                    if text is None:
+                        text = ""
+                    rows: list[list[str]] = [[str(len(search_result_list) - index), text]]
+                    print()
+                    _ = tf.print_table(header, rows, multi_line=True, keywords=keywords)
+                print()
+            elif command == 'show':
+                ind = -1
+                try:
+                    ind = int(arguments[0])
+                except:
+                    pass
+                if ind < 1 or ind > len(previous_search_results):
+                    log.error(f"Invalid ID {arguments}, integer required, use 'search' or 'ksearch' first")
+                else:
+                    result = previous_search_results[len(previous_search_results) - ind]
+                    descriptor = result['entry']['descriptor']
+                    metadata = ds.get_metadata(descriptor)
+                    if metadata is not None:
+                        print(f"\nMetadata for {descriptor}:")
+                        for key, value in metadata.items():
+                            if isinstance(value, list):
+                                print(f"{key.capitalize()}: {', '.join(value)}")
+                            else:
+                                print(f"{key.capitalize()}: {value}")
+                        print()
+                    else:
+                        log.error(f"Metadata not found for {descriptor}")
+                            
+
+            elif command == 'open':
+                ind = -1
+                try:
+                    ind = int(arguments[0])
+                except:
+                    pass
+                if ind < 1 or ind > len(previous_search_results):
+                    log.error(f"Invalid ID {arguments}, integer required, use 'search' or 'ksearch' first")
+                else:
+                    result = previous_search_results[len(previous_search_results) - ind]
+                    descriptor = result['entry']['descriptor']
+                    path = ds.get_path_from_descriptor(descriptor)
+                    if os.path.exists(path):
+                        log.info(f"Opening {path}...")
+                        try:
+                            # Redirect output to suppress 'tokenizers' warning on fork
+                            subprocess.run(['open', path], check=True, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+                        except Exception as e:
+                            log.error(f"Failed to open file: {e}")
+                    else:
+                        log.error(f"File not found: {path}")
+
+            elif command == 'audiobook':
+                ind = -1
+                try:
+                    ind = int(arguments[0])
+                except:
+                    pass
+                if ind < 1 or ind > len(previous_search_results):
+                    log.error(f"Invalid ID {arguments}, integer required, use 'search' or 'ksearch' first")
+                else:
+                    result = previous_search_results[len(previous_search_results) - ind]
+                    descriptor = result['entry']['descriptor']
+                    
+                    # Get text content
+                    text_content = result['entry']['text']
+                    if not text_content:
+                        log.error("No text content found for this document")
+                        continue
+
+                    # Get language from metadata
+                    language = 'en' # Default
+                    metadata = ds.get_metadata(descriptor)
+                    if metadata and metadata.get('languages'):
+                        # Use the first language found
+                        langs = metadata['languages']
+                        if isinstance(langs, list) and len(langs) > 0:
+                            language = langs[0]
+                        elif isinstance(langs, str):
+                            language = langs
+                    
+                    # Generate output filename
+                    # Use title if available, otherwise filename
+                    title = "audiobook"
+                    if metadata and metadata.get('title'):
+                        title = metadata['title']
+                    else:
+                        title = os.path.splitext(os.path.basename(descriptor))[0]
+                    
+                    # Sanitize filename
+                    safe_title = "".join([c for c in title if c.isalpha() or c.isdigit() or c==' ' or c=='-']).rstrip()
+                    output_path = os.path.join(os.getcwd(), f"{safe_title}.mp3")
+                    
+                    log.info(f"Generating audiobook for '{title}' in '{language}'...")
+                    success = audiobook_gen.generate_audiobook(text_content, language, output_path)
+                    if success:
+                        print(f"Audiobook generated: {output_path}")
+                    else:
+                        print("Failed to generate audiobook. Check logs for details.")
+
             elif command == "text":
                 if len(previous_search_results) == 0:
                     print("No previous search results available")
@@ -434,7 +551,10 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                          ['select', '<model-ID>', 'Select model <id> (1..n) as active model for search. `list models` shows IDs and currently active model'],
                          ['index',  '[force] [all]', 'Generate vector database indices for new or changed documents'],
                          ['search', '<search-string>', 'Do a vector search with currently active model'],
+                         ['ksearch', '<search-string>', 'Do a keyword search on metadata'],
                          ['text', '', 'Print previous result of `search` without formatting for copying'],
+                         ['show', '<ID>', 'Show metadata for a search result'],
+                         ['open', '<ID>', 'Open the document for a search result'],
                          ['timeline', '[time=1999-01-01[-2100-01-01]] [domains="dom1[ dom2]"] [keywords="key1[ key2]"]', 'Compile a table of events'],                         
                          ['publish', '[force]', 'Publish newly created indices'],
                          ['import', '[force]', 'Import indices created remotely'],

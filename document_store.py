@@ -13,7 +13,7 @@ import pymupdf4llm  # pyright: ignore[reportMissingTypeStubs]  # XXX currently l
 
 from typing import TypedDict, cast, Callable
 
-from research_defs import MetadataEntry, TextLibraryEntry, ProgressState, get_files_of_extensions
+from research_defs import MetadataEntry, TextLibraryEntry, ProgressState, SearchResultEntry, get_files_of_extensions
 from research_tools import DocumentTable
 from markdown_handler import MarkdownTools
 from orgmode_handler import OrgmodeTools
@@ -396,7 +396,12 @@ class DocumentStore:
         if source_name not in self.config['document_sources']:
             self.log.error(f">{source_name}< is not a valid source in {descriptor}")
             return "", descriptor
-        full_path = os.path.join(os.path.expanduser(self.config['document_sources'][source_name]['path']), descriptor[ind+1:])
+        
+        relative_path = descriptor[ind+1:]
+        if relative_path.startswith('/'):
+            relative_path = relative_path[1:]
+            
+        full_path = os.path.join(os.path.expanduser(self.config['document_sources'][source_name]['path']), relative_path)
         return source_name, full_path
      
     def get_path_from_descriptor(self, descriptor:str) -> str:
@@ -436,6 +441,23 @@ class DocumentStore:
 #        if upgraded is True:
 #            self.save_text_library()
 #        else:
+
+    def get_metadata(self, descriptor: str) -> MetadataEntry | None:
+        if descriptor in self.metadata_library:
+            return self.metadata_library[descriptor]
+        
+        # Handle Calibre (directory-based metadata)
+        source_name, _ = self.get_source_name_and_path_from_descriptor(descriptor)
+        if source_name:
+            source_type = self.get_source_type_from_name(source_name)
+            if source_type == 'calibre':
+                # Try parent directory
+                last_slash = descriptor.rfind('/')
+                if last_slash != -1:
+                    parent_descriptor = descriptor[:last_slash]
+                    if parent_descriptor in self.metadata_library:
+                        return self.metadata_library[parent_descriptor]
+        return None
 
     def load_metadata_library(self):
         self.log.info("Loading metadata_library data...")
@@ -713,6 +735,78 @@ class DocumentStore:
         self.tl.add_notes_events(self.tables)
         return metadata_library_changed, doc_count, source_file_count
         
+    def keyword_search(self, query: str) -> list[SearchResultEntry]:
+        results: list[SearchResultEntry] = []
+        keywords = query.lower().split()
+        if not keywords:
+            return results
+
+        for descriptor, metadata in self.metadata_library.items():
+            score = 0
+            
+            # Title match (highest priority)
+            title = metadata.get('title', '').lower()
+            if query.lower() in title:
+                score += 10
+            else:
+                for keyword in keywords:
+                    if keyword in title:
+                        score += 5
+
+            # Authors match
+            authors = [str(a).lower() for a in metadata.get('authors', [])]
+            for keyword in keywords:
+                for author in authors:
+                    if keyword in author:
+                        score += 5
+
+            # Tags match
+            tags = [str(t).lower() for t in metadata.get('tags', [])]
+            for keyword in keywords:
+                for tag in tags:
+                    if keyword in tag:
+                        score += 5
+
+            # Description and Context match (lower priority)
+            description = metadata.get('description', '').lower()
+            context = metadata.get('context', '').lower()
+            for keyword in keywords:
+                if keyword in description:
+                    score += 1
+                if keyword in context:
+                    score += 1
+            
+            if score > 0:
+                # Find the hash for this document
+                doc_hash = ""
+                if metadata['representations']:
+                    doc_hash = metadata['representations'][0]['hash']
+                
+                if doc_hash and doc_hash in self.text_library:
+                    entry = self.text_library[doc_hash]
+                    
+                    # Format a text summary for display
+                    display_text = f"Title: {metadata.get('title', 'N/A')}"
+                    if metadata.get('authors'):
+                        display_text += f" | Authors: {', '.join([str(a) for a in metadata['authors']])}"
+                    if metadata.get('tags'):
+                        display_text += f" | Tags: {', '.join([str(t) for t in metadata['tags']])}"
+                    if metadata.get('description'):
+                        display_text += f" | Description: {metadata['description'][:200]}..."
+
+                    results.append(SearchResultEntry({
+                        'cosine': float(score), # Use score as 'cosine' for compatibility
+                        'hash': doc_hash,
+                        'chunk_index': -1,
+                        'entry': entry,
+                        'text': display_text,
+                        'significance': None
+                    }))
+
+        # Sort by score descending
+        results.sort(key=lambda x: x['cosine'], reverse=True)
+        return results
+
     def sync_texts(self, force:bool, retry:bool=False, progress_callback:Callable[[ProgressState], None ]|None=None, abort_check_callback:Callable[[], bool]|None=None) -> list[str]:
         errors:list[str] = []
         if self.local_update_required() is True:

@@ -13,7 +13,7 @@ import torch
 import transformers
 from sentence_transformers import SentenceTransformer
 
-from research_defs import TextLibraryEntry, ProgressState, get_files_of_extensions
+from research_defs import TextLibraryEntry, ProgressState, get_files_of_extensions, SearchResultEntry
 
 support_dim3d = False
 try:
@@ -61,13 +61,7 @@ class EmbeddingModel(TypedDict):
     enabled: bool
 
 
-class SearchResultEntry(TypedDict):
-    cosine: float
-    hash: str
-    chunk_index: int
-    entry: TextLibraryEntry
-    text: str|None
-    significance: list[float]|None
+
 
 
 class VectorStore:
