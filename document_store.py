@@ -805,13 +805,13 @@ class DocumentStore:
                     entry = self.text_library[doc_hash]
                     
                     # Format a text summary for display
-                    display_text = f"Title: {metadata.get('title', 'N/A')}"
+                    display_text = f"Title: {metadata.get('title', 'N/A')}\n"
                     if metadata.get('authors'):
-                        display_text += f" | Authors: {', '.join([str(a) for a in metadata['authors']])}"
+                        display_text += f"Authors: {', '.join([str(a) for a in metadata['authors']])}\n"
                     if metadata.get('tags'):
-                        display_text += f" | Tags: {', '.join([str(t) for t in metadata['tags']])}"
+                        display_text += f"Tags: {', '.join([str(t) for t in metadata['tags']])}\n"
                     if metadata.get('description'):
-                        display_text += f" | Description: {metadata['description'][:200]}..."
+                        display_text += f"Description: {metadata['description'][:200]}...\n"
 
                     results.append(SearchResultEntry({
                         'cosine': float(score), # Use score as 'cosine' for compatibility

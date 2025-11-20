@@ -167,7 +167,17 @@ class TextFormat:
     
     def valid_split(self, line:AttrString, length:int) -> tuple[AttrString, AttrString]:
         if len(line) <= length:
+            # Check for newlines in the line
+            if '\n' in line.string:
+                ind = line.string.find('\n')
+                return line.substring(0, ind), line.substring(ind + 1)
             return line, AttrString("", *self.theme['text'])
+        
+        # Check for newlines before the length limit
+        if '\n' in line.string[:length]:
+            ind = line.string.find('\n')
+            return line.substring(0, ind), line.substring(ind + 1)
+            
         ind = length
         mx = 18
         if mx > len(line) // 2:
@@ -199,7 +209,7 @@ class TextFormat:
     def multi_liner(self, text:AttrString, length:int) -> list[AttrString]:
         lines: list[AttrString]= []
         while len(text) > 0:
-            if len(text) <= length:
+            if len(text) <= length and '\n' not in text.string:
                 lines.append(text + AttrString(' ' * (length - len(text)), *self.theme['text']))
                 text = AttrString("", *self.theme['text'])
             else:
