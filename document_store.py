@@ -20,6 +20,7 @@ from orgmode_handler import OrgmodeTools
 from calibre_handler import CalibreTools
 from time_lines import TimeLines
 from sync_tools import SyncTools, SyncTarget
+from search_tools import SearchTools
 
 
 class DocumentSource(TypedDict):
@@ -750,7 +751,7 @@ class DocumentStore:
         
     def keyword_search(self, query: str, source: str | None = None) -> list[SearchResultEntry]:
         results: list[SearchResultEntry] = []
-        keywords = query.lower().split()
+        keywords = query.split()
         if not keywords:
             return results
 
@@ -760,51 +761,30 @@ class DocumentStore:
                 if doc_source.lower() != source.lower():
                     continue
 
-            score = 0
+            # Construct a searchable text blob from metadata
+            searchable_text_parts = []
+            searchable_text_parts.append(metadata.get('title', ''))
+            searchable_text_parts.extend([str(a) for a in metadata.get('authors', [])])
+            searchable_text_parts.extend([str(t) for t in metadata.get('tags', [])])
+            searchable_text_parts.append(metadata.get('description', ''))
+            searchable_text_parts.append(metadata.get('context', ''))
             
-            # Title match (highest priority)
-            title = metadata.get('title', '').lower()
-            if query.lower() in title:
-                score += 10
-            else:
-                for keyword in keywords:
-                    if keyword in title:
-                        score += 5
-
-            # Authors match
-            authors = [str(a).lower() for a in metadata.get('authors', [])]
-            for keyword in keywords:
-                for author in authors:
-                    if keyword in author:
-                        score += 5
-
-            # Tags match
-            tags = [str(t).lower() for t in metadata.get('tags', [])]
-            for keyword in keywords:
-                for tag in tags:
-                    if keyword in tag:
-                        score += 5
-
-            # Description and Context match (lower priority)
-            description = metadata.get('description', '').lower()
-            context = metadata.get('context', '').lower()
-            for keyword in keywords:
-                if keyword in description:
-                    score += 1
-                if keyword in context:
-                    score += 1
+            searchable_text = " ".join(searchable_text_parts)
             
-            if score > 0:
-                print("Found:", descriptor)
-                # Find the hash for this document
+            if SearchTools.match(searchable_text, keywords):
                 doc_hash = ""
-                if metadata['representations']:
-                    doc_hash = metadata['representations'][0]['hash']
+                if 'representations' in metadata:
+                    for rep in metadata['representations']:
+                        if rep.get('hash'):
+                            doc_hash = rep['hash']
+                            break
                 
+                text_entry = None
                 if doc_hash and doc_hash in self.text_library:
-                    entry = self.text_library[doc_hash]
-                    
-                    # Format a text summary for display
+                    text_entry = self.text_library[doc_hash]
+
+                if text_entry:
+                     # Format a text summary for display
                     display_text = f"Title: {metadata.get('title', 'N/A')}\n"
                     if metadata.get('authors'):
                         display_text += f"Authors: {', '.join([str(a) for a in metadata['authors']])}\n"
@@ -814,16 +794,14 @@ class DocumentStore:
                         display_text += f"Description: {metadata['description'][:200]}...\n"
 
                     results.append(SearchResultEntry({
-                        'cosine': float(score), # Use score as 'cosine' for compatibility
-                        'hash': doc_hash,
-                        'chunk_index': -1,
-                        'entry': entry,
-                        'text': display_text,
-                        'significance': None
-                    }))
+                         'cosine': 1.0, 
+                         'hash': doc_hash, 
+                         'chunk_index': 0, 
+                         'entry': text_entry, 
+                         'text': display_text, 
+                         'significance': None
+                     }))
 
-        # Sort by score descending
-        results.sort(key=lambda x: x['cosine'], reverse=True)
         return results
 
     def sync_texts(self, force:bool, retry:bool=False, progress_callback:Callable[[ProgressState], None ]|None=None, abort_check_callback:Callable[[], bool]|None=None) -> list[str]:

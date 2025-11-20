@@ -15,6 +15,7 @@ from research_defs import get_files_of_extensions, ProgressState, SearchResultEn
 from vector_store import VectorStore
 from document_store import DocumentStore
 from text_format import TextParse
+from search_tools import SearchTools
 
 
 from audiobook_handler import AudiobookGenerator
@@ -384,6 +385,9 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 keywords = tp.parse(search_string)
                 if keywords is None:
                     keywords = []
+                else:
+                    # Extract highlight terms using SearchTools to handle | and wildcards
+                    keywords = SearchTools.extract_highlight_terms(keywords)
 
                 for index, result in reversed(list(enumerate(search_result_list))):
                     header = [f"{result['cosine']:.1f}", result['entry']['descriptor']]
@@ -549,7 +553,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 if keywords is None:
                     hl_keywords: list[str] = []
                 else:
-                    hl_keywords = keywords
+                    hl_keywords = SearchTools.extract_highlight_terms(keywords)
                 _ = tf.print_table(header, rows, multi_line=True, keywords=hl_keywords)
                
             elif command == 'publish':
@@ -575,7 +579,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                          ['index',  '[force] [all]', 'Generate vector database indices for new or changed documents'],
                          ['search', '<search-string>', 'Do a vector search with currently active model'],
                          ['search', '<search-string>', 'Do a vector search with currently active model'],
-                         ['ksearch', '<search-string> [source=<source>]', 'Do a keyword search on metadata'],
+                         ['ksearch', '<search-string> [source=<source>]', 'Do a keyword search on metadata (supports | ! *)'],
                          ['text', '', 'Print previous result of `search` without formatting for copying'],
                          ['show', '<ID>', 'Show metadata for a search result'],
                          ['open', '<ID>', 'Open the document for a search result'],
