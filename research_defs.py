@@ -3,6 +3,9 @@ import os
 import uuid
 from datetime import datetime, date
 from typing import TypedDict, cast, TypeVar, Any
+import base64
+import io
+from PIL import Image
 
 from research_tools import ResearchTools
 
@@ -78,6 +81,37 @@ class ResearchMetadata:
     def __init__(self):
         self.log:logging.Logger = logging.getLogger("ResearchMetadata")
         self.rt:ResearchTools = ResearchTools()
+
+    @staticmethod
+    def encode_image(image_path: str, height: int = 64) -> str:
+        if not os.path.exists(image_path):
+            return ""
+        try:
+            with Image.open(image_path) as img:
+                # Calculate new width to maintain aspect ratio
+                h_percent = (height / float(img.size[1]))
+                w_size = int((float(img.size[0]) * float(h_percent)))
+                
+                # Resize
+                img = img.resize((w_size, height), Image.Resampling.LANCZOS)
+                
+                # Convert to base64
+                buffered = io.BytesIO()
+                img.save(buffered, format="PNG")
+                img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+                return img_str
+        except Exception as e:
+            logging.getLogger("ResearchMetadata").error(f"Error processing image {image_path}: {e}")
+            return ""
+
+    @staticmethod
+    def decode_image(base64_string: str) -> Image.Image | None:
+        try:
+            img_data = base64.b64decode(base64_string)
+            return Image.open(io.BytesIO(img_data))
+        except Exception as e:
+            logging.getLogger("ResearchMetadata").error(f"Error decoding image: {e}")
+            return None
 
     def normalize_metadata(self, root_folder:str|None, filepath:str, hash:str, descriptor:str, meta_dict:dict[str, Any]) -> tuple[MetadataEntry, bool, bool]:  # pyright:ignore[reportExplicitAny]
         changed:bool = False

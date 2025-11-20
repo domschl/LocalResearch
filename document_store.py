@@ -622,7 +622,7 @@ class DocumentStore:
         return self.config['document_sources'][source_name]['type']
 
 
-    def parse_documents(self, errors:list[str], abort_check_callback:Callable[[], bool]|None=None) ->tuple[bool, int, dict[str, int]]:
+    def parse_documents(self, errors:list[str], abort_check_callback:Callable[[], bool]|None=None, force:bool=False) ->tuple[bool, int, dict[str, int]]:
         self.tables = []
         self.tl.tl_events = []
         metadata_library_changed = False
@@ -705,9 +705,22 @@ class DocumentStore:
                             continue
                         if filename == 'metadata.opf':
                             filepath = os.path.join(root, filename)
-                            metadata = self.cb_tools[source_name].parse_calibre_metadata(filepath)
+                            main_descriptor = self.get_descriptor_from_path(root)
+                            existing_metadata = None
+                            if not force:
+                                existing_metadata = self.metadata_library.get(main_descriptor)
+                            metadata = self.cb_tools[source_name].parse_calibre_metadata(filepath, main_descriptor, existing_metadata)
                             if metadata is not None:
-                                main_descriptor = self.get_descriptor_from_path(root)
+                                # Calculate hashes for representations
+                                for f in files:
+                                    ext = os.path.splitext(f)[1].lower().lstrip('.')
+                                    if ext in ['txt', 'pdf', 'md']:
+                                        f_path = os.path.join(root, f)
+                                        f_hash = self.get_sha256(f_path)
+                                        for rep in metadata['representations']:
+                                            if rep['format'] == ext and rep['hash'] == "":
+                                                rep['hash'] = f_hash
+
                                 if main_descriptor not in self.metadata_library:
                                     self.metadata_library[main_descriptor] = metadata
                                     metadata_library_changed = True
@@ -735,13 +748,18 @@ class DocumentStore:
         self.tl.add_notes_events(self.tables)
         return metadata_library_changed, doc_count, source_file_count
         
-    def keyword_search(self, query: str) -> list[SearchResultEntry]:
+    def keyword_search(self, query: str, source: str | None = None) -> list[SearchResultEntry]:
         results: list[SearchResultEntry] = []
         keywords = query.lower().split()
         if not keywords:
             return results
 
         for descriptor, metadata in self.metadata_library.items():
+            if source is not None:
+                doc_source, _ = self.get_source_name_and_path_from_descriptor(descriptor)
+                if doc_source.lower() != source.lower():
+                    continue
+
             score = 0
             
             # Title match (highest priority)
@@ -777,6 +795,7 @@ class DocumentStore:
                     score += 1
             
             if score > 0:
+                print("Found:", descriptor)
                 # Find the hash for this document
                 doc_hash = ""
                 if metadata['representations']:
@@ -828,7 +847,7 @@ class DocumentStore:
 
         current_doc_count = 0
 
-        metadata_library_changed, doc_count, source_file_count = self.parse_documents(errors, abort_check_callback)
+        metadata_library_changed, doc_count, source_file_count = self.parse_documents(errors, abort_check_callback, force)
         
         for source_name in self.config['document_sources']:
             source = self.config['document_sources'][source_name]

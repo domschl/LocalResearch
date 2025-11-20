@@ -2,10 +2,11 @@ import logging
 from datetime import datetime, timezone
 import xml.etree.ElementTree as ET
 import unicodedata
+import os
 
 from typing import TypedDict
 
-from research_defs import DocumentRepresentationEntry, MetadataEntry
+from research_defs import DocumentRepresentationEntry, MetadataEntry, ResearchMetadata
 
 
 class CalibrePrefixes(TypedDict):
@@ -108,7 +109,7 @@ class CalibreTools:
             human_filename = f"{entry['series']}/{human_filename}"
         return human_filename
         
-    def parse_calibre_metadata(self, filename:str) -> MetadataEntry|None:
+    def parse_calibre_metadata(self, filename:str, descriptor:str, existing_metadata: MetadataEntry | None = None) -> MetadataEntry|None:
         root_xml = ET.parse(filename).getroot()
         # Namespace map
         ns = {
@@ -240,9 +241,32 @@ class CalibreTools:
                     # self.log.info(f"{title} Identifier: {scheme}: {sid}")
         if calibre_id != "":
             identifiers.append(f"calibre_id/{calibre_id}")
+        # Process cover image
+        image_str = ""
+        if existing_metadata and existing_metadata.get('icon'):
+            image_str = existing_metadata['icon']
+        
+        if not image_str:
+            cover_path = os.path.join(os.path.dirname(filename), "cover.jpg")
+            image_str = ResearchMetadata.encode_image(cover_path)
+
+        # Populate representations
+        representations: list[DocumentRepresentationEntry] = []
+        dir_path = os.path.dirname(filename)
+        if os.path.exists(dir_path):
+            for f in os.listdir(dir_path):
+                ext = os.path.splitext(f)[1].lower().lstrip('.')
+                if ext in ['txt', 'pdf', 'md']:
+                    representations.append(DocumentRepresentationEntry({
+                        'doc_descriptor': descriptor,
+                        'hash': "", # Hash not calculated here
+                        'format': ext,
+                        'doc_date': date_added if date_added else datetime.now(timezone.utc).isoformat()
+                    }))
+
         metadata:MetadataEntry = MetadataEntry({
             'uuid': uuid,
-            'representations': [],
+            'representations': representations,
             'authors': creators,
             'identifiers': identifiers,
             'languages': languages,
@@ -256,7 +280,7 @@ class CalibreTools:
             'title_sort': title_sort,
             'normalized_filename': filename,
             'description': description,
-            'icon': ""
+            'icon': image_str
             })
         
         return metadata

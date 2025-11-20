@@ -1,6 +1,7 @@
 import logging
 import readline
 import os
+import sys
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import atexit
 from typing import cast
@@ -375,15 +376,16 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 print()
             elif command == 'ksearch':
                 search_string = ' '.join(arguments)
-                print(f"Keyword Searching: {search_string}")
-                search_result_list = ds.keyword_search(search_string)
+                source = key_vals.get('source')
+                print(f"Keyword Searching: {search_string} (Source: {source if source else 'All'})")
+                search_result_list = ds.keyword_search(search_string, source=source)
                 previous_search_results = search_result_list
                 
                 keywords = tp.parse(search_string)
                 if keywords is None:
                     keywords = []
 
-                for index, result in enumerate(search_result_list):
+                for index, result in reversed(list(enumerate(search_result_list))):
                     header = [f"{result['cosine']:.1f}", result['entry']['descriptor']]
                     text = result['text']
                     if text is None:
@@ -408,7 +410,9 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                         print(f"\nMetadata for {descriptor}:")
                         for key, value in metadata.items():
                             if isinstance(value, list):
-                                print(f"{key.capitalize()}: {', '.join(value)}")
+                                print(f"{key.capitalize()}: {', '.join(str(v) for v in value)}")
+                            elif key == 'icon' and len(str(value)) > 50:
+                                print(f"{key.capitalize()}: {str(value)[:50]}...")
                             else:
                                 print(f"{key.capitalize()}: {value}")
                         print()
@@ -431,8 +435,10 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     if os.path.exists(path):
                         log.info(f"Opening {path}...")
                         try:
-                            # Redirect output to suppress 'tokenizers' warning on fork
-                            subprocess.run(['open', path], check=True, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+                            if sys.platform == 'darwin':
+                                subprocess.run(['open', path], check=True)
+                            else:
+                                subprocess.run(['xdg-open', path], check=True)
                         except Exception as e:
                             log.error(f"Failed to open file: {e}")
                     else:
@@ -480,7 +486,24 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     output_path = os.path.join(os.getcwd(), f"{safe_title}.mp3")
                     
                     log.info(f"Generating audiobook for '{title}' in '{language}'...")
-                    success = audiobook_gen.generate_audiobook(text_content, language, output_path)
+                    start_token = key_vals.get('start')
+                    end_token = key_vals.get('end')
+                    
+                    # Extract metadata
+                    authors = metadata.get('authors', [])
+                    author = ", ".join(authors) if isinstance(authors, list) else str(authors)
+                    icon_data = metadata.get('icon')
+
+                    success = audiobook_gen.generate_audiobook(
+                        text=text_content, 
+                        language=language, 
+                        output_path=output_path,
+                        start_token=start_token,
+                        end_token=end_token,
+                        title=title,
+                        author=author,
+                        icon_data=icon_data
+                    )
                     if success:
                         print(f"Audiobook generated: {output_path}")
                     else:
@@ -551,10 +574,12 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                          ['select', '<model-ID>', 'Select model <id> (1..n) as active model for search. `list models` shows IDs and currently active model'],
                          ['index',  '[force] [all]', 'Generate vector database indices for new or changed documents'],
                          ['search', '<search-string>', 'Do a vector search with currently active model'],
-                         ['ksearch', '<search-string>', 'Do a keyword search on metadata'],
+                         ['search', '<search-string>', 'Do a vector search with currently active model'],
+                         ['ksearch', '<search-string> [source=<source>]', 'Do a keyword search on metadata'],
                          ['text', '', 'Print previous result of `search` without formatting for copying'],
                          ['show', '<ID>', 'Show metadata for a search result'],
                          ['open', '<ID>', 'Open the document for a search result'],
+                         ['audiobook', '<ID> [start="<token>"] [end="<token>"]', 'Generate an audiobook from the document text'],
                          ['timeline', '[time=1999-01-01[-2100-01-01]] [domains="dom1[ dom2]"] [keywords="key1[ key2]"]', 'Compile a table of events'],                         
                          ['publish', '[force]', 'Publish newly created indices'],
                          ['import', '[force]', 'Import indices created remotely'],
