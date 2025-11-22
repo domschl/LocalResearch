@@ -6,6 +6,17 @@ wheels/
 *.egg-info
 web_server/data/
 .DS_Store
+
+# Web Client
+web_client/node_modules/
+web_client/dist/
+web_client/.vite/
+web_client/coverage/
+web_client/.env.local
+web_client/.env.development.local
+web_client/.env.test.local
+web_client/.env.production.local
+
 # Virtual environments
 .venv
 # Emacs

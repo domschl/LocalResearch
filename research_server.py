@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from document_store import DocumentStore
@@ -43,6 +44,14 @@ async def lifespan(app: FastAPI):
     # Cleanup if necessary
 
 app = FastAPI(title="LocalResearch API", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # --- Pydantic Models ---
 
@@ -136,8 +145,8 @@ async def search(
     
     # context_length and context_steps are also used in console, let's add them if needed, 
     # but for now stick to basic search args.
-    context_length = 0 # Default
-    context_steps = 0 # Default
+    context_length = 16 # Default
+    context_steps = 4 # Default
 
     try:
         results = state.vs.search(q, state.ds.text_library, limit, highlight, cutoff, damp, context_length, context_steps)
@@ -248,6 +257,57 @@ async def get_document(descriptor: str):
         "path": path,
         "content": content
     }
+
+class VisualizationData(BaseModel):
+    points: list[list[float]]
+    colors: list[list[int]]
+    texts: list[str]
+    doc_ids: list[str]
+    sizes: list[float]
+    model_name: str | None = None
+    reduction_method: str | None = None
+    num_points_visualized: int | None = None
+    num_points_available_before_sampling: int | None = None
+
+@app.get("/visualization/3d", response_model=VisualizationData)
+async def get_visualization_3d():
+    if not state.vs:
+        raise HTTPException(status_code=503, detail="Server not initialized")
+    
+    active_model = state.vs.config.get('embeddings_model_name')
+    if not active_model:
+        raise HTTPException(status_code=500, detail="No active model found in configuration")
+    
+    # Check for pre-calculated data
+    # The user specified: ~/.local/share/local_research/visualization_3d
+    # We need to expand the user path.
+    base_path = os.path.expanduser("~/.local/share/local_research/visualization_3d")
+    file_path = os.path.join(base_path, f"{active_model}.json")
+    
+    if os.path.exists(file_path):
+        try:
+            import json
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+            return data
+        except Exception as e:
+            log.error(f"Error loading visualization data: {e}")
+            raise HTTPException(status_code=500, detail=f"Error loading data: {str(e)}")
+    else:
+        # Fallback to on-the-fly calculation (optional, but user said server-side Index3D is untested)
+        # For now, let's return 404 if not found, or try to calculate if requested?
+        # The user said "Index3D functionality on server-side has never been tested", 
+        # but vector_store.prepare_visualization_data exists.
+        # Let's try to use it if file doesn't exist, but log a warning.
+        log.warning(f"Pre-calculated data not found at {file_path}. Attempting on-the-fly calculation.")
+        try:
+            data = state.vs.prepare_visualization_data(state.ds.text_library, max_points=5000) # Limit points for performance
+            if "error" in data:
+                 raise HTTPException(status_code=500, detail=data["error"])
+            return data
+        except Exception as e:
+            log.error(f"On-the-fly visualization error: {e}")
+            raise HTTPException(status_code=500, detail=f"Visualization generation failed: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
