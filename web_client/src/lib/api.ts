@@ -70,8 +70,12 @@ export const getVisualization3D = async (): Promise<VisualizationData> => {
   return response.data;
 };
 
-export const getTimeline = async (keywords?: string): Promise<TimelineEvent[]> => {
-  const params = keywords ? { keywords } : {};
+export const getTimeline = async (keywords?: string, time?: string, domains?: string): Promise<TimelineEvent[]> => {
+  const params: Record<string, string> = {};
+  if (keywords) params.keywords = keywords;
+  if (time) params.time = time;
+  if (domains) params.domains = domains;
+  
   const response = await api.get<TimelineEvent[]>('/timeline', { params });
   return response.data;
 };

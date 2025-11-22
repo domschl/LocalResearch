@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getTimeline, type TimelineEvent } from "@/lib/api";
-import { Loader2 } from "lucide-react";
 import { Timeline, type TimelineOptions } from "vis-timeline/standalone";
 import { DataSet } from "vis-data";
 import "vis-timeline/styles/vis-timeline-graph2d.css";
@@ -13,19 +12,34 @@ export function TimelineView() {
   const timelineRef = useRef<Timeline | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<TimelineEvent | null>(null);
   const [keywords, setKeywords] = useState<string>("");
+  const [startTime, setStartTime] = useState<string>("");
+  const [endTime, setEndTime] = useState<string>("");
+  const [domains, setDomains] = useState<string>("");
+  
   const [debouncedKeywords, setDebouncedKeywords] = useState<string>("");
+  const [debouncedStartTime, setDebouncedStartTime] = useState<string>("");
+  const [debouncedEndTime, setDebouncedEndTime] = useState<string>("");
+  const [debouncedDomains, setDebouncedDomains] = useState<string>("");
 
-  // Debounce keywords
+  // Debounce all filters
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedKeywords(keywords);
+      setDebouncedStartTime(startTime);
+      setDebouncedEndTime(endTime);
+      setDebouncedDomains(domains);
     }, 500);
     return () => clearTimeout(timer);
-  }, [keywords]);
+  }, [keywords, startTime, endTime, domains]);
 
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["timeline", debouncedKeywords],
-    queryFn: () => getTimeline(debouncedKeywords),
+  const timeString = (debouncedStartTime || debouncedEndTime) 
+    ? `${debouncedStartTime} - ${debouncedEndTime}` 
+    : undefined;
+
+  const { data, error } = useQuery({
+    queryKey: ["timeline", debouncedKeywords, timeString, debouncedDomains],
+    queryFn: () => getTimeline(debouncedKeywords, timeString, debouncedDomains),
+    enabled: debouncedKeywords.length > 0 || (!!timeString && timeString.length > 3) || debouncedDomains.length > 0,
   });
 
   // Mapping constants
@@ -47,74 +61,44 @@ export function TimelineView() {
   };
 
   useEffect(() => {
-    if (containerRef.current && data && !timelineRef.current) {
-      // console.log("Timeline data received:", data.length);
-      
-      const parsedItems = data.map((item) => {
-        const jds = IndraTime.stringTimeToJulian(item.date);
-        if (jds.length === 0) {
-            return null;
-        }
-        
-        const start = jdToTimeline(jds[0]);
-        if (isNaN(start)) return null;
+    if (containerRef.current && !timelineRef.current) {
+        // Initialize empty timeline
+        const items = new DataSet([]);
+        const options: TimelineOptions = {
+            height: "100%",
+            width: "100%",
+            verticalScroll: true,
+            zoomKey: "ctrlKey",
+            orientation: { axis: "top", item: "top" },
+            showCurrentTime: false,
+            format: {
+              minorLabels: (date: Date | number, _scale: string, _step: number) => {
+                const time = date instanceof Date ? date.getTime() : (typeof date === 'number' ? date : new Date(date).getTime());
+                const jd = timelineToJd(time);
+                return IndraTime.julianToStringTime(jd);
+              },
+              majorLabels: (date: Date | number, _scale: string, _step: number) => {
+                const time = date instanceof Date ? date.getTime() : (typeof date === 'number' ? date : new Date(date).getTime());
+                const jd = timelineToJd(time);
+                return IndraTime.julianToStringTime(jd);
+              }
+            }
+          };
+    
+          timelineRef.current = new Timeline(containerRef.current, items, options);
+    
+          timelineRef.current.on("select", (properties) => {
+            if (properties.items && properties.items.length > 0) {
+               // Selection logic temporarily removed to simplify
+               setSelectedEvent(null);
+            } else {
+              setSelectedEvent(null);
+            }
+          });
+    }
 
-        let end = undefined;
-        if (jds.length > 1) {
-          end = jdToTimeline(jds[1]);
-          if (isNaN(end)) return null;
-        }
-        
-        return {
-          id: uuidv4(),
-          content: item.event.length > 50 ? item.event.substring(0, 50) + "..." : item.event,
-          start: start, 
-          end: end,
-          title: item.event,
-          fullItem: item,
-          type: end ? 'range' : 'point'
-        };
-      }).filter(i => i !== null);
-      // console.log("Parsed items count:", parsedItems.length);
-
-      const items = new DataSet(parsedItems);
-
-      const options: TimelineOptions = {
-        height: "100%",
-        width: "100%",
-        verticalScroll: true,
-        zoomKey: "ctrlKey",
-        orientation: { axis: "top", item: "top" },
-        showCurrentTime: false,
-        format: {
-          minorLabels: (date: Date | number, _scale: string, _step: number) => {
-            const time = date instanceof Date ? date.getTime() : (typeof date === 'number' ? date : new Date(date).getTime());
-            const jd = timelineToJd(time);
-            return IndraTime.julianToStringTime(jd);
-          },
-          majorLabels: (date: Date | number, _scale: string, _step: number) => {
-            const time = date instanceof Date ? date.getTime() : (typeof date === 'number' ? date : new Date(date).getTime());
-            const jd = timelineToJd(time);
-            return IndraTime.julianToStringTime(jd);
-          }
-        }
-      };
-
-      timelineRef.current = new Timeline(containerRef.current, items, options);
-
-      timelineRef.current.on("select", (properties) => {
-        if (properties.items && properties.items.length > 0) {
-          const id = properties.items[0];
-          const item = items.get(id);
-          if (item) {
-             setSelectedEvent((item as any).fullItem);
-          }
-        } else {
-          setSelectedEvent(null);
-        }
-      });
-    } else if (timelineRef.current && data) {
-        // Update data if timeline exists
+    if (timelineRef.current && data) {
+        // Update data
         const parsedItems = data.map((item) => {
             const jds = IndraTime.stringTimeToJulian(item.date);
             if (jds.length === 0) return null;
@@ -139,16 +123,14 @@ export function TimelineView() {
             };
           }).filter(i => i !== null);
           
-          timelineRef.current.setItems(new DataSet(parsedItems));
+          timelineRef.current.setItems(parsedItems); // Pass array directly
           timelineRef.current.fit();
+    } else if (timelineRef.current && !data && debouncedKeywords.length === 0) {
+        // Clear items if no keywords
+        timelineRef.current.setItems([]);
     }
 
-    return () => {
-      // Cleanup only on unmount, not on data change if we update in place
-      // But here we destroy and recreate if container is missing or first load
-      // Actually, let's just destroy if we unmount.
-    };
-  }, [data]);
+  }, [data, debouncedKeywords]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -159,15 +141,9 @@ export function TimelineView() {
           }
       }
   }, []);
-
-  if (isLoading && !data) {
-    return (
-      <div className="h-full flex items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        <span className="ml-2">Loading Timeline...</span>
-      </div>
-    );
-  }
+  
+  // Let's rewrite the init logic to be cleaner.
+  
 
   if (error) {
     return (
@@ -179,20 +155,57 @@ export function TimelineView() {
 
   return (
     <div className="h-full w-full flex flex-col relative overflow-hidden">
-      <div className="p-4 border-b bg-card flex gap-4 items-center z-10">
-        <input 
-            type="text" 
-            placeholder="Filter by keywords (e.g. 'italy')" 
-            className="border rounded px-3 py-2 w-full max-w-md bg-background"
-            value={keywords}
-            onChange={(e) => setKeywords(e.target.value)}
-        />
-        <span className="text-sm text-muted-foreground">
-            {data?.length || 0} events found
-        </span>
+      <div className="p-4 border-b bg-card flex flex-col gap-4 z-10">
+        <div className="flex gap-4 items-center">
+            <input 
+                type="text" 
+                placeholder="Keywords (e.g. 'italy')" 
+                className="border rounded px-3 py-2 w-full bg-background"
+                value={keywords}
+                onChange={(e) => setKeywords(e.target.value)}
+            />
+            <input 
+                type="text" 
+                placeholder="Domains (e.g. 'history')" 
+                className="border rounded px-3 py-2 w-full bg-background"
+                value={domains}
+                onChange={(e) => setDomains(e.target.value)}
+            />
+        </div>
+        <div className="flex gap-4 items-center">
+            <input 
+                type="text" 
+                placeholder="Start Time (e.g. '1000')" 
+                className="border rounded px-3 py-2 w-full bg-background"
+                value={startTime}
+                onChange={(e) => setStartTime(e.target.value)}
+            />
+            <span className="text-muted-foreground">-</span>
+            <input 
+                type="text" 
+                placeholder="End Time (e.g. '2000')" 
+                className="border rounded px-3 py-2 w-full bg-background"
+                value={endTime}
+                onChange={(e) => setEndTime(e.target.value)}
+            />
+            <span className="text-sm text-muted-foreground whitespace-nowrap min-w-[100px] text-right">
+                {data?.length || 0} events
+            </span>
+        </div>
       </div>
       
-      <div ref={containerRef} className="flex-1 w-full" />
+      <div ref={containerRef} className="flex-1 w-full relative">
+        {(!data || data.length === 0) && debouncedKeywords.length === 0 && !timeString && debouncedDomains.length === 0 && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
+                <div className="bg-card/80 p-6 rounded-lg shadow-lg text-center backdrop-blur-sm border">
+                    <h3 className="text-lg font-semibold mb-2">Enter search criteria</h3>
+                    <p className="text-muted-foreground">
+                        Filter by keywords, time range, or domains to explore the timeline.
+                    </p>
+                </div>
+            </div>
+        )}
+      </div>
       
       {selectedEvent && (
         <div className="absolute bottom-4 left-4 right-4 bg-card/90 p-4 rounded-lg border shadow-lg max-w-3xl mx-auto backdrop-blur-sm z-10">
