@@ -1,7 +1,7 @@
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import List, Optional, Dict, Any
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
@@ -17,8 +17,8 @@ log = logging.getLogger("ResearchServer")
 
 class GlobalState:
     def __init__(self):
-        self.ds: Optional[DocumentStore] = None
-        self.vs: Optional[VectorStore] = None
+        self.ds: DocumentStore | None = None
+        self.vs: VectorStore | None = None
 
     def initialize(self):
         log.info("Initializing DocumentStore and VectorStore...")
@@ -61,7 +61,7 @@ class StatusResponse(BaseModel):
     status: str
     document_count: int
     active_model: str
-    models: List[Dict[str, Any]]
+    models: list[dict[str, Any]]
 
 class SyncResponse(BaseModel):
     success: bool
@@ -116,7 +116,7 @@ async def sync_data(force: bool = False):
         log.error(f"Sync error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/search", response_model=List[SearchResult])
+@app.get("/search", response_model=list[SearchResult])
 async def search(
     q: str, 
     limit: int = 10, 
@@ -160,8 +160,8 @@ async def search(
         log.error(f"Search error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/ksearch", response_model=List[SearchResult])
-async def keyword_search(q: str, source: Optional[str] = None):
+@app.get("/ksearch", response_model=list[SearchResult])
+async def keyword_search(q: str, source: str | None = None):
     if not state.ds:
         raise HTTPException(status_code=503, detail="Server not initialized")
     
@@ -190,11 +190,11 @@ async def keyword_search(q: str, source: Optional[str] = None):
         log.error(f"Keyword search error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/timeline", response_model=List[TimelineEvent])
+@app.get("/timeline", response_model=list[TimelineEvent])
 async def get_timeline(
-    time: Optional[str] = None,
-    domains: Optional[str] = None,
-    keywords: Optional[str] = None,
+    time: str | None = None,
+    domains: str | None = None,
+    keywords: str | None = None,
     partial_overlap: bool = False,
     full_overlap: bool = False
 ):
