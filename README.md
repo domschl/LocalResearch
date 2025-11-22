@@ -13,6 +13,14 @@ LocalResearch is a command-line tool designed for managing, indexing, and semant
 *   **Data Integrity**: Includes tools to check and clean caches (PDF, SHA256) and verify index consistency.
 *   **Interactive CLI**: A robust REPL (Read-Eval-Print Loop) interface with command history and auto-completion.
 
+## Infrastructure
+
+LocalResearch is designed to run on a distributed network of workstations (macOS and Linux) within a local LAN.
+*   **Heterogeneous Hardware**: High-performance nodes (CUDA/MPS/XPU) handle resource-intensive vector indexing, while low-power, always-on machines serve queries and small updates.
+*   **Data Synchronization**: Nodes share data stored in `~/.local/share/local_research/` via a synchronized file system path `~/LocalResearch`.
+    *   `publish`: Copies local data to the shared `~/LocalResearch` folder.
+    *   `import`: Updates the local data from the shared `~/LocalResearch` folder.
+
 ## Usage
 
 Run the main console application:

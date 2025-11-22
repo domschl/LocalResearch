@@ -243,8 +243,8 @@ class CalibreTools:
             identifiers.append(f"calibre_id/{calibre_id}")
         # Process cover image
         image_str = ""
-        if existing_metadata and existing_metadata.get('icon'):
-            image_str = existing_metadata['icon']
+        if existing_metadata and existing_metadata.icon:
+            image_str = existing_metadata.icon
         
         if not image_str:
             cover_path = os.path.join(os.path.dirname(filename), "cover.jpg")
@@ -257,31 +257,31 @@ class CalibreTools:
             for f in os.listdir(dir_path):
                 ext = os.path.splitext(f)[1].lower().lstrip('.')
                 if ext in ['txt', 'pdf', 'md']:
-                    representations.append(DocumentRepresentationEntry({
-                        'doc_descriptor': descriptor,
-                        'hash': "", # Hash not calculated here
-                        'format': ext,
-                        'doc_date': date_added if date_added else datetime.now(timezone.utc).isoformat()
-                    }))
+                    representations.append(DocumentRepresentationEntry(
+                        doc_descriptor=descriptor,
+                        hash="", # Hash not calculated here
+                        format=ext,
+                        doc_date=date_added if date_added else datetime.now(timezone.utc).isoformat()
+                    ))
 
-        metadata:MetadataEntry = MetadataEntry({
-            'uuid': uuid,
-            'representations': representations,
-            'authors': creators,
-            'identifiers': identifiers,
-            'languages': languages,
-            'context': self.calibre_path,
-            'creation_date': date_added,
-            'publication_date': pub_date,
-            'publisher': publisher,
-            'series': series,
-            'tags': subjects,
-            'title': title,
-            'title_sort': title_sort,
-            'normalized_filename': filename,
-            'description': description,
-            'icon': image_str
-            })
+        metadata:MetadataEntry = MetadataEntry(
+            uuid=uuid,
+            representations=representations,
+            authors=creators,
+            identifiers=identifiers,
+            languages=languages,
+            context=self.calibre_path,
+            creation_date=date_added,
+            publication_date=pub_date,
+            publisher=publisher,
+            series=series,
+            tags=subjects,
+            title=title,
+            title_sort=title_sort,
+            normalized_filename=filename,
+            description=description,
+            icon=image_str
+            )
         
         return metadata
     

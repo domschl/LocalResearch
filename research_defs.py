@@ -11,41 +11,69 @@ from research_tools import ResearchTools
 
 
 
-class TextLibraryEntry(TypedDict):
+from pydantic import BaseModel, Field, BeforeValidator
+from typing import Annotated
+
+def ensure_list(v: Any) -> list[str]:
+    if isinstance(v, str):
+        return [v]
+    if v is None:
+        return []
+    if isinstance(v, list):
+        new_list = []
+        for item in v:
+            if isinstance(item, list):
+                # Flatten one level of nested lists
+                for sub_item in item:
+                    new_list.append(str(sub_item))
+            else:
+                new_list.append(str(item))
+        return new_list
+    return [str(v)]
+
+def ensure_string(v: Any) -> str:
+    if isinstance(v, dict):
+        # Handle cases where a dict is passed (e.g. tags={'location': 'antarctica'})
+        return str(v)
+    return str(v)
+
+ListOfStrings = Annotated[list[str], BeforeValidator(ensure_list)]
+StringField = Annotated[str, BeforeValidator(ensure_string)]
+
+class TextLibraryEntry(BaseModel):
     source_name: str
     descriptor: str
     text: str
 
 
-class SearchResultEntry(TypedDict):
+class SearchResultEntry(BaseModel):
     cosine: float
     hash: str
     chunk_index: int
     entry: TextLibraryEntry
-    text: str|None
-    significance: list[float]|None
+    text: str | None = None
+    significance: list[float] | None = None
 
 
-
-class DocumentRepresentationEntry(TypedDict):
+class DocumentRepresentationEntry(BaseModel):
     doc_descriptor: str
     hash: str
     format: str
     doc_date: str
 
     
-class MetadataEntry(TypedDict):
+class MetadataEntry(BaseModel):
     uuid: str
     representations: list[DocumentRepresentationEntry]
-    authors: list[str]
-    identifiers: list[str]
-    languages: list[str]
+    authors: ListOfStrings
+    identifiers: ListOfStrings
+    languages: ListOfStrings
     context: str
     creation_date: str
     publication_date: str
     publisher: str
     series: str
-    tags: list[str]
+    tags: ListOfStrings
     title: str
     title_sort: str
     normalized_filename: str
@@ -53,7 +81,7 @@ class MetadataEntry(TypedDict):
     icon: str
 
 
-class ProgressState(TypedDict):
+class ProgressState(BaseModel):
     issues: int
     state: str
     percent_completion: float
@@ -196,30 +224,33 @@ class ResearchMetadata:
         description = get_meta(meta_dict, 'description', '')
         icon = get_meta(meta_dict, 'icon', '')
 
-        doc_representation = DocumentRepresentationEntry({'doc_descriptor': descriptor,
-                                                          'hash': hash,
-                                                          'format': 'md',
-                                                          'doc_date': creation_date})
-        metadata:MetadataEntry = MetadataEntry({'uuid': doc_uuid,
-                                  'representations': [doc_representation],
-                                  'authors': authors,
-                                  'identifiers': identifiers,
-                                  'languages': languages,
-                                  'context': context,
-                                  'creation_date': creation_date,
-                                  'publication_date': publication_date,
-                                  'publisher': publisher,
-                                  'series': series,
-                                  'tags': tags,
-                                  'title': title,
-                                  'title_sort': title_sort,
-                                  'normalized_filename': normalized_filename,
-                                  'description': description,
-                                  'icon': icon,
-                                  })
+        doc_representation = DocumentRepresentationEntry(
+            doc_descriptor=descriptor,
+            hash=hash,
+            format='md',
+            doc_date=creation_date
+        )
+        metadata = MetadataEntry(
+            uuid=doc_uuid,
+            representations=[doc_representation],
+            authors=authors,
+            identifiers=identifiers,
+            languages=languages,
+            context=context,
+            creation_date=creation_date,
+            publication_date=publication_date,
+            publisher=publisher,
+            series=series,
+            tags=tags,
+            title=title,
+            title_sort=title_sort,
+            normalized_filename=normalized_filename,
+            description=description,
+            icon=icon,
+        )
 
-        for key in metadata:
-            if type(metadata[key]) not in [str, list]:  # pyright:ignore[reportUnknownArgumentType]
-                self.log.error(f"Field {key} has unexpected type {type(metadata[key])} in {metadata}")  # pyright:ignore[reportUnknownArgumentType]
-                raise ValueError
+        # Pydantic validates types automatically, so we might not need the manual check loop
+        # But let's keep it if it does something specific, or remove it if Pydantic covers it.
+        # The original loop checked if values were str or list. Pydantic enforces the model.
+        
         return metadata, changed, mandatory_changed

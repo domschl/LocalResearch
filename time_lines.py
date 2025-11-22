@@ -257,11 +257,9 @@ class TimeLines:
                         snip = snip.replace(c, " ")
                     jd_date = self.date_from_text(sample[1])
                     if jd_date is not None:
-                        meta_var:dict[str, Any] = {}  # pyright: ignore[reportExplicitAny]
-                        for k in book_metadata.keys():
-                            meta_var[k] = book_metadata[k]
-                            meta_var['position_offset'] = sample[0]
-                        event: TimeLineEvent = {'jd_event': jd_date, 'eventdata': {'Title': book_metadata['title'], 'Text_snip': snip}, 'metadata': meta_var}
+                        meta_var:dict[str, Any] = book_metadata.model_dump()
+                        meta_var['position_offset'] = sample[0]
+                        event: TimeLineEvent = {'jd_event': jd_date, 'eventdata': {'Title': book_metadata.title, 'Text_snip': snip}, 'metadata': meta_var}
                         self.tl_events.append(event)
                         n_dates += 1
                     else:
