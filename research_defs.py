@@ -2,7 +2,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, date
-from typing import TypedDict, cast, TypeVar, Any
+from typing import cast, TypeVar, Any
 import base64
 import io
 from PIL import Image
@@ -11,31 +11,31 @@ from research_tools import ResearchTools
 
 
 
-from pydantic import BaseModel, Field, BeforeValidator
+from pydantic import BaseModel, BeforeValidator
 from typing import Annotated
 
-def ensure_list(v: Any) -> list[str]:
+def ensure_list(v: Any) -> list[str]:  # pyright: ignore[reportAny, reportExplicitAny]
     if isinstance(v, str):
         return [v]
     if v is None:
         return []
     if isinstance(v, list):
         new_list = []
-        for item in v:
+        for item in v:  # pyright: ignore[reportUnknownVariableType]
             if isinstance(item, list):
                 # Flatten one level of nested lists
-                for sub_item in item:
-                    new_list.append(str(sub_item))
+                for sub_item in item:  # pyright: ignore[reportUnknownVariableType]
+                    new_list.append(str(sub_item))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
             else:
-                new_list.append(str(item))
-        return new_list
-    return [str(v)]
+                new_list.append(str(item))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+        return new_list  # pyright: ignore[reportUnknownVariableType]
+    return [str(v)]  # pyright:ignore[reportAny]
 
-def ensure_string(v: Any) -> str:
+def ensure_string(v: Any) -> str:  # pyright: ignore[reportAny, reportExplicitAny]
     if isinstance(v, dict):
         # Handle cases where a dict is passed (e.g. tags={'location': 'antarctica'})
-        return str(v)
-    return str(v)
+        return str(v)  # pyright:ignore[reportUnknownArgumentType]
+    return str(v)  # pyright:ignore[reportAny]
 
 ListOfStrings = Annotated[list[str], BeforeValidator(ensure_list)]
 StringField = Annotated[str, BeforeValidator(ensure_string)]

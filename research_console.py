@@ -394,9 +394,9 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     text = result.text
                     if text is None:
                         text = ""
-                    rows: list[list[str]] = [[str(len(search_result_list) - index), text]]
+                    rows_k: list[list[str]] = [[str(len(search_result_list) - index), text]]
                     print()
-                    _ = tf.print_table(header, rows, multi_line=True, keywords=keywords)
+                    _ = tf.print_table(header, rows_k, multi_line=True, keywords=keywords)
                 print()
             elif command == 'show':
                 ind = -1
@@ -412,11 +412,11 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     metadata = ds.get_metadata(descriptor)
                     if metadata is not None:
                         print(f"\nMetadata for {descriptor}:")
-                        for key, value in metadata.model_dump().items():
+                        for key, value in metadata.model_dump().items():  # pyright:ignore[reportAny]
                             if isinstance(value, list):
-                                print(f"{key.capitalize()}: {', '.join(str(v) for v in value)}")
-                            elif key == 'icon' and len(str(value)) > 50:
-                                print(f"{key.capitalize()}: {str(value)[:50]}...")
+                                print(f"{key.capitalize()}: {', '.join(str(v) for v in value)}")  # pyright:ignore[reportUnknownArgumentType, reportUnknownVariableType]
+                            elif key == 'icon' and len(str(value)) > 50:  # pyright:ignore[reportAny]
+                                print(f"{key.capitalize()}: {str(value)[:50]}...")  # pyright:ignore[reportAny]
                             else:
                                 print(f"{key.capitalize()}: {value}")
                         print()
@@ -440,9 +440,9 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                         log.info(f"Opening {path}...")
                         try:
                             if sys.platform == 'darwin':
-                                subprocess.run(['open', path], check=True)
+                                _ = subprocess.run(['open', path], check=True)
                             else:
-                                subprocess.run(['xdg-open', path], check=True)
+                                _ = subprocess.run(['xdg-open', path], check=True)
                         except Exception as e:
                             log.error(f"Failed to open file: {e}")
                     else:
@@ -472,7 +472,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     if metadata and metadata.languages:
                         # Use the first language found
                         langs = metadata.languages
-                        if isinstance(langs, list) and len(langs) > 0:
+                        if isinstance(langs, list) and len(langs) > 0:  # pyright: ignore[reportUnnecessaryIsInstance]
                             language = langs[0]
                         elif isinstance(langs, str):
                             language = langs
@@ -495,7 +495,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     
                     # Extract metadata
                     authors = metadata.authors if metadata else []
-                    author = ", ".join(authors) if isinstance(authors, list) else str(authors)
+                    author = ", ".join(authors) if isinstance(authors, list) else str(authors)  # pyright: ignore[reportUnnecessaryIsInstance]
                     icon_data = metadata.icon if metadata else None
 
                     success = audiobook_gen.generate_audiobook(

@@ -6,7 +6,7 @@ import json
 import hashlib
 import subprocess
 
-# import pymupdf  # pyright: ignore[reportMissingTypeStubs]
+# import pymupdf
 pymupdf = None
 import pymupdf.layout  # pyright: ignore[reportUnusedImport, reportMissingTypeStubs]
 import pymupdf4llm  # pyright: ignore[reportMissingTypeStubs]  # XXX currently locked to 0.19, otherwise export returns empty docs, requires investigation!
@@ -416,11 +416,11 @@ class DocumentStore:
         if os.path.exists(self.text_document_library_file):
             start_time = time.time()
             with open(self.text_document_library_file, "r") as f:
-                data = json.load(f)
+                data = json.load(f)  # pyright:ignore[reportAny]
                 self.text_library = {}
-                for key, value in data.items():
+                for key, value in data.items():  # pyright:ignore[reportAny]
                     try:
-                        self.text_library[key] = TextLibraryEntry(**value)
+                        self.text_library[key] = TextLibraryEntry(**value)  # pyright:ignore[reportAny]
                     except Exception as e:
                         self.log.error(f"Failed to load text library entry for {key}: {e}")
             if len(self.text_library.keys()) > 0:
@@ -470,11 +470,11 @@ class DocumentStore:
         self.log.info("Loading metadata_library data...")
         if os.path.exists(self.metadata_library_file):
             with open(self.metadata_library_file, "r") as f:
-                data = json.load(f)
+                data = json.load(f)  # pyright:ignore[reportAny]
                 self.metadata_library = {}
-                for key, value in data.items():
+                for key, value in data.items():  # pyright:ignore[reportAny]
                     try:
-                        self.metadata_library[key] = MetadataEntry(**value)
+                        self.metadata_library[key] = MetadataEntry(**value)  # pyright:ignore[reportAny]
                     except Exception as e:
                         self.log.error(f"Failed to load metadata for {key}: {e}")
         else:
@@ -777,7 +777,7 @@ class DocumentStore:
                     continue
 
             # Construct a searchable text blob from metadata
-            searchable_text_parts = []
+            searchable_text_parts:list[str] = []
             searchable_text_parts.append(metadata.title)
             searchable_text_parts.extend([str(a) for a in metadata.authors])
             searchable_text_parts.extend([str(t) for t in metadata.tags])

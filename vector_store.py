@@ -61,9 +61,6 @@ class EmbeddingModel(TypedDict):
     enabled: bool
 
 
-
-
-
 class VectorStore:
     def __init__(self, storage_path:str, config_path:str):
         self.current_version: int = 6
@@ -624,7 +621,7 @@ class VectorStore:
                 if time.time() - last_status > 1 or current_chunks == new_chunks:
                     state = f"Indexing: {name[-80:]:80s}, eta={eta}"
                     if progress_callback is not None:
-                        progress_state = ProgressState({'issues': len(errors), 'state': state, 'percent_completion': perc, 'vars': {}, 'finished': False})
+                        progress_state = ProgressState(issues=len(errors), state=state, percent_completion=perc, vars={}, finished=False)
                         progress_callback(progress_state)
                     last_status = time.time()
                 sub_chunks = chunks[ind:ind+chunk_batch_size]

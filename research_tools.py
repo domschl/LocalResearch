@@ -14,7 +14,7 @@ class DocumentTable(TypedDict):
 
 class ResearchTools:
     def __init__(self):
-        self.log = logging.Logger("ResearchTools")
+        self.log:logging.Logger = logging.Logger("ResearchTools")
     def _note_get_file_creation_date_from_git(self, root_folder:str, filepath: str) -> datetime | None:
         try:
             creation_date = subprocess.check_output(
