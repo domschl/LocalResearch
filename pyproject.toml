@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = ">=3.13"  # umap bottle-neck
 dependencies = [
     "einops>=0.8.1",
-    "fastapi>=0.121.3",
     "huggingface-hub[cli]>=0.34.4",
     "indralib>=0.4.3",
     "pillow>=12.0.0",
