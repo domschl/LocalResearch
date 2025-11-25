@@ -579,10 +579,10 @@ class VectorStore:
         retries: int = 0
         for hash in text_library:
             filename = self.get_embedding_filename(hash)
-            name = text_library[hash].descriptor
+            name = text_library[hash]['descriptor']
             if os.path.exists(filename):
                 continue
-            new_chunks += VectorStore.get_chunk_count(text_library[hash].text, self.config['chunk_size'], self.config['chunk_overlap'])
+            new_chunks += VectorStore.get_chunk_count(text_library[hash]['text'], self.config['chunk_size'], self.config['chunk_overlap'])
 
         if new_chunks == 0:
             self.log.info("Index already complete, no new documents found")
@@ -596,12 +596,12 @@ class VectorStore:
             if abort_check_callback is not None and abort_check_callback() is True:
                 return errors
             filename = self.get_embedding_filename(hash)
-            name = text_library[hash].descriptor
+            name = text_library[hash]['descriptor']
             if os.path.exists(filename):
                 continue
             # self.save_embeddings_tensor(text_library[hash].text, filename)
             batch_size = self.config['batch_base_multiplier'] * self.model['batch_multiplier']
-            chunks: list[str] = VectorStore.get_chunks(text_library[hash].text, self.config['chunk_size'], self.config['chunk_overlap'])
+            chunks: list[str] = VectorStore.get_chunks(text_library[hash]['text'], self.config['chunk_size'], self.config['chunk_overlap'])
             chunk_batch_size = self.config['chunk_batch_size'] * self.model['batch_multiplier']
             embeddings_tensor: torch.Tensor | None = None
             for ind in range(0, len(chunks), chunk_batch_size):
@@ -745,15 +745,15 @@ class VectorStore:
                     text=None, 
                     significance=None
                 ))
-                search_results = sorted(search_results, key=lambda res: res.cosine)
+                search_results = sorted(search_results, key=lambda res: res['cosine'])
                 search_results = search_results[-max_results:]
-                best_min_cosine = search_results[0].cosine
+                best_min_cosine = search_results[0]['cosine']
         search_time = time.time() - start_time
         key = f"{self.config['embeddings_model_name']}-{str(self.device)}"
         self.perf[key] = search_time
         highlight_start = time.time()
         for index, result in enumerate(search_results):
-            result_text = self.get_chunk_context_aware(result.entry.text, result.chunk_index, self.config['chunk_size'], self.config['chunk_overlap'])
+            result_text = self.get_chunk_context_aware(result['entry']['text'], result['chunk_index'], self.config['chunk_size'], self.config['chunk_overlap'])
             replacers = [("\n", " "), ("\r", " "), ("\b", " "), ("\t", " "), ("  ", " ")]
             zero_width = [("\u200b", ""), ("\u200c", ""), ("\u200d", ""), ("\u00ad", ""), ("\ufeff", "")] 
             replacers += zero_width
@@ -763,7 +763,7 @@ class VectorStore:
                 for rep in replacers:
                     result_text = result_text.replace(rep[0], rep[1])
 
-            search_results[index].text = result_text
+            search_results[index]['text'] = result_text
 
             if highlight is True:
                 significance: list[float] = [0.0] * len(result_text)
@@ -772,8 +772,8 @@ class VectorStore:
                     self.log.error("Dampending must not be zero!")
                     highlight_dampening = 1.0
                 for ind in range(len(result_text)):
-                    significance[ind] = stepped_significance[ind // context_steps] * result.cosine / highlight_dampening
-                search_results[index].significance = significance
+                    significance[ind] = stepped_significance[ind // context_steps] * result['cosine'] / highlight_dampening
+                search_results[index]['significance'] = significance
         
         if len(search_results) > 0:
             highlight_time = (time.time() - highlight_start) / len(search_results)
@@ -811,8 +811,8 @@ class VectorStore:
             return {"error": f"UMAP reduction failed: {str(e)}"}
 
         points:list[list[float]] = cast(list[list[float]], reduced_embeddings_np.tolist())
-        texts = [text_library[hash].descriptor+f"[{chunk_id}]" for hash, chunk_id in hashes]
-        doc_ids = [text_library[hash].descriptor for hash, _chunk_id in hashes]
+        texts = [text_library[hash]['descriptor']+f"[{chunk_id}]" for hash, chunk_id in hashes]
+        doc_ids = [text_library[hash]['descriptor'] for hash, _chunk_id in hashes]
 
         unique_doc_ids = list(set(doc_ids))
 
@@ -823,7 +823,7 @@ class VectorStore:
             rgb_float = colorsys.hls_to_rgb(hue, 0.5, 0.8) 
             color_map[doc_id_val] = [int(c * 255) for c in rgb_float]
 
-        colors: list[list[int]] = [color_map.get(text_library[hash].descriptor, [128,128,128]) for hash, _chunk_id in hashes]
+        colors: list[list[int]] = [color_map.get(text_library[hash]['descriptor'], [128,128,128]) for hash, _chunk_id in hashes]
         sizes = [5.0] * len(points)
         self.log.info("UMAP finished")
 

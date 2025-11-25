@@ -5,7 +5,7 @@ import subprocess
 import shutil
 import base64
 import tempfile
-from typing import TypedDict
+from typing import TypedDict, cast
 
 class PiperConfig(TypedDict):
     voices: dict[str, str]
@@ -14,16 +14,17 @@ class PiperConfig(TypedDict):
 
 class AudiobookGenerator:
     def __init__(self, config_path: str):
-        self.log = logging.getLogger("AudiobookGenerator")
-        self.config_path = config_path
-        self.config_file = os.path.join(config_path, "piper_config.json")
+        self.log:logging.Logger = logging.getLogger("AudiobookGenerator")
+        self.config_path:str = config_path
+        self.config_file:str = os.path.join(config_path, "piper_config.json")
         self.config: PiperConfig = self.load_config()
 
     def load_config(self) -> PiperConfig:
         if os.path.exists(self.config_file):
             try:
                 with open(self.config_file, "r") as f:
-                    return json.load(f)
+                    pc: PiperConfig = cast(PiperConfig, json.load(f))
+                    return pc
             except Exception as e:
                 self.log.error(f"Failed to load config: {e}, using defaults")
         
@@ -114,7 +115,7 @@ class AudiobookGenerator:
                     # Create temp file for icon
                     fd, temp_icon_path = tempfile.mkstemp(suffix=".png")
                     with os.fdopen(fd, "wb") as f:
-                        f.write(base64.b64decode(icon_data))
+                        _ = f.write(base64.b64decode(icon_data))
                     
                     ffmpeg_cmd.extend(["-i", temp_icon_path])
                     ffmpeg_cmd.extend(["-map", "0:a", "-map", "1:v"])
@@ -155,15 +156,15 @@ class AudiobookGenerator:
 
             # Write text to piper's stdin
             if piper_proc.stdin:
-                piper_proc.stdin.write(text.encode('utf-8'))
+                _ = piper_proc.stdin.write(text.encode('utf-8'))
                 piper_proc.stdin.close()
 
             # Wait for completion
             if piper_proc.stdout:
                 piper_proc.stdout.close()
             
-            ffmpeg_proc.wait()
-            piper_proc.wait()
+            _ = ffmpeg_proc.wait()
+            _ =  piper_proc.wait()
 
             if piper_proc.returncode == 0 and ffmpeg_proc.returncode == 0:
                 self.log.info(f"Audiobook saved to {output_path}")

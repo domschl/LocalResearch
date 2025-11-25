@@ -483,9 +483,8 @@ class DocumentStore:
     def save_text_library(self):
         temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.text_document_library_file))
         try:
-            with os.fdopen(temp_fd, 'w') as temp_file:            
-                data = {k: v.model_dump() for k, v in self.text_library.items()}
-                json.dump(data, temp_file)
+            with os.fdopen(temp_fd, 'w') as temp_file:
+                json.dump(self.text_library, temp_file)
             os.replace(temp_path, self.text_document_library_file)               
         except Exception as e:
             self.log.error("Library update was interrupted, atomic file update cancelled.")
@@ -508,8 +507,7 @@ class DocumentStore:
         try:
             with os.fdopen(temp_fd, 'w') as temp_file:            
                 # Convert Pydantic models to dicts for JSON serialization
-                data = {k: v.model_dump() for k, v in self.metadata_library.items()}
-                json.dump(data, temp_file)
+                json.dump(self.metadata_library, temp_file)
             os.replace(temp_path, self.metadata_library_file)
             self.log.info(f"Metadata library saved to {self.metadata_library_file}")
         except Exception as e:
@@ -683,8 +681,8 @@ class DocumentStore:
                             self.metadata_library[descriptor] = metadata
                             self.log.info(f"New metadata entry {descriptor}")
                         else:
-                            for doc_repr in self.metadata_library[descriptor].representations:
-                                if doc_repr.doc_descriptor == descriptor and doc_repr.hash != sha256_hash:
+                            for doc_repr in self.metadata_library[descriptor]['representations']:
+                                if doc_repr['doc_descriptor'] == descriptor and doc_repr['hash'] != sha256_hash:
                                     self.log.warning(f"{descriptor} has changed!")
                                     if source['type'] == 'md_notes':
                                         metadata, md_content, meta_changed, mandatory_changed = self.md_tools[source_name].parse_markdown(doc_path, sha256_hash, descriptor, text)
@@ -702,7 +700,7 @@ class DocumentStore:
                                         metadata = self.metadata_library[descriptor]
                                         _header, md_content = self.md_tools[source_name].split_header_content(text)
                         if md_content is not None and metadata is not None:
-                            uuid:str = metadata.uuid
+                            uuid:str = metadata['uuid']
                             self.tables += self.md_tools[source_name].get_tables(md_content, doc_path, uuid)
                         else:
                             if source['type'] == 'md_notes':
@@ -733,9 +731,9 @@ class DocumentStore:
                                     if ext in ['txt', 'pdf', 'md']:
                                         f_path = os.path.join(root, f)
                                         f_hash = self.get_sha256(f_path)
-                                        for rep in metadata.representations:
-                                            if rep.format == ext and rep.hash == "":
-                                                rep.hash = f_hash
+                                        for rep in metadata['representations']:
+                                            if rep['format'] == ext and rep['hash'] == "":
+                                                rep['hash'] = f_hash
 
                                 if main_descriptor not in self.metadata_library:
                                     self.metadata_library[main_descriptor] = metadata
@@ -778,20 +776,20 @@ class DocumentStore:
 
             # Construct a searchable text blob from metadata
             searchable_text_parts:list[str] = []
-            searchable_text_parts.append(metadata.title)
-            searchable_text_parts.extend([str(a) for a in metadata.authors])
-            searchable_text_parts.extend([str(t) for t in metadata.tags])
-            searchable_text_parts.append(metadata.description)
-            searchable_text_parts.append(metadata.context)
+            searchable_text_parts.append(metadata['title'])
+            searchable_text_parts.extend([str(a) for a in metadata['authors']])
+            searchable_text_parts.extend([str(t) for t in metadata['tags']])
+            searchable_text_parts.append(metadata['description'])
+            searchable_text_parts.append(metadata['context'])
             
             searchable_text = " ".join(searchable_text_parts)
             
             if SearchTools.match(searchable_text, keywords):
                 doc_hash = ""
-                if metadata.representations:
-                    for rep in metadata.representations:
-                        if rep.hash:
-                            doc_hash = rep.hash
+                if metadata['representations']:
+                    for rep in metadata['representations']:
+                        if rep['hash']:
+                            doc_hash = rep['hash']
                             break
                 
                 text_entry = None
@@ -800,14 +798,13 @@ class DocumentStore:
 
                 if text_entry:
                      # Format a text summary for display
-                    display_text = f"Title: {metadata.title}\n"
-                    if metadata.authors:
-                        display_text += f"Authors: {', '.join([str(a) for a in metadata.authors])}\n"
-                    if metadata.tags:
-                        display_text += f"Tags: {', '.join([str(t) for t in metadata.tags])}\n"
-                    if metadata.description:
-                        display_text += f"Description: {metadata.description[:200]}...\n"
-
+                    display_text = f"Title: {metadata['title']}\n"
+                    if metadata['authors']:
+                        display_text += f"Authors: {', '.join([str(a) for a in metadata['authors']])}\n"
+                    if metadata['tags']:
+                        display_text += f"Tags: {', '.join([str(t) for t in metadata['tags']])}\n"
+                    if metadata['description']:
+                        display_text += f"Description: {metadata['description'][:200]}...\n"
                     results.append(SearchResultEntry(
                          cosine=1.0, 
                          hash=doc_hash, 
@@ -866,9 +863,9 @@ class DocumentStore:
                     ext_with_dot = os.path.splitext(filename)[1]
                     ext = ext_with_dot[1:].lower() if ext_with_dot else ""
 
-                    if sha256_hash in self.text_library and descriptor != self.text_library[sha256_hash].descriptor:
-                        self.log.warning(f"File {full_path} is a duplicate of {self.text_library[sha256_hash].descriptor}, ignoring this copy.")
-                        errors.append(f"File {full_path} is a duplicate of {self.text_library[sha256_hash].descriptor}, ignoring this copy.")
+                    if sha256_hash in self.text_library and descriptor != self.text_library[sha256_hash]['descriptor']:
+                        self.log.warning(f"File {full_path} is a duplicate of {self.text_library[sha256_hash]['descriptor']}, ignoring this copy.")
+                        errors.append(f"File {full_path} is a duplicate of {self.text_library[sha256_hash]['descriptor']}, ignoring this copy.")
                         duplicate_count += 1
                         continue
 
@@ -948,8 +945,8 @@ class DocumentStore:
             self.log.warning(f"{len(existing_hashes)} debris entries")
             for debris in existing_hashes:
                 if debris in self.text_library:
-                    self.log.info(f"Deleting text_library entry {self.text_library[debris].descriptor}")
-                    errors.append(f"Deleting debris text_library entry {self.text_library[debris].descriptor}")
+                    self.log.info(f"Deleting text_library entry {self.text_library[debris]['descriptor']}")
+                    errors.append(f"Deleting debris text_library entry {self.text_library[debris]['descriptor']}")
                     del self.text_library[debris]
                     text_library_changed = True
                 if debris in self.pdf_index:
@@ -1045,10 +1042,10 @@ class DocumentStore:
             cnt = 0
             source_ext_cnts[source_name] = {}
             for hsh in self.text_library:
-                if self.text_library[hsh].source_name == source_name:
+                if self.text_library[hsh]['source_name'] == source_name:
                     cnt += 1
                     sum_cnt += 1
-                    ext = os.path.splitext(self.text_library[hsh].descriptor.lower())[1]
+                    ext = os.path.splitext(self.text_library[hsh]['descriptor'].lower())[1]
                     if ext and len(ext) > 0:
                         ext = ext[1:]
                     if ext and ext in exts:

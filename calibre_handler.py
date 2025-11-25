@@ -58,8 +58,8 @@ class CalibreTools:
 
         
     def get_human_filename(self, entry:MetadataEntry, use_series_as_subdir:bool = True) -> str:
-        title = entry.title
-        short_title = entry.title_sort
+        title = entry['title']
+        short_title = entry['title_sort']
         # If title ends with roman or arabic numerals, store them as postfix:
         endfix = ""
         efs = title.split(" ")
@@ -103,10 +103,10 @@ class CalibreTools:
         if endfix != "":
             if endfix not in short_title:
                 short_title = f"{short_title} {endfix}"
-        author = CalibreTools._clean_filename(entry.authors[0])
+        author = CalibreTools._clean_filename(entry['authors'][0])
         human_filename = f"{short_title.strip()} - {author}"
         if use_series_as_subdir is True:
-            human_filename = f"{entry.series}/{human_filename}"
+            human_filename = f"{entry['series']}/{human_filename}"
         return human_filename
         
     def parse_calibre_metadata(self, filename:str, descriptor:str, existing_metadata: MetadataEntry | None = None) -> MetadataEntry|None:
@@ -243,8 +243,8 @@ class CalibreTools:
             identifiers.append(f"calibre_id/{calibre_id}")
         # Process cover image
         image_str = ""
-        if existing_metadata and existing_metadata.icon:
-            image_str = existing_metadata.icon
+        if existing_metadata and existing_metadata['icon']:
+            image_str = existing_metadata['icon']
         
         if not image_str:
             cover_path = os.path.join(os.path.dirname(filename), "cover.jpg")

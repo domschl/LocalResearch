@@ -8,7 +8,6 @@ from typing import cast
 import subprocess
 from text_format import TextFormat
 
-
 print("\rStarting...\r", end="", flush=True)
 
 from research_defs import get_files_of_extensions, ProgressState, SearchResultEntry
@@ -16,8 +15,6 @@ from vector_store import VectorStore
 from document_store import DocumentStore
 from text_format import TextParse
 from search_tools import SearchTools
-
-
 from audiobook_handler import AudiobookGenerator
 
 def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
@@ -73,11 +70,11 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     blnk = "\r" + ' ' * (cols - 1)
                     print(blnk, end="")
                     try:
-                        progress = tf.progress_bar_string(ps.percent_completion, 8)
+                        progress = tf.progress_bar_string(ps['percent_completion'], 8)
                     except:
                         progress = ' ' * 10
-                    print(f"\r{progress} {ps.state}", end="", flush=True)
-                    if ps.finished is True:
+                    print(f"\r{progress} {ps['state']}", end="", flush=True)
+                    if ps['finished'] is True:
                         print()
                     
                 errors = ds.sync_texts(force, retry, progress_sync, None)
@@ -317,9 +314,9 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     cols, _= os.get_terminal_size()
                     blnk = "\r" + ' ' * (cols - 1)
                     print(blnk, end="")
-                    progress = tf.progress_bar_string(ps.percent_completion, 8)
-                    print(f"\r{progress} {ps.state}", end="", flush=True)
-                    if ps.finished is True:
+                    progress = tf.progress_bar_string(ps['percent_completion'], 8)
+                    print(f"\r{progress} {ps['state']}", end="", flush=True)
+                    if ps['finished'] is True:
                         print()
                     
                 if 'all' in arguments:
@@ -367,13 +364,13 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     keywords = []
                 
                 for index, result in enumerate(search_result_list):
-                    header = [f"{result.cosine:.3f}", result.entry.descriptor]
-                    text = result.text
+                    header = [f"{result['cosine']:.3f}", result['entry']['descriptor']]
+                    text = result['text']
                     if text is None:
                         text = ""
                     rows: list[list[str]] = [[str(len(search_result_list) - index), text]]
                     print()
-                    _ = tf.print_table(header, rows, multi_line=True, keywords=keywords, significance=[[None, result.significance]])
+                    _ = tf.print_table(header, rows, multi_line=True, keywords=keywords, significance=[[None, result['significance']]])
                 print()
             elif command == 'ksearch':
                 search_string = ' '.join(arguments)
@@ -390,8 +387,8 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     keywords = SearchTools.extract_highlight_terms(keywords)
 
                 for index, result in reversed(list(enumerate(search_result_list))):
-                    header = [f"{result.cosine:.1f}", result.entry.descriptor]
-                    text = result.text
+                    header = [f"{result['cosine']:.1f}", result['entry']['descriptor']]
+                    text = result['text']
                     if text is None:
                         text = ""
                     rows_k: list[list[str]] = [[str(len(search_result_list) - index), text]]
@@ -408,22 +405,15 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     log.error(f"Invalid ID {arguments}, integer required, use 'search' or 'ksearch' first")
                 else:
                     result = previous_search_results[len(previous_search_results) - ind]
-                    descriptor = result.entry.descriptor
+                    descriptor = result['entry']['descriptor']
                     metadata = ds.get_metadata(descriptor)
                     if metadata is not None:
                         print(f"\nMetadata for {descriptor}:")
-                        for key, value in metadata.model_dump().items():  # pyright:ignore[reportAny]
-                            if isinstance(value, list):
-                                print(f"{key.capitalize()}: {', '.join(str(v) for v in value)}")  # pyright:ignore[reportUnknownArgumentType, reportUnknownVariableType]
-                            elif key == 'icon' and len(str(value)) > 50:  # pyright:ignore[reportAny]
-                                print(f"{key.capitalize()}: {str(value)[:50]}...")  # pyright:ignore[reportAny]
-                            else:
-                                print(f"{key.capitalize()}: {value}")
+                        for key in metadata:
+                            print(f"{key}: {metadata[key][:50]}")
                         print()
                     else:
                         log.error(f"Metadata not found for {descriptor}")
-                            
-
             elif command == 'open':
                 ind = -1
                 try:
@@ -434,7 +424,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     log.error(f"Invalid ID {arguments}, integer required, use 'search' or 'ksearch' first")
                 else:
                     result = previous_search_results[len(previous_search_results) - ind]
-                    descriptor = result.entry.descriptor
+                    descriptor = result['entry']['descriptor']
                     path = ds.get_path_from_descriptor(descriptor)
                     if os.path.exists(path):
                         log.info(f"Opening {path}...")
@@ -458,10 +448,10 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     log.error(f"Invalid ID {arguments}, integer required, use 'search' or 'ksearch' first")
                 else:
                     result = previous_search_results[len(previous_search_results) - ind]
-                    descriptor = result.entry.descriptor
+                    descriptor = result['entry']['descriptor']
                     
                     # Get text content
-                    text_content = result.entry.text
+                    text_content = result['entry']['text']
                     if not text_content:
                         log.error("No text content found for this document")
                         continue
@@ -469,19 +459,16 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     # Get language from metadata
                     language = 'en' # Default
                     metadata = ds.get_metadata(descriptor)
-                    if metadata and metadata.languages:
+                    if metadata and metadata['languages']:
                         # Use the first language found
-                        langs = metadata.languages
-                        if isinstance(langs, list) and len(langs) > 0:  # pyright: ignore[reportUnnecessaryIsInstance]
-                            language = langs[0]
-                        elif isinstance(langs, str):
-                            language = langs
-                    
+                        langs = metadata['languages']
+                        language = langs[0]
+                        
                     # Generate output filename
                     # Use title if available, otherwise filename
                     title = "audiobook"
-                    if metadata and metadata.title:
-                        title = metadata.title
+                    if metadata and metadata['title']:
+                        title = metadata['title']
                     else:
                         title = os.path.splitext(os.path.basename(descriptor))[0]
                     
@@ -494,9 +481,9 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     end_token = key_vals.get('end')
                     
                     # Extract metadata
-                    authors = metadata.authors if metadata else []
-                    author = ", ".join(authors) if isinstance(authors, list) else str(authors)  # pyright: ignore[reportUnnecessaryIsInstance]
-                    icon_data = metadata.icon if metadata else None
+                    authors = metadata['authors'] if metadata else []
+                    author = ", ".join(authors)
+                    icon_data = metadata['icon'] if metadata else None
 
                     success = audiobook_gen.generate_audiobook(
                         text=text_content, 
@@ -518,9 +505,9 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     print("No previous search results available")
                 else:
                     for index, result in enumerate(previous_search_results):
-                        print(f"Id: {len(previous_search_results)-index}. {result.entry.descriptor}")
-                        print(f"Score: {result.cosine:3.3f}")
-                        print(result.text)
+                        print(f"Id: {len(previous_search_results)-index}. {result['entry']['descriptor']}")
+                        print(f"Score: {result['cosine']:3.3f}")
+                        print(result['text'])
                         print()                                     
             elif command == "timeline":
                 domains = key_vals.get('domains', None)

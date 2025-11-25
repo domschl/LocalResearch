@@ -2,19 +2,14 @@ import logging
 import os
 import uuid
 from datetime import datetime, date
-from typing import cast, TypeVar, Any
+from typing import TypedDict, cast, TypeVar, Any
 import base64
 import io
 from PIL import Image
 
 from research_tools import ResearchTools
 
-
-
-from pydantic import BaseModel, BeforeValidator
-from typing import Annotated
-
-def ensure_list(v: Any) -> list[str]:  # pyright: ignore[reportAny, reportExplicitAny]
+def old_ensure_list(v: Any) -> list[str]:  # pyright: ignore[reportAny, reportExplicitAny]
     if isinstance(v, str):
         return [v]
     if v is None:
@@ -31,49 +26,47 @@ def ensure_list(v: Any) -> list[str]:  # pyright: ignore[reportAny, reportExplic
         return new_list  # pyright: ignore[reportUnknownVariableType]
     return [str(v)]  # pyright:ignore[reportAny]
 
-def ensure_string(v: Any) -> str:  # pyright: ignore[reportAny, reportExplicitAny]
+def old_ensure_string(v: Any) -> str:  # pyright: ignore[reportAny, reportExplicitAny]
     if isinstance(v, dict):
         # Handle cases where a dict is passed (e.g. tags={'location': 'antarctica'})
         return str(v)  # pyright:ignore[reportUnknownArgumentType]
     return str(v)  # pyright:ignore[reportAny]
 
-ListOfStrings = Annotated[list[str], BeforeValidator(ensure_list)]
-StringField = Annotated[str, BeforeValidator(ensure_string)]
 
-class TextLibraryEntry(BaseModel):
+class TextLibraryEntry(TypedDict):
     source_name: str
     descriptor: str
     text: str
 
 
-class SearchResultEntry(BaseModel):
+class SearchResultEntry(TypedDict):
     cosine: float
     hash: str
     chunk_index: int
     entry: TextLibraryEntry
-    text: str | None = None
-    significance: list[float] | None = None
+    text: str | None
+    significance: list[float] | None
 
 
-class DocumentRepresentationEntry(BaseModel):
+class DocumentRepresentationEntry(TypedDict):
     doc_descriptor: str
     hash: str
     format: str
     doc_date: str
 
     
-class MetadataEntry(BaseModel):
+class MetadataEntry(TypedDict):
     uuid: str
     representations: list[DocumentRepresentationEntry]
-    authors: ListOfStrings
-    identifiers: ListOfStrings
-    languages: ListOfStrings
+    authors: list[str]
+    identifiers: list[str]
+    languages: list[str]
     context: str
     creation_date: str
     publication_date: str
     publisher: str
     series: str
-    tags: ListOfStrings
+    tags: list[str]
     title: str
     title_sort: str
     normalized_filename: str
@@ -81,7 +74,7 @@ class MetadataEntry(BaseModel):
     icon: str
 
 
-class ProgressState(BaseModel):
+class ProgressState(TypedDict):
     issues: int
     state: str
     percent_completion: float
@@ -248,9 +241,5 @@ class ResearchMetadata:
             description=description,
             icon=icon,
         )
-
-        # Pydantic validates types automatically, so we might not need the manual check loop
-        # But let's keep it if it does something specific, or remove it if Pydantic covers it.
-        # The original loop checked if values were str or list. Pydantic enforces the model.
         
         return metadata, changed, mandatory_changed

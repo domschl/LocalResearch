@@ -10,11 +10,13 @@ from research_defs import MetadataEntry, TextLibraryEntry
 from research_tools import DocumentTable
 from search_tools import SearchTools
 
+
 class TimeLineEvent(TypedDict):
     jd_event: tuple[float, float | None] | tuple[float]
     eventdata: dict[str, Any]  # pyright: ignore[reportExplicitAny]
     metadata: dict[str, Any]   # MetadataEntry  # pyright: ignore[reportExplicitAny]
 
+    
 class TimeLines:
     def __init__(self):
         self.log: logging.Logger = logging.getLogger("IndraTools")
@@ -239,11 +241,11 @@ class TimeLines:
         n_books = 0
         for entry_hash in text_lib_entries:
             text_lib_entry = text_lib_entries[entry_hash]
-            if 'calibre' not in text_lib_entry.source_name.lower():
+            if 'calibre' not in text_lib_entry['source_name'].lower():
                 continue
             book_metadata = metadata_lib[entry_hash]
             n_books += 1
-            text = text_lib_entry.text
+            text = text_lib_entry['text']
             # Find all occurences of date_regex in text:
             dates = [(match.start(), match.group()) for match in re.finditer(date_regex, text)]
             # self.text_lib[book_path]['dates'] = dates
@@ -257,9 +259,12 @@ class TimeLines:
                         snip = snip.replace(c, " ")
                     jd_date = self.date_from_text(sample[1])
                     if jd_date is not None:
-                        meta_var:dict[str, Any] = book_metadata.model_dump()  # pyright: ignore[reportExplicitAny]
+                        
+                        meta_var:dict[str, Any] = {} # pyright: ignore[reportExplicitAny]
+                        for key in book_metadata:
+                            meta_var[key] = book_metadata[key]
                         meta_var['position_offset'] = sample[0]
-                        event: TimeLineEvent = {'jd_event': jd_date, 'eventdata': {'Title': book_metadata.title, 'Text_snip': snip}, 'metadata': meta_var}
+                        event: TimeLineEvent = {'jd_event': jd_date, 'eventdata': {'Title': book_metadata['title'], 'Text_snip': snip}, 'metadata': meta_var}
                         self.tl_events.append(event)
                         n_dates += 1
                     else:

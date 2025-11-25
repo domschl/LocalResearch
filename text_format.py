@@ -3,7 +3,7 @@ import os
 from dataclasses import dataclass
 from copy import copy
 from enum import Enum
-#from typing import TypedDict
+# from typing import TypedDict
 
 @dataclass
 class Color:
