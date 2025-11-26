@@ -806,6 +806,9 @@ class VectorStore:
             search_results[index]['text'] = result_text
 
             if highlight is True:
+                if progress_callback is not None:
+                    state = f"Highlighting: {search_results[index]['cosine']:3.3f}: {search_results[index]['entry']['descriptor']}"
+                    progress_callback(ProgressState(issues=0, state=state, percent_completion=cur_cnt/all_cnt*(1.0-search_vs_hl)+search_vs_hl, vars={}, finished=False))
                 significance: list[float] = [0.0] * len(result_text)
                 stepped_significance: list[float] = self.get_significance(result_text, search_tensor, context_length, context_steps, highlight_cutoff)
                 if highlight_dampening == 0.0:
@@ -815,9 +818,6 @@ class VectorStore:
                     significance[ind] = stepped_significance[ind // context_steps] * result['cosine'] / highlight_dampening
                 search_results[index]['significance'] = significance
             cur_cnt += 1
-            if progress_callback is not None:
-                state = f"Highlighting: {search_results[index]['cosine']:3.3f}: {search_results[index]['entry']['descriptor']}"
-                progress_callback(ProgressState(issues=0, state=state, percent_completion=cur_cnt/all_cnt*(1.0-search_vs_hl)+search_vs_hl, vars={}, finished=False))
         
         if len(search_results) > 0:
             highlight_time = (time.time() - highlight_start) / len(search_results)
