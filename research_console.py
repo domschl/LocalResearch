@@ -359,9 +359,14 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                         count = int(key_vals['max_results'])
                     except ValueError:
                         log.error(f"Invalid integer max_results={key_vals['max_results']}, keeping default {count}")
+
+                def search_state(ps:ProgressState):
+                    compl = tf.progress_bar_string(ps['percent_completion'], 8)
+                    state = f"{ps['state'][:80]:80s}"
+                    print(f"{compl} {state}", end="\r", flush=True)
                 search_result_list = vs.search(search_string, ds.text_library, count,
                                                highlight, cutoff, damp,
-                                               context_length, context_steps)
+                                               context_length, context_steps, search_state)
                 previous_search_results = search_result_list
                 keywords = tp.parse(search_string)
                 if keywords is None:

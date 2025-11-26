@@ -739,19 +739,27 @@ class VectorStore:
         return cosines
 
     def search(self, search_text:str, text_library:dict[str,TextLibraryEntry], max_results:int=10, highlight:bool=False,
-               highlight_cutoff:float=0.0, highlight_dampening:float=1.0, context_length:int=16, context_steps:int=4) -> list[SearchResultEntry]:
+               highlight_cutoff:float=0.0, highlight_dampening:float=1.0, context_length:int=16, context_steps:int=4,
+               progress_callback:Callable[[ProgressState], None ]|None=None, abort_check_callback:Callable[[], bool]|None=None) -> list[SearchResultEntry]:
         self.load_model()
         if self.model is None or self.engine is None:
             self.log.error("Failed to load model, cannot index!")
             return []
-        start_time = time.time()
         search_results: list[SearchResultEntry] = []
         device = torch.device(self.resolve_device())
         search_tensor = cast(torch.Tensor, self.engine.encode_query(search_text, device=str(self.device), convert_to_tensor=True, show_progress_bar=False, normalize_embeddings=True))  # pyright:ignore[reportUnknownMemberType]
         path = self.model_embedding_path(self.model['model_name'])
         tensor_file_list = get_files_of_extensions(path, ['pt'])
+        cur_cnt = 0
+        all_cnt = len(tensor_file_list)
+        search_vs_hl = 0.8
+            
+        start_time = time.time()
         best_min_cosine: float | None = None
         for tensor_file in tensor_file_list:
+            if abort_check_callback is not None:
+                if abort_check_callback() is True:
+                    break
             tensor_path = os.path.join(path, tensor_file)
             hash = os.path.splitext(tensor_file)[0]
             tensor:torch.Tensor = cast(torch.Tensor, torch.load(tensor_path, map_location=device))
@@ -771,11 +779,20 @@ class VectorStore:
                 search_results = sorted(search_results, key=lambda res: res['cosine'])
                 search_results = search_results[-max_results:]
                 best_min_cosine = search_results[0]['cosine']
+            cur_cnt += 1
+            if progress_callback is not None and cur_cnt % 100 == 0:
+                state = f"Best result: {search_results[-1]['cosine']:3.3f}: {search_results[-1]['entry']['descriptor']}"
+                progress_callback(ProgressState(issues=0, state=state, percent_completion=cur_cnt/all_cnt*search_vs_hl, vars={}, finished=False))
         search_time = time.time() - start_time
         key = f"{self.config['embeddings_model_name']}-{str(self.device)}"
         self.perf[key] = search_time
         highlight_start = time.time()
+        all_cnt = len(search_results)
+        cur_cnt = 0
         for index, result in enumerate(search_results):
+            if abort_check_callback is not None:
+                if abort_check_callback() is True:
+                    break
             result_text = self.get_chunk_context_aware(result['entry']['text'], result['chunk_index'], self.config['chunk_size'], self.config['chunk_overlap'])
             replacers = [("\n", " "), ("\r", " "), ("\b", " "), ("\t", " "), ("  ", " ")]
             zero_width = [("\u200b", ""), ("\u200c", ""), ("\u200d", ""), ("\u00ad", ""), ("\ufeff", "")] 
@@ -797,11 +814,18 @@ class VectorStore:
                 for ind in range(len(result_text)):
                     significance[ind] = stepped_significance[ind // context_steps] * result['cosine'] / highlight_dampening
                 search_results[index]['significance'] = significance
+            cur_cnt += 1
+            if progress_callback is not None:
+                state = f"Highlighting: {search_results[index]['cosine']:3.3f}: {search_results[index]['entry']['descriptor']}"
+                progress_callback(ProgressState(issues=0, state=state, percent_completion=cur_cnt/all_cnt*(1.0-search_vs_hl)+search_vs_hl, vars={}, finished=False))
         
         if len(search_results) > 0:
             highlight_time = (time.time() - highlight_start) / len(search_results)
             key = f"{self.config['embeddings_model_name']}-{str(self.device)} highlight time per record"
             self.perf[key] = highlight_time
+        if progress_callback is not None:
+            state = f"Best result: {search_results[-1]['cosine']:3.3f}: {search_results[-1]['entry']['descriptor']}"
+            progress_callback(ProgressState(issues=0, state=state, percent_completion=1.0, vars={}, finished=True))
         return search_results
     
     def prepare_visualization_data(self, text_library:dict[str, TextLibraryEntry], max_points: int | None = None) -> dict[str, Any]:  # pyright:ignore[reportExplicitAny]
