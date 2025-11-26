@@ -224,11 +224,23 @@ class VectorStore:
                 return ind+1
         return None
 
-    def check_indices(self, doc_hashes:list[str], clean:bool) -> list[ModelCheck]:
+    def check_indices(self, doc_hashes:list[str], clean:bool, progress_callback:Callable[[ProgressState], None ]|None=None, abort_check_callback:Callable[[], bool]|None=None) -> list[ModelCheck]:
         all_deleted = 0
         model_check:list[ModelCheck] = []
-        
+
+        all_cnt:int = 0
         for model in self.model_list:
+            if model['enabled'] is True:
+                indices_path = self.model_embedding_path(model['model_name'])
+                file_list = get_files_of_extensions(indices_path, ["pt"])
+                for filename in file_list:
+                    all_cnt += 1
+
+        cur_cnt:int = 0
+        for model in self.model_list:
+            if abort_check_callback is not None:
+                if abort_check_callback() is True:
+                    break
             cnt = 0
             debris_cnt = 0
             deleted_cnt = 0
@@ -238,6 +250,9 @@ class VectorStore:
                 file_list = get_files_of_extensions(indices_path, ["pt"])
                 # hash_list = [os.path.splitext(name)[0] for name in file_list]
                 for filename in file_list:
+                    if abort_check_callback is not None:
+                        if abort_check_callback() is True:
+                            break
                     hash = os.path.splitext(filename)[0]
                     if hash in doc_hashes:
                         cnt += 1
@@ -247,6 +262,11 @@ class VectorStore:
                             os.remove(os.path.join(indices_path, filename))
                             deleted_cnt += 1
                             all_deleted += 1
+                    cur_cnt += 1
+                    if progress_callback is not None:
+                        state = f"Checking {model['model_name']:40s}"
+                        prs:ProgressState = ProgressState(issues=debris_cnt+deleted_cnt, state=state, percent_completion = cur_cnt / all_cnt, vars={}, finished=False)
+                        progress_callback(prs)
                 if model['model_name'] == self.config['embeddings_model_name']:
                     selected = True
                 else:
@@ -271,6 +291,9 @@ class VectorStore:
                                                'model_name': model['model_name'],
                                                'enabled': False,
                                                'selected': False}))                
+        if progress_callback is not None:
+            state = f"{"Checking complete":40s}"
+            progress_callback(ProgressState(issues=0, state=state, percent_completion = 1.0, vars={}, finished=True))
         return model_check
                     
     def select(self, ind: int) -> str | None:

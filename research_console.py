@@ -134,9 +134,13 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                         clean = True
                     else:
                         clean = False
-                    print("Checking indices... ", end="", flush=True)
-                    model_check = vs.check_indices(doc_hashes, clean)
-                    print("Done.")
+
+                    def feedback(ps:ProgressState):
+                        compl = tf.progress_bar_string(ps['percent_completion'], 8)
+                        print(f"Checking indices {compl} {ps['state']} ", end="\r", flush=True)
+                        
+                    model_check = vs.check_indices(doc_hashes, clean, feedback)
+                    print("")
 
                     hint_missing: bool = False
                     hint_clean: bool = False
