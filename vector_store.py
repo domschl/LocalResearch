@@ -263,7 +263,7 @@ class VectorStore:
                             deleted_cnt += 1
                             all_deleted += 1
                     cur_cnt += 1
-                    if progress_callback is not None:
+                    if progress_callback is not None and cur_cnt % 100 == 0:
                         state = f"Checking {model['model_name']:40s}"
                         prs:ProgressState = ProgressState(issues=debris_cnt+deleted_cnt, state=state, percent_completion = cur_cnt / all_cnt, vars={}, finished=False)
                         progress_callback(prs)
