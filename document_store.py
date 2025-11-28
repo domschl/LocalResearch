@@ -124,16 +124,22 @@ class DocumentStore:
                 with open(self.config_file, "r") as f:
                     config = cast(DocumentConfig, json.load(f))
                     valid = True
-                    if config['version'] < self.current_version:
-                        self.log.error(f"Config file {self.config_file} is outdated version, upgrading to new defaults!")
-                        valid = False
-                    else:
-                        for source_name in config['document_sources']:
-                            source = config['document_sources'][source_name]
-                            if source['type'] not in self.valid_source_types:
-                                self.log.error(f"{source_name} has invalid type {source['type']}, use one of {self.valid_source_types}")
-                                valid = False
-                                break                        
+                    required_sections: list[str] = ['version', 'document_sources', 'sync_targets', 'vars']
+                    for section_name in required_sections:
+                        if section_name not in config:
+                            self.log.error(f'Required section {section_name} not in config {self.config_file}, resetting to defaults!')
+                            valid = False
+                    if valid is True: 
+                        if config['version'] < self.current_version:
+                            self.log.error(f"Config file {self.config_file} is outdated version, upgrading to new defaults!")
+                            valid = False
+                        else:
+                            for source_name in config['document_sources']:
+                                source = config['document_sources'][source_name]
+                                if source['type'] not in self.valid_source_types:
+                                    self.log.error(f"{source_name} has invalid type {source['type']}, use one of {self.valid_source_types}")
+                                    valid = False
+                                    break                        
             except Exception as e:
                 self.log.error(f"Failed to read config-file {self.config_file}: {e}, resetting to default configuration!")
                 valid = False
@@ -604,11 +610,13 @@ class DocumentStore:
         return pdf_text, index_changed
 
     def skip_file_in_sync(self, root_path:str, filename:str, valid_types:list[str]) -> bool:
-        _base, ext_with_dot = os.path.splitext(filename)
+        base, ext_with_dot = os.path.splitext(filename)
         ext = ext_with_dot[1:].lower() if ext_with_dot else ""
         if '.caltrash' in root_path:
             return True
         if ext not in valid_types: 
+            return True
+        if base.startswith('.#'):  # Emacs tmp
             return True
         return False
     
