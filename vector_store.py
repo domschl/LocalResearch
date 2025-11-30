@@ -752,8 +752,7 @@ class VectorStore:
         tensor_file_list = get_files_of_extensions(path, ['pt'])
         cur_cnt = 0
         all_cnt = len(tensor_file_list)
-        search_vs_hl = 0.8
-            
+        search_vs_hl = 0.5
         start_time = time.time()
         best_min_cosine: float | None = None
         for tensor_file in tensor_file_list:
