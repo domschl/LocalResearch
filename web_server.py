@@ -165,21 +165,42 @@ def worker_proc():
 
                 # Perform search
                 try:
-                    results = vs.search(search_string, ds.text_library, progress_callback=progress_callback)
+                    results = vs.search(search_string, ds.text_library, progress_callback=progress_callback, highlight=True)
                     
                     # Format results for client
                     formatted_results = []
                     for res in results:
+                        descriptor = res['entry']['descriptor']
+                        metadata = ds.get_metadata(descriptor)
+                        
                         formatted_results.append({
                             "cosine": res['cosine'],
-                            "descriptor": res['entry']['descriptor'],
+                            "descriptor": descriptor,
                             "text": res['text'],
-                            "chunk_index": res['chunk_index']
+                            "chunk_index": res['chunk_index'],
+                            "significance": res['significance'],
+                            "metadata": metadata
                         })
                     response_payload = formatted_results
                 except Exception as e:
                     logger.error(f"Search failed: {e}")
                     response_payload = [] # Or error message
+            
+            elif cmd == 'select':
+                try:
+                    logger.info(f"Processing select command with payload: {payload} (type: {type(payload)})")
+                    model_id = int(payload)
+                    result = vs.select(model_id)
+                    logger.info(f"vs.select result: {result}")
+                    if result is None:
+                         # Check if it was a valid selection that just didn't change anything or failed
+                         # vs.select logs errors, but doesn't return success/fail clearly other than None vs Name
+                         # For now, assume if no exception, it's 'ok' or 'already active'
+                         pass
+                    response_payload = {"status": "ok", "selected_id": model_id}
+                except Exception as e:
+                    logger.error(f"Select failed: {e}")
+                    response_payload = {"error": str(e)}
 
             else:
                 response_payload = f"Unknown command: {cmd}"
