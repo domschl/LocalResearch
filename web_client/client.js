@@ -288,12 +288,8 @@ window.onload = function () {
                         }
                         currentSpan = document.createElement('span');
                         if (sig > 0) {
-                            // Yellow background with opacity
-                            // Ensure opacity is visible but text readable. 
-                            // Significance is roughly 0..1? Let's assume so.
-                            // Cap alpha at 0.6 to keep text readable
-                            const alpha = Math.min(sig * 0.8, 0.8);
-                            currentSpan.style.backgroundColor = `rgba(255, 255, 0, ${alpha})`;
+                            const yellow = 255 - Math.min(sig * 255, 255);
+                            currentSpan.style.backgroundColor = `rgb(255,255, ${yellow})`;
                             currentSpan.style.color = '#000'; // Black text on yellow for contrast
                         }
                         currentSig = sig;

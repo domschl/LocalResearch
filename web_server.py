@@ -237,7 +237,7 @@ async def response_dispatcher(app):
             if ws and not ws.closed:
                 try:
                     await ws.send_str(json.dumps(res))
-                    logger.info(f"Dispatched response for {uuid}")
+                    # logger.info(f"Dispatched response for {uuid}")
                     
                     if res.get('final', False):
                         manager.unregister_request(uuid)
