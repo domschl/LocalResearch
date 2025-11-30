@@ -45,6 +45,7 @@ window.onload = function () {
     colMain.style.overflowY = 'auto';
     colMain.style.padding = '10px';
     colMain.innerText = 'Main Content Area';
+    colMain.style.backgroundColor = '#ffe'
     mainContainer.appendChild(colMain);
 
     // Column 3: Detail (40%)
@@ -267,8 +268,8 @@ window.onload = function () {
             // Text with Highlighting
             const textContainer = document.createElement('div');
             textContainer.style.marginTop = '5px';
-            textContainer.style.whiteSpace = 'pre-wrap';
-            textContainer.style.fontFamily = 'monospace';
+            // textContainer.style.whiteSpace = 'pre-wrap';
+            // textContainer.style.fontFamily = 'monospace';
             textContainer.style.fontSize = '12px';
             textContainer.style.lineHeight = '1.4';
 
@@ -288,6 +289,7 @@ window.onload = function () {
                         }
                         currentSpan = document.createElement('span');
                         if (sig > 0) {
+                            // No alpha channel needed.
                             const yellow = 255 - Math.min(sig * 255, 255);
                             currentSpan.style.backgroundColor = `rgb(255,255, ${yellow})`;
                             currentSpan.style.color = '#000'; // Black text on yellow for contrast

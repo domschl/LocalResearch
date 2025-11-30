@@ -83,27 +83,30 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+# --- Logging Handler ---
 class WebSocketLogHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.loop = None  # Will be set to the event loop
+    
     def emit(self, record):
         log_entry = self.format(record)
+        # print(f"Handler log entry: {log_entry}")
         msg = {
             "token": "",
             "uuid": "",
             "cmd": "log",
             "payload": log_entry
         }
-        try:
-            loop = asyncio.get_running_loop()
-            if loop.is_running():
-                asyncio.run_coroutine_threadsafe(manager.broadcast(msg), loop)
-        except RuntimeError:
-            pass
+        # Schedule the broadcast on the event loop from any thread
+        if self.loop and manager:
+            asyncio.run_coroutine_threadsafe(manager.broadcast(msg), self.loop)
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logger = logging.getLogger("ResearchServer")
 ws_handler = WebSocketLogHandler()
 ws_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-logging.getLogger().addHandler(ws_handler)
+logging.getLogger().addHandler(ws_handler)  # Add to root logger to capture all modules
 
 # --- Worker Thread ---
 def worker_proc():
@@ -306,6 +309,9 @@ async def client_js_handler(request):
 
 # --- App Lifecycle ---
 async def on_startup(app):
+    # Set the event loop for the WebSocket log handler so it can broadcast from any thread
+    ws_handler.loop = asyncio.get_event_loop()
+    
     # Start worker thread
     app['worker_thread'] = threading.Thread(target=worker_proc, daemon=True)
     app['worker_thread'].start()
