@@ -110,13 +110,13 @@ logging.getLogger().addHandler(ws_handler)  # Add to root logger to capture all 
 
 # --- Worker Thread ---
 def worker_proc():
-    logger.info("Worker thread started")
+    logger.debug("Worker thread started")
     
     # Initialize backend
     try:
         ds = DocumentStore()
         vs = VectorStore(ds.storage_path, ds.config_path)
-        logger.info("Backend initialized")
+        logger.info("ResearchServer backend initialized")
     except Exception as e:
         logger.error(f"Failed to initialize backend: {e}")
         return
@@ -131,7 +131,7 @@ def worker_proc():
             cmd = req.get('cmd')
             payload = req.get('payload')
             
-            logger.info(f"Worker processing: {cmd} ({uuid})")
+            logger.debug(f"Worker processing: {cmd} ({uuid})")
             
             response_payload = None
             
@@ -191,10 +191,10 @@ def worker_proc():
             
             elif cmd == 'select':
                 try:
-                    logger.info(f"Processing select command with payload: {payload} (type: {type(payload)})")
+                    logger.debug(f"Processing select command with payload: {payload} (type: {type(payload)})")
                     model_id = int(payload)
                     result = vs.select(model_id)
-                    logger.info(f"vs.select result: {result}")
+                    logger.debug(f"vs.select result: {result}")
                     if result is None:
                          # Check if it was a valid selection that just didn't change anything or failed
                          # vs.select logs errors, but doesn't return success/fail clearly other than None vs Name
@@ -225,7 +225,7 @@ def worker_proc():
 
 # --- Response Dispatcher ---
 async def response_dispatcher(app):
-    logger.info("Response dispatcher started")
+    logger.debug("Response dispatcher started")
     loop = asyncio.get_running_loop()
     try:
         while True:
@@ -244,7 +244,7 @@ async def response_dispatcher(app):
                     
                     if res.get('final', False):
                         manager.unregister_request(uuid)
-                        logger.info(f"Request {uuid} completed and unregistered")
+                        logger.debug(f"Request {uuid} completed and unregistered")
                         
                 except Exception as e:
                     logger.error(f"Error sending response: {e}")
@@ -279,14 +279,14 @@ async def websocket_handler(request):
                         uuid = data.get("uuid", "")
                         cmd = data.get("cmd", "")
                         
-                        logger.info(f"Received cmd: {cmd}, uuid: {uuid}")
+                        logger.debug(f"Received cmd: {cmd}, uuid: {uuid}")
                         
                         # Register request mapping
                         manager.register_request(uuid, ws)
                         
                         # Queue request
                         request_queue.put(data)
-                        logger.info(f"Queued request {uuid}")
+                        logger.debug(f"Queued request {uuid}")
 
                     except json.JSONDecodeError:
                         logger.error(f"Invalid JSON received: {msg.data}")
@@ -297,7 +297,7 @@ async def websocket_handler(request):
                 logger.error(f"Websocket connection closed with exception {ws.exception()}")
     finally:
         manager.disconnect(ws)
-        logger.info("Websocket connection closed")
+        logger.debug("Websocket connection closed")
 
     return ws
 
