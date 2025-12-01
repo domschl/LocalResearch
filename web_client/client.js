@@ -1,3 +1,263 @@
+import * as THREE from './third_party/three/three.module.js';
+import { OrbitControls } from './third_party/three/OrbitControls.js';
+
+// --- Visualization Globals ---
+let scene, camera, renderer, controls;
+let pointsObject = null;
+let raycaster, mouse;
+let selectedPointIndex = null;
+let originalColors = [];
+let docData = null;
+let animationFrameId = null;
+let vizContainer = null;
+let infoDiv = null;
+
+// --- Visualization Functions ---
+
+function initVisualization(container) {
+    vizContainer = container;
+    vizContainer.style.position = 'relative'; // Ensure relative positioning for absolute children if any
+
+    // Info overlay
+    infoDiv = document.createElement('div');
+    infoDiv.style.position = 'absolute';
+    infoDiv.style.top = '10px';
+    infoDiv.style.left = '10px';
+    infoDiv.style.backgroundColor = 'rgba(255, 255, 255, 0.8)';
+    infoDiv.style.padding = '5px';
+    infoDiv.style.borderRadius = '3px';
+    infoDiv.style.pointerEvents = 'none'; // Let clicks pass through
+    infoDiv.style.fontSize = '12px';
+    infoDiv.style.color = '#000';
+    infoDiv.innerText = 'Select a model to load visualization.';
+    vizContainer.appendChild(infoDiv);
+
+    const width = vizContainer.clientWidth;
+    const height = vizContainer.clientHeight;
+
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(width, height);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    vizContainer.appendChild(renderer.domElement);
+
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xf0f0f0);
+
+    camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 1000);
+    camera.position.z = 5;
+
+    controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+
+    raycaster = new THREE.Raycaster();
+    raycaster.params.Points.threshold = 0.05;
+    mouse = new THREE.Vector2();
+
+    // Lights
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+    scene.add(ambientLight);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    directionalLight.position.set(1, 1, 1).normalize();
+    scene.add(directionalLight);
+
+    // Events
+    window.addEventListener('resize', onWindowResize);
+    renderer.domElement.addEventListener('click', onMouseClick);
+
+    animate();
+}
+
+function onWindowResize() {
+    if (camera && renderer && vizContainer) {
+        const width = vizContainer.clientWidth;
+        const height = vizContainer.clientHeight;
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+        renderer.setSize(width, height);
+    }
+}
+
+function onMouseClick(event) {
+    if (!docData || !pointsObject || !camera || !raycaster || !mouse) return;
+
+    const rect = renderer.domElement.getBoundingClientRect();
+    mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+    raycaster.setFromCamera(mouse, camera);
+
+    const intersects = raycaster.intersectObject(pointsObject);
+
+    if (intersects.length > 0) {
+        const pointIndex = intersects[0].index;
+        highlightPoint(pointIndex);
+
+        if (docData.texts && docData.texts[pointIndex]) {
+            infoDiv.innerText = docData.texts[pointIndex].substring(0, 100) + '...';
+        }
+    } else {
+        if (selectedPointIndex !== null) {
+            highlightPoint(selectedPointIndex, true); // Deselect
+        }
+        infoDiv.innerText = 'Click a point to see info.';
+    }
+}
+
+function highlightPoint(pointIndex, forceDeselect = false) {
+    if (!pointsObject || !pointsObject.geometry) return;
+
+    const colorsAttribute = pointsObject.geometry.attributes.color;
+    const isDeselecting = forceDeselect || (selectedPointIndex === pointIndex);
+
+    if (isDeselecting) {
+        // Restore all
+        for (let i = 0; i < colorsAttribute.count; i++) {
+            colorsAttribute.setXYZ(i, originalColors[i * 3], originalColors[i * 3 + 1], originalColors[i * 3 + 2]);
+        }
+        selectedPointIndex = null;
+    } else {
+        // Dim all
+        for (let i = 0; i < colorsAttribute.count; i++) {
+            colorsAttribute.setXYZ(i, originalColors[i * 3] * 0.1, originalColors[i * 3 + 1] * 0.1, originalColors[i * 3 + 2] * 0.1);
+        }
+        // Highlight selected
+        selectedPointIndex = pointIndex;
+
+        // Also highlight other points from the same document if possible
+        let pointsToHighlight = [pointIndex];
+        if (docData.doc_ids) {
+            const docId = docData.doc_ids[pointIndex];
+            for (let i = 0; i < docData.doc_ids.length; i++) {
+                if (docData.doc_ids[i] === docId) {
+                    pointsToHighlight.push(i);
+                }
+            }
+        }
+
+        for (const idx of pointsToHighlight) {
+            colorsAttribute.setXYZ(idx, originalColors[idx * 3], originalColors[idx * 3 + 1], originalColors[idx * 3 + 2]);
+            // Maybe make it even brighter or a specific color?
+            // For now just original color against dimmed background is good.
+        }
+    }
+    colorsAttribute.needsUpdate = true;
+}
+
+function highlightDescriptors(descriptors) {
+    if (!pointsObject || !pointsObject.geometry || !docData || !docData.doc_ids) return;
+
+    const colorsAttribute = pointsObject.geometry.attributes.color;
+
+    // Dim all first
+    for (let i = 0; i < colorsAttribute.count; i++) {
+        colorsAttribute.setXYZ(i, 0.8, 0.8, 0.8); // Make everything gray/dim
+        // Or use original colors dimmed:
+        // colorsAttribute.setXYZ(i, originalColors[i * 3] * 0.1, originalColors[i * 3 + 1] * 0.1, originalColors[i * 3 + 2] * 0.1);
+    }
+
+    // Highlight matches
+    const descriptorSet = new Set(descriptors);
+    let matchCount = 0;
+
+    // We need to map descriptors to points. 
+    // docData usually has doc_ids. If descriptors are doc_ids (or filenames), we can match.
+    // In vector_store.py, 'descriptor' seems to be the key in text_library.
+    // docData.doc_ids likely contains these descriptors.
+
+    for (let i = 0; i < docData.doc_ids.length; i++) {
+        if (descriptorSet.has(docData.doc_ids[i])) {
+            colorsAttribute.setXYZ(i, originalColors[i * 3], originalColors[i * 3 + 1], originalColors[i * 3 + 2]);
+            // Or make it red?
+            // colorsAttribute.setXYZ(i, 1.0, 0.0, 0.0); 
+            matchCount++;
+        }
+    }
+
+    colorsAttribute.needsUpdate = true;
+    console.log(`Highlighted ${matchCount} points for ${descriptors.length} descriptors.`);
+}
+
+
+function loadVisualizationData(modelName, sendCmd) {
+    if (infoDiv) infoDiv.innerText = `Loading data for ${modelName}...`;
+
+    // We use the websocket command to get data? Or fetch?
+    // The plan said "Expose 3D data via API". I implemented 'get_3d_viz_data' command in websocket.
+    // So we should send a command.
+
+    sendCmd('get_3d_viz_data', modelName);
+}
+
+function createSceneFromData(data) {
+    if (scene) {
+        // Remove old points
+        if (pointsObject) {
+            scene.remove(pointsObject);
+            pointsObject.geometry.dispose();
+            pointsObject.material.dispose();
+            pointsObject = null;
+        }
+    }
+
+    docData = data;
+    if (!docData || !docData.points) {
+        if (infoDiv) infoDiv.innerText = 'No data available.';
+        return;
+    }
+
+    const positions = [];
+    const colors = [];
+
+    // Normalize positions
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const pos of docData.points) {
+        minX = Math.min(minX, pos[0]); maxX = Math.max(maxX, pos[0]);
+        minY = Math.min(minY, pos[1]); maxY = Math.max(maxY, pos[1]);
+        minZ = Math.min(minZ, pos[2]); maxZ = Math.max(maxZ, pos[2]);
+    }
+    const range = Math.max(maxX - minX, maxY - minY, maxZ - minZ) || 1;
+
+    for (const pos of docData.points) {
+        positions.push(((pos[0] - minX) / range * 10) - 5);
+        positions.push(((pos[1] - minY) / range * 10) - 5);
+        positions.push(((pos[2] - minZ) / range * 10) - 5);
+    }
+
+    // Process colors
+    if (docData.colors) {
+        for (const c of docData.colors) {
+            colors.push(c[0] / 255, c[1] / 255, c[2] / 255);
+        }
+    } else {
+        // Default color if missing
+        for (let i = 0; i < docData.points.length; i++) {
+            colors.push(0, 0.5, 1);
+        }
+    }
+
+    originalColors = [...colors];
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+    const material = new THREE.PointsMaterial({ size: 0.05, vertexColors: true, sizeAttenuation: true });
+    pointsObject = new THREE.Points(geometry, material);
+    scene.add(pointsObject);
+
+    if (infoDiv) infoDiv.innerText = `Loaded ${docData.points.length} points.`;
+}
+
+function animate() {
+    animationFrameId = requestAnimationFrame(animate);
+    if (controls) controls.update();
+    if (renderer && scene && camera) renderer.render(scene, camera);
+}
+
+
+// --- Main Client Logic ---
+
 window.onload = function () {
     console.log("Bootloader started");
 
@@ -105,9 +365,9 @@ window.onload = function () {
     // Column 3: Detail (40%)
     const colDetail = document.createElement('div');
     colDetail.style.flex = '0 0 40%';
-    colDetail.style.overflowY = 'auto';
-    colDetail.style.padding = '10px';
-    colDetail.innerText = 'Detail View';
+    colDetail.style.overflow = 'hidden'; // Changed to hidden for canvas
+    colDetail.style.padding = '0'; // Remove padding for canvas
+    // colDetail.innerText = 'Detail View'; // Removed text
     mainContainer.appendChild(colDetail);
 
     // Bottom Container (2 columns)
@@ -218,6 +478,13 @@ window.onload = function () {
             const row = document.createElement('tr');
             if (model.active) {
                 row.style.backgroundColor = theme.selectionBg;
+                // Load visualization for active model if not already loaded
+                // But we only want to do this once or when it changes.
+                // For now, let's rely on the user clicking or the initial load.
+                // Actually, if it's active, we should probably load it if docData is null.
+                if (!docData) {
+                    loadVisualizationData(model.name, send);
+                }
             }
             if (!model.enabled) {
                 row.style.color = theme.secondary;
@@ -242,6 +509,8 @@ window.onload = function () {
             row.addEventListener('click', () => {
                 send('select', model.id);
                 setStatus(`Selecting model ${model.name}...`, theme.logResponse);
+                // Also trigger visualization load
+                loadVisualizationData(model.name, send);
             });
 
             table.appendChild(row);
@@ -257,12 +526,18 @@ window.onload = function () {
         title.style.marginTop = '0';
         colMain.appendChild(title);
 
+        // Highlight in 3D view
+        const descriptors = [];
+
         if (!results || results.length === 0) {
             colMain.innerText += 'No results found.';
+            highlightDescriptors([]); // Clear highlights
             return;
         }
 
         results.forEach((res, index) => {
+            descriptors.push(res.descriptor);
+
             const container = document.createElement('div');
             container.style.marginBottom = '15px';
             container.style.borderBottom = `1px solid ${theme.border}`;
@@ -362,6 +637,8 @@ window.onload = function () {
             container.appendChild(textContainer);
             colMain.appendChild(container);
         });
+
+        highlightDescriptors(descriptors);
     }
 
     // Connect to WebSocket
@@ -501,6 +778,13 @@ window.onload = function () {
                     } else {
                         setStatus(`Error selecting model: ${payload.error}`, theme.error);
                     }
+                } else if (requestCmd === 'get_3d_viz_data') {
+                    if (payload.error) {
+                        addLog(`Error loading 3D data: ${payload.error}`, theme.error);
+                        if (infoDiv) infoDiv.innerText = `Error: ${payload.error}`;
+                    } else {
+                        createSceneFromData(payload);
+                    }
                 }
             } else {
                 addLog(`[UNKNOWN] ${JSON.stringify(data)}`, theme.logUnknown);
@@ -520,4 +804,7 @@ window.onload = function () {
         console.error("WebSocket error:", error);
         setStatus('Error', theme.error);
     };
+
+    // Initialize Visualization
+    initVisualization(colDetail);
 };

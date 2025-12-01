@@ -205,6 +205,27 @@ def worker_proc():
                     logger.error(f"Select failed: {e}")
                     response_payload = {"error": str(e)}
 
+            elif cmd == 'get_3d_viz_data':
+                model_name = payload
+                # Sanitize model name to prevent directory traversal
+                if not model_name or '..' in model_name or '/' in model_name:
+                     response_payload = {"error": "Invalid model name"}
+                else:
+                    try:
+                        viz_file = os.path.join(vs.visualization_3d, model_name + '.json')
+                        if os.path.exists(viz_file):
+                            with open(viz_file, 'r') as f:
+                                data = json.load(f)
+                            response_payload = data
+                        else:
+                            # If file doesn't exist, maybe try to generate it?
+                            # For now, just return error or empty
+                            logger.warning(f"3D visualization file not found: {viz_file}")
+                            response_payload = {"error": "Visualization data not found", "code": "not_found"}
+                    except Exception as e:
+                        logger.error(f"Failed to load 3D data: {e}")
+                        response_payload = {"error": str(e)}
+
             else:
                 response_payload = f"Unknown command: {cmd}"
 
@@ -350,6 +371,7 @@ def create_app():
         web.get('/', index_handler),
         web.get('/client.js', client_js_handler),
         web.get('/ws', websocket_handler),
+        web.static('/third_party', './web_client/third_party'),
     ])
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)
