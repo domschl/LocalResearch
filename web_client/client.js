@@ -316,6 +316,29 @@ window.onload = function () {
     const theme = themes.light;
 
     // --- Layout ---
+    const style = document.createElement('style');
+    style.innerHTML = `
+        * {
+            box-sizing: border-box;
+        }
+        /* Scrollbar styling for WebKit (Chrome, Safari, Edge) */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: ${theme.base2}; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: ${theme.base00}; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: ${theme.base01}; 
+        }
+    `;
+    document.head.appendChild(style);
+
     document.body.style.margin = '0';
     document.body.style.height = '100vh';
     document.body.style.display = 'flex';
