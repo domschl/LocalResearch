@@ -280,6 +280,7 @@ def worker_proc():
                             vs.config['chunk_size'], 
                             vs.config['chunk_overlap']
                         )
+                        chunk_text = VectorStore.clean_text(chunk_text)
                         
                         metadata = ds.get_metadata(descriptor)
                         

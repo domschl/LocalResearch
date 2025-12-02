@@ -533,6 +533,18 @@ class VectorStore:
         return text[chunk_start : chunk_end]
 
     @staticmethod
+    def clean_text(text: str) -> str:
+        replacers = [("\n", " "), ("\r", " "), ("\b", " "), ("\t", " "), ("  ", " ")]
+        zero_width = [("\u200b", ""), ("\u200c", ""), ("\u200d", ""), ("\u00ad", ""), ("\ufeff", "")] 
+        replacers += zero_width
+        old_text = ""
+        while old_text != text:
+            old_text = text
+            for rep in replacers:
+                text = text.replace(rep[0], rep[1])
+        return text
+
+    @staticmethod
     def get_chunks(text:str, chunk_size: int, chunk_overlap: int):
         overlap = min(chunk_overlap, chunk_size - 1)
         step = chunk_size - overlap
@@ -793,14 +805,7 @@ class VectorStore:
                 if abort_check_callback() is True:
                     break
             result_text = self.get_chunk_context_aware(result['entry']['text'], result['chunk_index'], self.config['chunk_size'], self.config['chunk_overlap'])
-            replacers = [("\n", " "), ("\r", " "), ("\b", " "), ("\t", " "), ("  ", " ")]
-            zero_width = [("\u200b", ""), ("\u200c", ""), ("\u200d", ""), ("\u00ad", ""), ("\ufeff", "")] 
-            replacers += zero_width
-            old_text = ""
-            while old_text != result_text:
-                old_text = result_text
-                for rep in replacers:
-                    result_text = result_text.replace(rep[0], rep[1])
+            result_text = VectorStore.clean_text(result_text)
 
             search_results[index]['text'] = result_text
 

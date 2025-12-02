@@ -227,7 +227,19 @@ function createSceneFromData(data) {
     // Process colors from hashes
     if (docData.hashes) {
         const colorMap = {};
+        const maxChunkMap = {};
         docData.pointMap = {}; // Initialize point map
+
+        // First pass: find max chunk index for each hash
+        if (docData.chunk_indices) {
+            for (let i = 0; i < docData.hashes.length; i++) {
+                const hash = docData.hashes[i];
+                const chunkIndex = docData.chunk_indices[i];
+                if (!maxChunkMap[hash] || chunkIndex > maxChunkMap[hash]) {
+                    maxChunkMap[hash] = chunkIndex;
+                }
+            }
+        }
 
         for (let i = 0; i < docData.hashes.length; i++) {
             const hash = docData.hashes[i];
@@ -240,18 +252,29 @@ function createSceneFromData(data) {
             }
 
             if (!colorMap[hash]) {
-                // Generate color from hash
+                // Generate base color from hash
                 let h = 0;
                 for (let j = 0; j < hash.length; j++) {
                     h = hash.charCodeAt(j) + ((h << 5) - h);
                 }
                 const hue = Math.abs(h % 360) / 360;
-                const color = new THREE.Color();
-                color.setHSL(hue, 0.5, 0.5);
-                colorMap[hash] = [color.r, color.g, color.b];
+                colorMap[hash] = hue;
             }
-            const c = colorMap[hash];
-            colors.push(c[0], c[1], c[2]);
+
+            const hue = colorMap[hash];
+            const color = new THREE.Color();
+
+            // Apply gradient based on chunk index
+            let lightness = 0.5;
+            if (docData.chunk_indices && maxChunkMap[hash] > 0) {
+                const chunkIndex = docData.chunk_indices[i];
+                const maxChunk = maxChunkMap[hash];
+                // Gradient from 0.6 (light) to 0.3 (dark)
+                lightness = 0.6 - (chunkIndex / maxChunk) * 0.3;
+            }
+
+            color.setHSL(hue, 0.6, lightness);
+            colors.push(color.r, color.g, color.b);
         }
     } else {
         // Default color if missing
