@@ -103,9 +103,6 @@ function onMouseClick(event) {
             send('get_text_chunk', { hash: hash, chunk_index: chunkIndex });
             // Fetch metadata
             send('get_metadata', hash);
-        } else if (docData.texts && docData.texts[pointIndex]) {
-            // Fallback for old data
-            infoDiv.innerText = docData.texts[pointIndex].substring(0, 100) + '...';
         }
     } else {
         if (selectedPointIndex !== null) {
@@ -144,13 +141,6 @@ function highlightPoint(pointIndex, forceDeselect = false) {
                     pointsToHighlight.push(i);
                 }
             }
-        } else if (docData.doc_ids) {
-            const docId = docData.doc_ids[pointIndex];
-            for (let i = 0; i < docData.doc_ids.length; i++) {
-                if (docData.doc_ids[i] === docId) {
-                    pointsToHighlight.push(i);
-                }
-            }
         }
 
         for (const idx of pointsToHighlight) {
@@ -179,14 +169,6 @@ function highlightDescriptors(descriptors) {
     if (docData.hashes) {
         for (let i = 0; i < docData.hashes.length; i++) {
             if (descriptorSet.has(docData.hashes[i])) {
-                colorsAttribute.setXYZ(i, originalColors[i * 3], originalColors[i * 3 + 1], originalColors[i * 3 + 2]);
-                matchCount++;
-            }
-        }
-    } else if (docData.doc_ids) {
-        // Fallback
-        for (let i = 0; i < docData.doc_ids.length; i++) {
-            if (descriptorSet.has(docData.doc_ids[i])) {
                 colorsAttribute.setXYZ(i, originalColors[i * 3], originalColors[i * 3 + 1], originalColors[i * 3 + 2]);
                 matchCount++;
             }
@@ -261,11 +243,6 @@ function createSceneFromData(data) {
             }
             const c = colorMap[hash];
             colors.push(c[0], c[1], c[2]);
-        }
-    } else if (docData.colors) {
-        // Fallback for old data format
-        for (const c of docData.colors) {
-            colors.push(c[0] / 255, c[1] / 255, c[2] / 255);
         }
     } else {
         // Default color if missing
@@ -862,26 +839,25 @@ window.onload = function () {
                         createSceneFromData(payload);
                     }
                 }
+            } else {
+                addLog(`[UNKNOWN] ${JSON.stringify(data)}`, theme.logUnknown);
             }
-        } else {
-            addLog(`[UNKNOWN] ${JSON.stringify(data)}`, theme.logUnknown);
+        } catch (e) {
+            console.error("Error parsing message:", e);
+            addLog(`[ERROR] Raw: ${event.data}`, theme.error);
         }
-    } catch (e) {
-        console.error("Error parsing message:", e);
-        addLog(`[ERROR] Raw: ${event.data}`, theme.error);
-    }
-};
+    };
 
-ws.onclose = function () {
-    console.log("WebSocket disconnected");
-    setStatus('Disconnected', theme.error);
-};
+    ws.onclose = function () {
+        console.log("WebSocket disconnected");
+        setStatus('Disconnected', theme.error);
+    };
 
-ws.onerror = function (error) {
-    console.error("WebSocket error:", error);
-    setStatus('Error', theme.error);
-};
+    ws.onerror = function (error) {
+        console.error("WebSocket error:", error);
+        setStatus('Error', theme.error);
+    };
 
-// Initialize Visualization
-initVisualization(colDetail);
+    // Initialize Visualization
+    initVisualization(colDetail);
 };
