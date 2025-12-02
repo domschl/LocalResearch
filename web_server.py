@@ -265,6 +265,38 @@ def worker_proc():
                     logger.error(f"Failed to get text chunk: {e}")
                     response_payload = {"error": str(e)}
 
+            elif cmd == 'get_chunk_details':
+                try:
+                    hash_val = payload.get('hash')
+                    chunk_index = payload.get('chunk_index')
+                    if hash_val in ds.text_library:
+                        entry = ds.text_library[hash_val]
+                        text = entry['text']
+                        descriptor = entry['descriptor']
+                        
+                        chunk_text = VectorStore.get_chunk_context_aware(
+                            text, 
+                            chunk_index, 
+                            vs.config['chunk_size'], 
+                            vs.config['chunk_overlap']
+                        )
+                        
+                        metadata = ds.get_metadata(descriptor)
+                        
+                        response_payload = {
+                            "hash": hash_val,
+                            "chunk_index": chunk_index,
+                            "descriptor": descriptor,
+                            "text": chunk_text,
+                            "metadata": metadata,
+                            "significance": None # No significance for direct selection
+                        }
+                    else:
+                        response_payload = {"error": "Document not found"}
+                except Exception as e:
+                    logger.error(f"Failed to get chunk details: {e}")
+                    response_payload = {"error": str(e)}
+
             else:
                 response_payload = f"Unknown command: {cmd}"
 
