@@ -179,6 +179,7 @@ def worker_proc():
                         formatted_results.append({
                             "cosine": res['cosine'],
                             "descriptor": descriptor,
+                            "hash": res['hash'],
                             "text": res['text'],
                             "chunk_index": res['chunk_index'],
                             "significance": res['significance'],
@@ -225,6 +226,42 @@ def worker_proc():
                     except Exception as e:
                         logger.error(f"Failed to load 3D data: {e}")
                         response_payload = {"error": str(e)}
+
+            elif cmd == 'get_metadata':
+                hash_val = payload
+                if hash_val in ds.text_library:
+                    descriptor = ds.text_library[hash_val]['descriptor']
+                    metadata = ds.get_metadata(descriptor)
+                    response_payload = metadata
+                else:
+                    response_payload = {"error": "Document not found"}
+
+            elif cmd == 'get_text':
+                hash_val = payload
+                if hash_val in ds.text_library:
+                    text = ds.text_library[hash_val]['text']
+                    response_payload = text
+                else:
+                    response_payload = {"error": "Document not found"}
+
+            elif cmd == 'get_text_chunk':
+                try:
+                    hash_val = payload.get('hash')
+                    chunk_index = payload.get('chunk_index')
+                    if hash_val in ds.text_library:
+                        text = ds.text_library[hash_val]['text']
+                        chunk_text = VectorStore.get_chunk_context_aware(
+                            text, 
+                            chunk_index, 
+                            vs.config['chunk_size'], 
+                            vs.config['chunk_overlap']
+                        )
+                        response_payload = chunk_text
+                    else:
+                        response_payload = {"error": "Document not found"}
+                except Exception as e:
+                    logger.error(f"Failed to get text chunk: {e}")
+                    response_payload = {"error": str(e)}
 
             else:
                 response_payload = f"Unknown command: {cmd}"

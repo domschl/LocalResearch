@@ -93,7 +93,18 @@ function onMouseClick(event) {
         const pointIndex = intersects[0].index;
         highlightPoint(pointIndex);
 
-        if (docData.texts && docData.texts[pointIndex]) {
+        if (docData.hashes && docData.chunk_indices) {
+            const hash = docData.hashes[pointIndex];
+            const chunkIndex = docData.chunk_indices[pointIndex];
+
+            if (infoDiv) infoDiv.innerText = 'Loading text...';
+
+            // Fetch text chunk
+            send('get_text_chunk', { hash: hash, chunk_index: chunkIndex });
+            // Fetch metadata
+            send('get_metadata', hash);
+        } else if (docData.texts && docData.texts[pointIndex]) {
+            // Fallback for old data
             infoDiv.innerText = docData.texts[pointIndex].substring(0, 100) + '...';
         }
     } else {
@@ -126,7 +137,14 @@ function highlightPoint(pointIndex, forceDeselect = false) {
 
         // Also highlight other points from the same document if possible
         let pointsToHighlight = [pointIndex];
-        if (docData.doc_ids) {
+        if (docData.hashes) {
+            const hash = docData.hashes[pointIndex];
+            for (let i = 0; i < docData.hashes.length; i++) {
+                if (docData.hashes[i] === hash) {
+                    pointsToHighlight.push(i);
+                }
+            }
+        } else if (docData.doc_ids) {
             const docId = docData.doc_ids[pointIndex];
             for (let i = 0; i < docData.doc_ids.length; i++) {
                 if (docData.doc_ids[i] === docId) {
@@ -145,32 +163,33 @@ function highlightPoint(pointIndex, forceDeselect = false) {
 }
 
 function highlightDescriptors(descriptors) {
-    if (!pointsObject || !pointsObject.geometry || !docData || !docData.doc_ids) return;
+    if (!pointsObject || !pointsObject.geometry || !docData) return;
 
     const colorsAttribute = pointsObject.geometry.attributes.color;
 
     // Dim all first
     for (let i = 0; i < colorsAttribute.count; i++) {
         colorsAttribute.setXYZ(i, 0.8, 0.8, 0.8); // Make everything gray/dim
-        // Or use original colors dimmed:
-        // colorsAttribute.setXYZ(i, originalColors[i * 3] * 0.1, originalColors[i * 3 + 1] * 0.1, originalColors[i * 3 + 2] * 0.1);
     }
 
     // Highlight matches
     const descriptorSet = new Set(descriptors);
     let matchCount = 0;
 
-    // We need to map descriptors to points. 
-    // docData usually has doc_ids. If descriptors are doc_ids (or filenames), we can match.
-    // In vector_store.py, 'descriptor' seems to be the key in text_library.
-    // docData.doc_ids likely contains these descriptors.
-
-    for (let i = 0; i < docData.doc_ids.length; i++) {
-        if (descriptorSet.has(docData.doc_ids[i])) {
-            colorsAttribute.setXYZ(i, originalColors[i * 3], originalColors[i * 3 + 1], originalColors[i * 3 + 2]);
-            // Or make it red?
-            // colorsAttribute.setXYZ(i, 1.0, 0.0, 0.0); 
-            matchCount++;
+    if (docData.hashes) {
+        for (let i = 0; i < docData.hashes.length; i++) {
+            if (descriptorSet.has(docData.hashes[i])) {
+                colorsAttribute.setXYZ(i, originalColors[i * 3], originalColors[i * 3 + 1], originalColors[i * 3 + 2]);
+                matchCount++;
+            }
+        }
+    } else if (docData.doc_ids) {
+        // Fallback
+        for (let i = 0; i < docData.doc_ids.length; i++) {
+            if (descriptorSet.has(docData.doc_ids[i])) {
+                colorsAttribute.setXYZ(i, originalColors[i * 3], originalColors[i * 3 + 1], originalColors[i * 3 + 2]);
+                matchCount++;
+            }
         }
     }
 
@@ -224,8 +243,27 @@ function createSceneFromData(data) {
         positions.push(((pos[2] - minZ) / range * 10) - 5);
     }
 
-    // Process colors
-    if (docData.colors) {
+    // Process colors from hashes
+    if (docData.hashes) {
+        const colorMap = {};
+        for (let i = 0; i < docData.hashes.length; i++) {
+            const hash = docData.hashes[i];
+            if (!colorMap[hash]) {
+                // Generate color from hash
+                let h = 0;
+                for (let j = 0; j < hash.length; j++) {
+                    h = hash.charCodeAt(j) + ((h << 5) - h);
+                }
+                const hue = Math.abs(h % 360) / 360;
+                const color = new THREE.Color();
+                color.setHSL(hue, 0.5, 0.5);
+                colorMap[hash] = [color.r, color.g, color.b];
+            }
+            const c = colorMap[hash];
+            colors.push(c[0], c[1], c[2]);
+        }
+    } else if (docData.colors) {
+        // Fallback for old data format
         for (const c of docData.colors) {
             colors.push(c[0] / 255, c[1] / 255, c[2] / 255);
         }
@@ -559,7 +597,7 @@ window.onload = function () {
         }
 
         results.forEach((res, index) => {
-            descriptors.push(res.descriptor);
+            descriptors.push(res.hash || res.descriptor); // Use hash if available, else descriptor (fallback)
 
             const container = document.createElement('div');
             container.style.marginBottom = '15px';
@@ -801,6 +839,21 @@ window.onload = function () {
                     } else {
                         setStatus(`Error selecting model: ${payload.error}`, theme.error);
                     }
+                } else if (requestCmd === 'get_text_chunk') {
+                    if (payload.error) {
+                        if (infoDiv) infoDiv.innerText = 'Error loading text: ' + payload.error;
+                    } else {
+                        if (infoDiv) {
+                            infoDiv.innerText = payload.substring(0, 500) + (payload.length > 500 ? '...' : '');
+                        }
+                    }
+                } else if (requestCmd === 'get_metadata') {
+                    if (payload && !payload.error) {
+                        if (infoDiv) {
+                            const metaText = `\n\nTitle: ${payload.title || 'Unknown'}\nAuthors: ${payload.authors ? payload.authors.join(', ') : 'Unknown'}`;
+                            infoDiv.innerText += metaText;
+                        }
+                    }
                 } else if (requestCmd === 'get_3d_viz_data') {
                     if (payload.error) {
                         addLog(`Error loading 3D data: ${payload.error}`, theme.error);
@@ -809,25 +862,26 @@ window.onload = function () {
                         createSceneFromData(payload);
                     }
                 }
-            } else {
-                addLog(`[UNKNOWN] ${JSON.stringify(data)}`, theme.logUnknown);
             }
-        } catch (e) {
-            console.error("Error parsing message:", e);
-            addLog(`[ERROR] Raw: ${event.data}`, theme.error);
+        } else {
+            addLog(`[UNKNOWN] ${JSON.stringify(data)}`, theme.logUnknown);
         }
-    };
+    } catch (e) {
+        console.error("Error parsing message:", e);
+        addLog(`[ERROR] Raw: ${event.data}`, theme.error);
+    }
+};
 
-    ws.onclose = function () {
-        console.log("WebSocket disconnected");
-        setStatus('Disconnected', theme.error);
-    };
+ws.onclose = function () {
+    console.log("WebSocket disconnected");
+    setStatus('Disconnected', theme.error);
+};
 
-    ws.onerror = function (error) {
-        console.error("WebSocket error:", error);
-        setStatus('Error', theme.error);
-    };
+ws.onerror = function (error) {
+    console.error("WebSocket error:", error);
+    setStatus('Error', theme.error);
+};
 
-    // Initialize Visualization
-    initVisualization(colDetail);
+// Initialize Visualization
+initVisualization(colDetail);
 };
