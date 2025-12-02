@@ -231,6 +231,7 @@ def worker_proc():
                 hash_val = payload
                 if hash_val in ds.text_library:
                     descriptor = ds.text_library[hash_val]['descriptor']
+                    logger.info(f"get_metadata: hash={hash_val}, descriptor={descriptor}")
                     metadata = ds.get_metadata(descriptor)
                     response_payload = metadata
                 else:
@@ -248,6 +249,7 @@ def worker_proc():
                 try:
                     hash_val = payload.get('hash')
                     chunk_index = payload.get('chunk_index')
+                    logger.info(f"get_text_chunk: hash={hash_val}, chunk_index={chunk_index}")
                     if hash_val in ds.text_library:
                         text = ds.text_library[hash_val]['text']
                         chunk_text = VectorStore.get_chunk_context_aware(

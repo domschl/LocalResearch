@@ -11,6 +11,7 @@ let docData = null;
 let animationFrameId = null;
 let vizContainer = null;
 let infoDiv = null;
+let sendRequest = null;
 
 // --- Visualization Functions ---
 
@@ -97,12 +98,12 @@ function onMouseClick(event) {
             const hash = docData.hashes[pointIndex];
             const chunkIndex = docData.chunk_indices[pointIndex];
 
-            if (infoDiv) infoDiv.innerText = 'Loading text...';
+            if (infoDiv) infoDiv.innerText = `Loading text for point ${pointIndex}, hash ${hash}, chunk ${chunkIndex} ...`;
 
             // Fetch text chunk
-            send('get_text_chunk', { hash: hash, chunk_index: chunkIndex });
+            if (sendRequest) sendRequest('get_text_chunk', { hash: hash, chunk_index: chunkIndex });
             // Fetch metadata
-            send('get_metadata', hash);
+            if (sendRequest) sendRequest('get_metadata', hash);
         }
     } else {
         if (selectedPointIndex !== null) {
@@ -693,6 +694,7 @@ window.onload = function () {
         };
         ws.send(JSON.stringify(msg));
     }
+    sendRequest = send;
 
     replInput.addEventListener('keydown', function (e) {
         if (e.key === 'Enter') {
