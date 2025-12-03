@@ -278,6 +278,11 @@ function createSceneFromData(data) {
             pointsObject.material.dispose();
             pointsObject = null;
         }
+        if (selectionMarker) {
+            scene.remove(selectionMarker);
+            selectionMarker = null;
+        }
+        selectedPointIndex = null;
     }
 
     docData = data;
