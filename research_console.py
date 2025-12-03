@@ -574,7 +574,6 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                          ['select', '<model-ID>', 'Select model <id> (1..n) as active model for search. `list models` shows IDs and currently active model'],
                          ['index',  '[force] [all]', 'Generate vector database indices for new or changed documents'],
                          ['search', '<search-string>', 'Do a vector search with currently active model'],
-                         ['search', '<search-string>', 'Do a vector search with currently active model'],
                          ['ksearch', '<search-string> [source=<source>]', 'Do a keyword search on metadata (supports | ! *)'],
                          ['text', '', 'Print previous result of `search` without formatting for copying'],
                          ['show', '<ID>', 'Show metadata for a search result'],
