@@ -6,6 +6,7 @@ let scene, camera, renderer, controls;
 let pointsObject = null;
 let raycaster, mouse;
 let mouseDownPosition = new THREE.Vector2();
+let selectionMarker = null;
 let selectedPointIndex = null;
 let originalColors = [];
 let docData = null;
@@ -138,6 +139,10 @@ function highlightPoint(pointIndex, forceDeselect = false) {
             colorsAttribute.setXYZ(i, originalColors[i * 3], originalColors[i * 3 + 1], originalColors[i * 3 + 2]);
         }
         selectedPointIndex = null;
+        if (selectionMarker) {
+            scene.remove(selectionMarker);
+            selectionMarker = null;
+        }
     } else {
         // Dim all
         for (let i = 0; i < colorsAttribute.count; i++) {
@@ -159,11 +164,62 @@ function highlightPoint(pointIndex, forceDeselect = false) {
 
         for (const idx of pointsToHighlight) {
             colorsAttribute.setXYZ(idx, originalColors[idx * 3], originalColors[idx * 3 + 1], originalColors[idx * 3 + 2]);
-            // Maybe make it even brighter or a specific color?
-            // For now just original color against dimmed background is good.
         }
+
+        // Add marker
+        const positions = pointsObject.geometry.attributes.position;
+        const x = positions.getX(pointIndex);
+        const y = positions.getY(pointIndex);
+        const z = positions.getZ(pointIndex);
+        addSelectionMarker(new THREE.Vector3(x, y, z));
     }
     colorsAttribute.needsUpdate = true;
+}
+
+function addSelectionMarker(position) {
+    if (selectionMarker) {
+        scene.remove(selectionMarker);
+    }
+
+    const geometry = new THREE.SphereGeometry(0.1, 8, 8);
+    const material = new THREE.MeshBasicMaterial({
+        color: 0xff0000,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.8
+    });
+    selectionMarker = new THREE.Mesh(geometry, material);
+    selectionMarker.position.copy(position);
+    scene.add(selectionMarker);
+}
+
+function focusOnPoint(pointIndex) {
+    if (!pointsObject || !pointsObject.geometry) return;
+
+    // Highlight first
+    highlightPoint(pointIndex);
+
+    const positions = pointsObject.geometry.attributes.position;
+    const x = positions.getX(pointIndex);
+    const y = positions.getY(pointIndex);
+    const z = positions.getZ(pointIndex);
+    const target = new THREE.Vector3(x, y, z);
+
+    // Animate controls target
+    // For simplicity, just set it. We could tween it for smoothness.
+    if (controls) {
+        controls.target.copy(target);
+
+        // Move camera if it's too far? Or just let user zoom.
+        // Let's move it slightly closer if it's very far, but maintain direction.
+        const dist = camera.position.distanceTo(target);
+        if (dist > 5) {
+            const dir = new THREE.Vector3().subVectors(camera.position, target).normalize();
+            camera.position.copy(target).add(dir.multiplyScalar(3));
+        }
+
+        controls.update();
+    }
 }
 
 function highlightDescriptors(descriptors) {
@@ -689,7 +745,7 @@ window.onload = function () {
                 btn.style.color = theme.primary;
                 btn.onclick = (e) => {
                     e.stopPropagation();
-                    highlightPoint(pointIndex);
+                    focusOnPoint(pointIndex);
                 };
                 line1.appendChild(btn);
             }
