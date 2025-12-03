@@ -5,6 +5,7 @@ import { OrbitControls } from './third_party/three/OrbitControls.js';
 let scene, camera, renderer, controls;
 let pointsObject = null;
 let raycaster, mouse;
+let mouseDownPosition = new THREE.Vector2();
 let selectedPointIndex = null;
 let originalColors = [];
 let docData = null;
@@ -12,6 +13,8 @@ let animationFrameId = null;
 let vizContainer = null;
 let infoDiv = null;
 let sendRequest = null;
+let lastQuery = '';
+let currentModelName = 'Unknown';
 
 // --- Visualization Functions ---
 
@@ -64,6 +67,7 @@ function initVisualization(container) {
 
     // Events
     window.addEventListener('resize', onWindowResize);
+    renderer.domElement.addEventListener('mousedown', onMouseDown);
     renderer.domElement.addEventListener('click', onMouseClick);
 
     animate();
@@ -79,8 +83,19 @@ function onWindowResize() {
     }
 }
 
+function onMouseDown(event) {
+    mouseDownPosition.set(event.clientX, event.clientY);
+}
+
 function onMouseClick(event) {
     if (!docData || !pointsObject || !camera || !raycaster || !mouse) return;
+
+    // Check if this was a drag (rotation) or a click
+    const currentPos = new THREE.Vector2(event.clientX, event.clientY);
+    if (currentPos.distanceTo(mouseDownPosition) > 5) {
+        // Moved more than 5 pixels, treat as drag/rotation
+        return;
+    }
 
     const rect = renderer.domElement.getBoundingClientRect();
     mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
@@ -155,6 +170,15 @@ function highlightDescriptors(descriptors) {
     if (!pointsObject || !pointsObject.geometry || !docData) return;
 
     const colorsAttribute = pointsObject.geometry.attributes.color;
+
+    if (!descriptors || descriptors.length === 0) {
+        // Restore all to original colors
+        for (let i = 0; i < colorsAttribute.count; i++) {
+            colorsAttribute.setXYZ(i, originalColors[i * 3], originalColors[i * 3 + 1], originalColors[i * 3 + 2]);
+        }
+        colorsAttribute.needsUpdate = true;
+        return;
+    }
 
     // Dim all first
     for (let i = 0; i < colorsAttribute.count; i++) {
@@ -555,6 +579,7 @@ window.onload = function () {
                 if (!docData) {
                     loadVisualizationData(model.name, send);
                 }
+                currentModelName = model.name;
             }
             if (!model.enabled) {
                 row.style.color = theme.secondary;
@@ -589,7 +614,7 @@ window.onload = function () {
         colProperty.appendChild(table);
     }
 
-    function renderResultItem(res, index, showScore = true) {
+    function renderResultItem(res, index, showScore = true, onClose = null) {
         const container = document.createElement('div');
         container.style.marginBottom = '15px';
         container.style.borderBottom = `1px solid ${theme.border}`;
@@ -602,6 +627,25 @@ window.onload = function () {
         headerContainer.style.display = 'flex';
         headerContainer.style.marginBottom = '5px';
         container.appendChild(headerContainer);
+
+        // Close Button (if provided)
+        if (onClose) {
+            const closeBtn = document.createElement('button');
+            closeBtn.innerText = '×';
+            closeBtn.title = 'Close this result';
+            closeBtn.style.border = 'none';
+            closeBtn.style.background = 'transparent';
+            closeBtn.style.color = theme.secondary;
+            closeBtn.style.cursor = 'pointer';
+            closeBtn.style.fontSize = '16px';
+            closeBtn.style.marginLeft = 'auto'; // Push to right
+            closeBtn.style.alignSelf = 'flex-start';
+            closeBtn.onclick = (e) => {
+                e.stopPropagation();
+                onClose();
+            };
+            headerContainer.appendChild(closeBtn);
+        }
 
         // Icon
         if (res.metadata && res.metadata.icon) {
@@ -712,26 +756,112 @@ window.onload = function () {
         return container;
     }
 
-    function renderSearchResults(results) {
-        colMain.innerHTML = '';
-        const title = document.createElement('h3');
-        title.innerText = 'Search Results';
-        title.style.marginTop = '0';
-        colMain.appendChild(title);
+    function renderSearchResults(results, query, modelName) {
+        // colMain.innerHTML = ''; // Do NOT clear
 
         if (!results || results.length === 0) {
-            colMain.innerText += 'No results found.';
-            highlightDescriptors([]); // Clear highlights
+            addToRepl('No results found.', theme.warning);
+            highlightDescriptors([]);
             return;
         }
 
+        const blockContainer = document.createElement('div');
+        blockContainer.style.marginBottom = '20px';
+        blockContainer.style.border = `1px solid ${theme.border}`;
+        blockContainer.style.borderRadius = '5px';
+        blockContainer.style.backgroundColor = theme.background;
+
+        // Header
+        const header = document.createElement('div');
+        header.style.padding = '10px';
+        header.style.backgroundColor = theme.base2;
+        header.style.borderBottom = `1px solid ${theme.border}`;
+        header.style.display = 'flex';
+        header.style.justifyContent = 'space-between';
+        header.style.alignItems = 'center';
+
+        const title = document.createElement('span');
+        title.innerHTML = `Search: <strong>${query}</strong> <span style="font-size: 0.8em; color: ${theme.secondary}">(${modelName})</span>`;
+        header.appendChild(title);
+
+        const closeAllBtn = document.createElement('button');
+        closeAllBtn.innerText = 'Close Search';
+        closeAllBtn.style.border = 'none';
+        closeAllBtn.style.background = 'transparent';
+        closeAllBtn.style.color = theme.red;
+        closeAllBtn.style.cursor = 'pointer';
+        closeAllBtn.onclick = () => {
+            blockContainer.remove();
+        };
+        header.appendChild(closeAllBtn);
+        blockContainer.appendChild(header);
+
+        // Results
+        const resultsContainer = document.createElement('div');
+        resultsContainer.style.padding = '10px';
+        blockContainer.appendChild(resultsContainer);
+
         results.forEach((res, index) => {
-            const item = renderResultItem(res, index, true);
-            colMain.appendChild(item);
+            const item = renderResultItem(res, index, true, () => {
+                item.remove();
+                // If no items left, maybe remove the block? 
+                if (resultsContainer.children.length === 0) {
+                    blockContainer.remove();
+                }
+            });
+            resultsContainer.appendChild(item);
         });
 
-        // We no longer automatically highlight descriptors
+        colMain.appendChild(blockContainer);
+        colMain.scrollTop = colMain.scrollHeight; // Auto scroll to bottom
+
         highlightDescriptors([]);
+    }
+
+    function renderChunkDetails(chunk) {
+        const blockContainer = document.createElement('div');
+        blockContainer.style.marginBottom = '20px';
+        blockContainer.style.border = `1px solid ${theme.border}`;
+        blockContainer.style.borderRadius = '5px';
+        blockContainer.style.backgroundColor = theme.background;
+
+        // Header
+        const header = document.createElement('div');
+        header.style.padding = '10px';
+        header.style.backgroundColor = theme.selectionBg; // Distinct color for selection
+        header.style.borderBottom = `1px solid ${theme.border}`;
+        header.style.display = 'flex';
+        header.style.justifyContent = 'space-between';
+        header.style.alignItems = 'center';
+
+        const title = document.createElement('span');
+        title.innerHTML = `Selected Point <span style="font-size: 0.8em; color: ${theme.secondary}">(${currentModelName})</span>`;
+        header.appendChild(title);
+
+        const closeBtn = document.createElement('button');
+        closeBtn.innerText = 'Close';
+        closeBtn.style.border = 'none';
+        closeBtn.style.background = 'transparent';
+        closeBtn.style.color = theme.red;
+        closeBtn.style.cursor = 'pointer';
+        closeBtn.onclick = () => {
+            blockContainer.remove();
+        };
+        header.appendChild(closeBtn);
+        blockContainer.appendChild(header);
+
+        // Content
+        const contentContainer = document.createElement('div');
+        contentContainer.style.padding = '10px';
+        blockContainer.appendChild(contentContainer);
+
+        const item = renderResultItem(chunk, null, false, () => {
+            blockContainer.remove();
+        });
+        contentContainer.appendChild(item);
+
+        colMain.appendChild(blockContainer);
+        colMain.scrollTop = colMain.scrollHeight;
     }
 
     // Connect to WebSocket
@@ -763,6 +893,8 @@ window.onload = function () {
 
                 if (cmd === 'search') {
                     if (args) {
+                        console.log("Sending search:", args);
+                        lastQuery = args;
                         send('search', args);
                     } else {
                         addToRepl('Usage: search <query>', theme.error);
@@ -863,11 +995,13 @@ window.onload = function () {
                 if (requestCmd === 'list_models') {
                     renderModelList(payload);
                 } else if (requestCmd === 'search') {
-                    renderSearchResults(payload);
+                    console.log("Search Payload:", payload);
+                    renderSearchResults(payload, lastQuery, currentModelName);
                     addToRepl(`Search completed. Found ${payload ? payload.length : 0} results.`, theme.searchId);
                 } else if (requestCmd === 'select') {
                     if (payload.status === 'ok') {
                         setStatus(`Model ${payload.selected_id} selected`, theme.success);
+                        // currentModelName is updated in renderModelList when we refresh
                         send('list_models', ''); // Refresh list
                     } else {
                         setStatus(`Error selecting model: ${payload.error}`, theme.error);
@@ -877,13 +1011,7 @@ window.onload = function () {
                         if (infoDiv) infoDiv.innerText = 'Error loading details: ' + payload.error;
                     } else {
                         if (infoDiv) infoDiv.innerText = 'Details loaded.';
-                        colMain.innerHTML = '';
-                        const title = document.createElement('h3');
-                        title.innerText = 'Selected Point';
-                        title.style.marginTop = '0';
-                        colMain.appendChild(title);
-                        const item = renderResultItem(payload, null, false);
-                        colMain.appendChild(item);
+                        renderChunkDetails(payload);
                     }
                 } else if (requestCmd === 'get_3d_viz_data') {
                     if (payload.error) {
