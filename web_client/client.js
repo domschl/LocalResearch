@@ -144,9 +144,25 @@ function highlightPoint(pointIndex, forceDeselect = false) {
             selectionMarker = null;
         }
     } else {
-        // Dim all
+        // Dim all (simulate transparency by blending with background)
+        // Background is 0xf0f0f0 (approx 0.94, 0.94, 0.94)
+        const bgR = 0.94;
+        const bgG = 0.94;
+        const bgB = 0.94;
+        const alpha = 0.3; // Low opacity for unselected
+
         for (let i = 0; i < colorsAttribute.count; i++) {
-            colorsAttribute.setXYZ(i, originalColors[i * 3] * 0.1, originalColors[i * 3 + 1] * 0.1, originalColors[i * 3 + 2] * 0.1);
+            const r = originalColors[i * 3];
+            const g = originalColors[i * 3 + 1];
+            const b = originalColors[i * 3 + 2];
+
+            // lerp(bg, color, alpha) -> bg * (1-alpha) + color * alpha
+            colorsAttribute.setXYZ(
+                i,
+                bgR * (1 - alpha) + r * alpha,
+                bgG * (1 - alpha) + g * alpha,
+                bgB * (1 - alpha) + b * alpha
+            );
         }
         // Highlight selected
         selectedPointIndex = pointIndex;
@@ -236,9 +252,23 @@ function highlightDescriptors(descriptors) {
         return;
     }
 
-    // Dim all first
+    // Dim all first (simulate transparency)
+    const bgR = 0.94;
+    const bgG = 0.94;
+    const bgB = 0.94;
+    const alpha = 0.3;
+
     for (let i = 0; i < colorsAttribute.count; i++) {
-        colorsAttribute.setXYZ(i, 0.8, 0.8, 0.8); // Make everything gray/dim
+        const r = originalColors[i * 3];
+        const g = originalColors[i * 3 + 1];
+        const b = originalColors[i * 3 + 2];
+
+        colorsAttribute.setXYZ(
+            i,
+            bgR * (1 - alpha) + r * alpha,
+            bgG * (1 - alpha) + g * alpha,
+            bgB * (1 - alpha) + b * alpha
+        );
     }
 
     // Highlight matches
@@ -925,6 +955,95 @@ window.onload = function () {
         colMain.scrollTop = colMain.scrollHeight;
     }
 
+    function renderTimeline(events, criteria) {
+        const blockContainer = document.createElement('div');
+        blockContainer.style.marginBottom = '20px';
+        blockContainer.style.border = `1px solid ${theme.border}`;
+        blockContainer.style.borderRadius = '5px';
+        blockContainer.style.backgroundColor = theme.background;
+
+        // Header
+        const header = document.createElement('div');
+        header.style.padding = '10px';
+        header.style.backgroundColor = theme.base2;
+        header.style.borderBottom = `1px solid ${theme.border}`;
+        header.style.display = 'flex';
+        header.style.justifyContent = 'space-between';
+        header.style.alignItems = 'center';
+
+        const title = document.createElement('span');
+        let criteriaText = [];
+        if (criteria.time) criteriaText.push(`Time: ${criteria.time}`);
+        if (criteria.domains) criteriaText.push(`Domains: ${criteria.domains}`);
+        if (criteria.keywords) criteriaText.push(`Keywords: ${criteria.keywords}`);
+
+        title.innerHTML = `Timeline: <strong>${criteriaText.join(', ') || 'All'}</strong>`;
+        header.appendChild(title);
+
+        const closeBtn = document.createElement('button');
+        closeBtn.innerText = 'Close';
+        closeBtn.style.border = 'none';
+        closeBtn.style.background = 'transparent';
+        closeBtn.style.color = theme.red;
+        closeBtn.style.cursor = 'pointer';
+        closeBtn.onclick = () => {
+            blockContainer.remove();
+        };
+        header.appendChild(closeBtn);
+        blockContainer.appendChild(header);
+
+        // Content
+        const contentContainer = document.createElement('div');
+        contentContainer.style.padding = '10px';
+        contentContainer.style.maxHeight = '400px';
+        contentContainer.style.overflowY = 'auto';
+        blockContainer.appendChild(contentContainer);
+
+        if (!events || events.length === 0) {
+            contentContainer.innerText = "No events found.";
+        } else {
+            const table = document.createElement('table');
+            table.style.width = '100%';
+            table.style.borderCollapse = 'collapse';
+
+            const thead = document.createElement('tr');
+            ['Date', 'Event'].forEach(text => {
+                const th = document.createElement('th');
+                th.innerText = text;
+                th.style.textAlign = 'left';
+                th.style.borderBottom = `1px solid ${theme.border}`;
+                th.style.padding = '5px';
+                thead.appendChild(th);
+            });
+            table.appendChild(thead);
+
+            events.forEach(evt => {
+                const row = document.createElement('tr');
+
+                const tdDate = document.createElement('td');
+                tdDate.innerText = evt.date;
+                tdDate.style.padding = '5px';
+                tdDate.style.borderBottom = `1px solid ${theme.border}40`; // Faint border
+                tdDate.style.whiteSpace = 'nowrap';
+                tdDate.style.verticalAlign = 'top';
+                tdDate.style.color = theme.blue;
+                row.appendChild(tdDate);
+
+                const tdEvent = document.createElement('td');
+                tdEvent.innerText = evt.event;
+                tdEvent.style.padding = '5px';
+                tdEvent.style.borderBottom = `1px solid ${theme.border}40`;
+                row.appendChild(tdEvent);
+
+                table.appendChild(row);
+            });
+            contentContainer.appendChild(table);
+        }
+
+        colMain.appendChild(blockContainer);
+        colMain.scrollTop = colMain.scrollHeight;
+    }
+
     // Connect to WebSocket
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws`;
@@ -962,6 +1081,27 @@ window.onload = function () {
                     }
                 } else if (cmd === 'list' && args === 'models') {
                     send('list_models', '');
+                } else if (cmd === 'timeline') {
+                    // Parse args: time=... domains=... keywords=...
+                    // Simple parser
+                    const payload = {};
+                    const regex = /(\w+)=("[^"]*"|\S+)/g;
+                    let match;
+                    while ((match = regex.exec(args)) !== null) {
+                        let val = match[2];
+                        if (val.startsWith('"') && val.endsWith('"')) {
+                            val = val.slice(1, -1);
+                        }
+                        payload[match[1]] = val;
+                    }
+                    // If no named args but just text, assume keywords? Or just send empty if no args?
+                    // The CLI uses a specific parser. Here we just support named args for now as per request.
+                    // If args is present but regex didn't match anything, maybe it's just keywords?
+                    // But user request example: timeline [time=...]
+
+                    lastQuery = payload; // Store for display
+                    send('timeline', payload);
+                    addToRepl(`Requesting timeline...`, theme.logLog);
                 } else {
                     addToRepl(`Unknown command: ${cmd}`, theme.error);
                 }
@@ -1073,6 +1213,13 @@ window.onload = function () {
                     } else {
                         if (infoDiv) infoDiv.innerText = 'Details loaded.';
                         renderChunkDetails(payload);
+                    }
+                } else if (requestCmd === 'timeline') {
+                    if (payload.error) {
+                        addToRepl(`Error loading timeline: ${payload.error}`, theme.error);
+                    } else {
+                        renderTimeline(payload, lastQuery || {});
+                        addToRepl(`Timeline loaded. ${payload.length} events.`, theme.success);
                     }
                 } else if (requestCmd === 'get_3d_viz_data') {
                     if (payload.error) {

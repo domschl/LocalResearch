@@ -298,6 +298,34 @@ def worker_proc():
                     logger.error(f"Failed to get chunk details: {e}")
                     response_payload = {"error": str(e)}
 
+            elif cmd == 'timeline':
+                try:
+                    # payload contains arguments
+                    domains = payload.get('domains')
+                    keywords = payload.get('keywords')
+                    time_range = payload.get('time')
+                    partial = payload.get('partial_overlap', False)
+                    full = payload.get('full_overlap', False)
+
+                    if isinstance(domains, str): domains = domains.split(' ')
+                    if isinstance(keywords, str): keywords = keywords.split(' ')
+                    
+                    # Call backend
+                    tlel = ds.tl.search_events(time_range, domains, keywords, True, full, partial)
+                    
+                    # Format results
+                    events = []
+                    for tle in tlel:
+                        date = ds.tl.get_date_string_from_event(tle['jd_event'])
+                        event_text = ds.tl.get_event_text(tle['eventdata'])
+                        if date is not None:
+                            events.append({"date": date, "event": event_text})
+                    
+                    response_payload = events
+                except Exception as e:
+                    logger.error(f"Timeline search failed: {e}")
+                    response_payload = {"error": str(e)}
+
             else:
                 response_payload = f"Unknown command: {cmd}"
 
