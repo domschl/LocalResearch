@@ -1374,10 +1374,21 @@ window.onload = function () {
     const wsUrl = `${protocol}//${window.location.host}/ws`;
     const ws = new WebSocket(wsUrl);
 
+    function generateUUID() {
+        if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+            return crypto.randomUUID();
+        }
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+            const r = Math.random() * 16 | 0;
+            const v = c === 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+        });
+    }
+
     function send(cmd, payload) {
         const msg = {
             token: "dummy-token",
-            uuid: crypto.randomUUID(),
+            uuid: generateUUID(),
             cmd: cmd,
             payload: payload
         };
@@ -1390,7 +1401,6 @@ window.onload = function () {
             const commandLine = replInput.value.trim();
             if (commandLine) {
                 addToRepl(`>>> ${commandLine}`);
-                replInput.value = '';
 
                 const parts = commandLine.split(' ');
                 const cmd = parts[0];
@@ -1428,7 +1438,7 @@ window.onload = function () {
                     send('timeline', payload);
                     addToRepl(`Requesting timeline...`, theme.logLog);
                 } else {
-                    addToRepl(`Unknown command: ${cmd}`, theme.error);
+                    addToRepl(`Unknown command: ${cmd} `, theme.error);
                 }
             }
         }
@@ -1446,7 +1456,7 @@ window.onload = function () {
 
     function createProgressBar() {
         const container = document.createElement('div');
-        container.style.border = `1px solid ${theme.border}`;
+        container.style.border = `1px solid ${theme.border} `;
         container.style.backgroundColor = theme.progressContainer;
         container.style.height = '18px';
         container.style.position = 'relative';
@@ -1486,7 +1496,7 @@ window.onload = function () {
             const requestCmd = data.request_cmd;
 
             if (cmd === 'log') {
-                addLog(`[LOG] ${payload}`, theme.logLog);
+                addLog(`[LOG] ${payload} `, theme.logLog);
             } else if (cmd === 'progress') {
                 console.log("Progress data:", data);
                 let progressData = payload;
@@ -1506,7 +1516,7 @@ window.onload = function () {
                     currentProgressBar = createProgressBar();
                 }
 
-                currentProgressBar.bar.style.width = `${percent}%`;
+                currentProgressBar.bar.style.width = `${percent}% `;
                 currentProgressBar.label.innerText = `${state} (${percent}%)`;
 
                 if (progressData.finished) {
@@ -1516,21 +1526,21 @@ window.onload = function () {
             } else if (cmd === 'response') {
                 console.log("Response data:", data);
                 const final = data.final ? ' [FINAL]' : '';
-                // addLog(`[RESPONSE] ${requestCmd || ''}${final}`, theme.logResponse);
+                // addLog(`[RESPONSE] ${ requestCmd || '' }${ final } `, theme.logResponse);
 
                 if (requestCmd === 'list_models') {
                     renderModelList(payload);
                 } else if (requestCmd === 'search') {
                     console.log("Search Payload:", payload);
                     renderSearchResults(payload, lastQuery, currentModelName);
-                    addToRepl(`Search completed. Found ${payload ? payload.length : 0} results.`, theme.searchId);
+                    addToRepl(`Search completed.Found ${payload ? payload.length : 0} results.`, theme.searchId);
                 } else if (requestCmd === 'select') {
                     if (payload.status === 'ok') {
                         setStatus(`Model ${payload.selected_id} selected`, theme.success);
                         // currentModelName is updated in renderModelList when we refresh
                         send('list_models', ''); // Refresh list
                     } else {
-                        setStatus(`Error selecting model: ${payload.error}`, theme.error);
+                        setStatus(`Error selecting model: ${payload.error} `, theme.error);
                     }
                 } else if (requestCmd === 'get_chunk_details') {
                     if (payload.error) {
@@ -1541,25 +1551,25 @@ window.onload = function () {
                     }
                 } else if (requestCmd === 'timeline') {
                     if (payload.error) {
-                        addToRepl(`Error loading timeline: ${payload.error}`, theme.error);
+                        addToRepl(`Error loading timeline: ${payload.error} `, theme.error);
                     } else {
                         renderTimeline(payload, lastQuery || {});
-                        addToRepl(`Timeline loaded. ${payload.length} events.`, theme.success);
+                        addToRepl(`Timeline loaded.${payload.length} events.`, theme.success);
                     }
                 } else if (requestCmd === 'get_3d_viz_data') {
                     if (payload.error) {
-                        addLog(`Error loading 3D data: ${payload.error}`, theme.error);
-                        if (infoDiv) infoDiv.innerText = `Error: ${payload.error}`;
+                        addLog(`Error loading 3D data: ${payload.error} `, theme.error);
+                        if (infoDiv) infoDiv.innerText = `Error: ${payload.error} `;
                     } else {
                         createSceneFromData(payload);
                     }
                 }
             } else {
-                addLog(`[UNKNOWN] ${JSON.stringify(data)}`, theme.logUnknown);
+                addLog(`[UNKNOWN] ${JSON.stringify(data)} `, theme.logUnknown);
             }
         } catch (e) {
             console.error("Error parsing message:", e);
-            addLog(`[ERROR] Raw: ${event.data}`, theme.error);
+            addLog(`[ERROR] Raw: ${event.data} `, theme.error);
         }
     };
 
