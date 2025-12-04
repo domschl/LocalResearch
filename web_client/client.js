@@ -498,6 +498,86 @@ window.onload = function () {
         ::-webkit-scrollbar-thumb:hover {
             background: ${theme.base01}; 
         }
+
+        /* Pane System */
+        .pane {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            position: relative;
+            background-color: ${theme.background};
+        }
+        .pane-title {
+            height: 24px;
+            background-color: ${theme.base2};
+            color: ${theme.base01};
+            display: flex;
+            align-items: center;
+            padding: 0 8px;
+            font-size: 11px;
+            font-weight: bold;
+            border-bottom: 1px solid ${theme.border};
+            user-select: none;
+            flex-shrink: 0;
+        }
+        .pane-title .title-text {
+            flex: 1;
+        }
+        .pane-title .pane-controls {
+            display: flex;
+            gap: 4px;
+        }
+        .pane-control-btn {
+            cursor: pointer;
+            width: 16px;
+            height: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 2px;
+        }
+        .pane-control-btn:hover {
+            background-color: ${theme.base1};
+            color: ${theme.base3};
+        }
+        .pane-content {
+            flex: 1;
+            overflow: auto;
+            position: relative;
+        }
+        
+        /* Splitters */
+        .splitter {
+            background-color: ${theme.border};
+            z-index: 10;
+        }
+        .splitter:hover, .splitter.active {
+            background-color: ${theme.primary};
+        }
+        .splitter-v {
+            width: 4px;
+            cursor: col-resize;
+            flex-shrink: 0;
+        }
+        .splitter-h {
+            height: 4px;
+            cursor: row-resize;
+            flex-shrink: 0;
+        }
+        
+        /* Toolbar icons */
+        .toolbar-icon {
+            cursor: pointer;
+            margin-left: 8px;
+            opacity: 0.7;
+        }
+        .toolbar-icon:hover {
+            opacity: 1;
+        }
+        .toolbar-icon.inactive {
+            opacity: 0.3;
+            text-decoration: line-through;
+        }
     `;
     document.head.appendChild(style);
 
@@ -518,59 +598,294 @@ window.onload = function () {
     statusBar.style.alignItems = 'center';
     statusBar.style.padding = '0 10px';
     statusBar.style.fontSize = '12px';
-    statusBar.innerText = 'Connecting...';
     document.body.appendChild(statusBar);
 
-    // Main Container (3 columns)
-    const mainContainer = document.createElement('div');
-    mainContainer.style.flex = '1';
-    mainContainer.style.display = 'flex';
-    mainContainer.style.overflow = 'hidden';
-    mainContainer.style.borderBottom = `1px solid ${theme.border}`;
-    document.body.appendChild(mainContainer);
+    const statusText = document.createElement('span');
+    statusText.innerText = 'Connecting...';
+    statusText.style.flex = '1';
+    statusBar.appendChild(statusText);
 
-    // Column 1: Property (20%)
-    const colProperty = document.createElement('div');
-    colProperty.style.flex = '0 0 20%';
-    colProperty.style.borderRight = `1px solid ${theme.border}`;
-    colProperty.style.overflowY = 'auto';
-    colProperty.style.padding = '10px';
-    mainContainer.appendChild(colProperty);
+    // --- Pane Management ---
+    const panes = {};
+    const splitters = [];
 
-    // Column 2: Main (40%)
-    const colMain = document.createElement('div');
-    colMain.style.flex = '0 0 40%';
-    colMain.style.borderRight = `1px solid ${theme.border}`;
-    colMain.style.overflowY = 'auto';
-    colMain.style.padding = '10px';
-    colMain.innerText = 'Main Content Area';
-    colMain.style.backgroundColor = theme.background;
-    mainContainer.appendChild(colMain);
+    function createPane(id, title, parent, initialFlex, contentElement = null) {
+        const pane = document.createElement('div');
+        pane.className = 'pane';
+        pane.id = `pane-${id}`;
+        // Parse initialFlex to get basis if possible, or just use it.
+        // We want flex-grow: 1, flex-shrink: 1, flex-basis: initialFlex
+        // If initialFlex is "0 0 20%", we want "1 1 20%".
+        // Let's assume initialFlex passed is the basis or full string.
+        // The caller passes "0 0 20%". We should change that.
+        // Let's just override here.
+        const basis = initialFlex.split(' ')[2] || initialFlex || 'auto'; // Handle cases where initialFlex is just a basis string
+        pane.style.flex = `1 1 ${basis}`;
 
-    // Column 3: Detail (40%)
-    const colDetail = document.createElement('div');
-    colDetail.style.flex = '0 0 40%';
-    colDetail.style.overflow = 'hidden'; // Changed to hidden for canvas
-    colDetail.style.padding = '0'; // Remove padding for canvas
-    // colDetail.innerText = 'Detail View'; // Removed text
-    mainContainer.appendChild(colDetail);
+        // Title Bar
+        const titleBar = document.createElement('div');
+        titleBar.className = 'pane-title';
 
-    // Bottom Container (2 columns)
-    const bottomContainer = document.createElement('div');
-    bottomContainer.style.height = '200px';
-    bottomContainer.style.display = 'flex';
-    bottomContainer.style.borderTop = `1px solid ${theme.border}`;
-    document.body.appendChild(bottomContainer);
+        const titleText = document.createElement('span');
+        titleText.className = 'title-text';
+        titleText.innerText = title;
+        titleBar.appendChild(titleText);
 
-    // Column 4: Repl (50%)
-    const colRepl = document.createElement('div');
-    colRepl.style.flex = '0 0 50%';
-    colRepl.style.borderRight = `1px solid ${theme.border}`;
-    colRepl.style.padding = '10px';
-    colRepl.style.display = 'flex';
-    colRepl.style.flexDirection = 'column';
-    bottomContainer.appendChild(colRepl);
+        const controls = document.createElement('div');
+        controls.className = 'pane-controls';
 
+        const hideBtn = document.createElement('div');
+        hideBtn.className = 'pane-control-btn';
+        hideBtn.innerText = '×';
+        hideBtn.title = 'Hide Pane';
+        hideBtn.onclick = () => togglePane(id, false);
+        controls.appendChild(hideBtn);
+
+        titleBar.appendChild(controls);
+        pane.appendChild(titleBar);
+
+        // Content Area
+        const content = document.createElement('div');
+        content.className = 'pane-content';
+        if (contentElement) {
+            content.appendChild(contentElement);
+        }
+        pane.appendChild(content);
+
+        parent.appendChild(pane);
+
+        panes[id] = {
+            element: pane,
+            parent: parent,
+            initialFlex: initialFlex,
+            visible: true,
+            title: title
+        };
+
+        return { pane, content };
+    }
+
+    function createSplitter(parent, orientation, prevPaneId, nextPaneId) {
+        const splitter = document.createElement('div');
+        splitter.className = `splitter splitter-${orientation === 'horizontal' ? 'h' : 'v'}`;
+        parent.appendChild(splitter);
+
+        let isDragging = false;
+
+        splitter.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            splitter.classList.add('active');
+            document.body.style.cursor = orientation === 'horizontal' ? 'row-resize' : 'col-resize';
+            e.preventDefault();
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+
+            const prevPane = panes[prevPaneId].element;
+            const nextPane = panes[nextPaneId].element;
+
+            if (!panes[prevPaneId].visible || !panes[nextPaneId].visible) return;
+
+            const parentRect = parent.getBoundingClientRect();
+            const prevRect = prevPane.getBoundingClientRect();
+            const nextRect = nextPane.getBoundingClientRect();
+
+            if (orientation === 'horizontal') {
+                // Row resizing (height)
+                // Calculate total available height for these two panes
+                const totalHeight = prevRect.height + nextRect.height;
+                const startY = prevRect.top;
+
+                // New height for prevPane
+                let newPrevHeight = e.clientY - startY;
+
+                // Constrain
+                if (newPrevHeight < 50) newPrevHeight = 50;
+                if (newPrevHeight > totalHeight - 50) newPrevHeight = totalHeight - 50;
+
+                const newNextHeight = totalHeight - newPrevHeight;
+
+                const prevPercent = (newPrevHeight / parentRect.height) * 100;
+                const nextPercent = (newNextHeight / parentRect.height) * 100;
+
+                prevPane.style.flexBasis = `${prevPercent}%`;
+                nextPane.style.flexBasis = `${nextPercent}%`;
+
+            } else {
+                // Column resizing (width)
+                const totalWidth = prevRect.width + nextRect.width;
+                const startX = prevRect.left;
+
+                let newPrevWidth = e.clientX - startX;
+
+                if (newPrevWidth < 50) newPrevWidth = 50;
+                if (newPrevWidth > totalWidth - 50) newPrevWidth = totalWidth - 50;
+
+                const newNextWidth = totalWidth - newPrevWidth;
+
+                const prevPercent = (newPrevWidth / parentRect.width) * 100;
+                const nextPercent = (newNextWidth / parentRect.width) * 100;
+
+                prevPane.style.flexBasis = `${prevPercent}%`;
+                nextPane.style.flexBasis = `${nextPercent}%`;
+
+                // Trigger resize for 3D view
+                if (typeof onWindowResize === 'function') onWindowResize();
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (isDragging) {
+                isDragging = false;
+                splitter.classList.remove('active');
+                document.body.style.cursor = '';
+            }
+        });
+
+        splitters.push({ element: splitter, prev: prevPaneId, next: nextPaneId });
+        return splitter;
+    }
+
+    function togglePane(id, show) {
+        const p = panes[id];
+        if (!p) return;
+
+        p.visible = show;
+        p.element.style.display = show ? 'flex' : 'none';
+
+        updateSplitters();
+
+        const icon = document.getElementById(`toggle-icon-${id}`);
+        if (icon) {
+            if (show) icon.classList.remove('inactive');
+            else icon.classList.add('inactive');
+        }
+    }
+
+    function updateSplitters() {
+        splitters.forEach(s => {
+            const prev = panes[s.prev];
+            const next = panes[s.next];
+            if (prev.visible && next.visible) {
+                s.element.style.display = 'block';
+            } else {
+                s.element.style.display = 'none';
+            }
+        });
+    }
+
+    // --- Layout Construction ---
+
+    const workspace = document.createElement('div');
+    workspace.style.flex = '1';
+    workspace.style.display = 'flex';
+    workspace.style.flexDirection = 'column';
+    workspace.style.overflow = 'hidden';
+    document.body.appendChild(workspace);
+
+    // Upper Area (Columns)
+    const upperArea = document.createElement('div');
+    upperArea.style.display = 'flex';
+    upperArea.style.flex = '1';
+    upperArea.style.overflow = 'hidden';
+    workspace.appendChild(upperArea);
+
+    // Column 1: Property
+    const colPropertyContent = document.createElement('div');
+    colPropertyContent.style.height = '100%';
+    colPropertyContent.style.overflowY = 'auto';
+    colPropertyContent.style.padding = '10px';
+
+    const { content: colPropertyWrapper } = createPane('property', 'Models', upperArea, '0 0 20%', colPropertyContent);
+    const colProperty = colPropertyContent;
+
+    createSplitter(upperArea, 'vertical', 'property', 'main');
+
+    // Column 2: Main
+    const colMainContent = document.createElement('div');
+    colMainContent.style.height = '100%';
+    colMainContent.style.overflowY = 'auto';
+    colMainContent.style.padding = '10px';
+    colMainContent.innerText = 'Main Content Area';
+    colMainContent.style.backgroundColor = theme.background;
+
+    createPane('main', 'Search & Content', upperArea, '0 0 40%', colMainContent);
+    const colMain = colMainContent;
+
+    createSplitter(upperArea, 'vertical', 'main', 'detail');
+
+    // Column 3: Detail
+    const colDetailContent = document.createElement('div');
+    colDetailContent.style.height = '100%';
+    colDetailContent.style.overflow = 'hidden';
+    colDetailContent.style.position = 'relative';
+    colDetailContent.style.padding = '0';
+
+    createPane('detail', 'Visualization', upperArea, '0 0 40%', colDetailContent);
+    const colDetail = colDetailContent;
+
+    // Horizontal Splitter between Upper and Lower
+    const hSplitter = document.createElement('div');
+    hSplitter.className = 'splitter splitter-h';
+    workspace.appendChild(hSplitter);
+
+    // Lower Area
+    const lowerArea = document.createElement('div');
+    lowerArea.style.display = 'flex';
+    lowerArea.style.height = '200px';
+    lowerArea.style.overflow = 'hidden';
+    workspace.appendChild(lowerArea);
+
+    // Resize logic for H-Splitter
+    let hDragging = false;
+    hSplitter.addEventListener('mousedown', (e) => {
+        hDragging = true;
+        hSplitter.classList.add('active');
+        document.body.style.cursor = 'row-resize';
+        e.preventDefault();
+    });
+    document.addEventListener('mousemove', (e) => {
+        if (!hDragging) return;
+        const totalHeight = workspace.clientHeight;
+        const newLowerHeight = totalHeight - (e.clientY - workspace.getBoundingClientRect().top);
+        if (newLowerHeight > 50 && newLowerHeight < totalHeight - 50) {
+            lowerArea.style.height = `${newLowerHeight}px`;
+            // Trigger resize for 3D view
+            if (typeof onWindowResize === 'function') onWindowResize();
+        }
+    });
+    document.addEventListener('mouseup', () => {
+        if (hDragging) {
+            hDragging = false;
+            hSplitter.classList.remove('active');
+            document.body.style.cursor = '';
+        }
+    });
+
+    // Lower Columns
+    const colReplContent = document.createElement('div');
+    colReplContent.style.display = 'flex';
+    colReplContent.style.flexDirection = 'column';
+    colReplContent.style.height = '100%';
+    colReplContent.style.padding = '10px';
+
+    createPane('repl', 'REPL', lowerArea, '0 0 50%', colReplContent);
+    const colRepl = colReplContent;
+
+    createSplitter(lowerArea, 'vertical', 'repl', 'logs');
+
+    const colLogsContent = document.createElement('div');
+    colLogsContent.style.height = '100%';
+    colLogsContent.style.overflowY = 'auto';
+    colLogsContent.style.padding = '10px';
+    colLogsContent.style.fontFamily = 'monospace';
+    colLogsContent.style.fontSize = '12px';
+
+    createPane('logs', 'Logs', lowerArea, '0 0 50%', colLogsContent);
+    const colLogs = colLogsContent;
+
+    // Repl Internals
     const replOutput = document.createElement('div');
     replOutput.style.flex = '1';
     replOutput.style.overflowY = 'auto';
@@ -598,19 +913,29 @@ window.onload = function () {
     replInput.style.outline = 'none';
     replInputContainer.appendChild(replInput);
 
-    // Column 5: Logs (50%)
-    const colLogs = document.createElement('div');
-    colLogs.style.flex = '0 0 50%';
-    colLogs.style.overflowY = 'auto';
-    colLogs.style.padding = '10px';
-    colLogs.style.fontFamily = 'monospace';
-    colLogs.style.fontSize = '12px';
-    bottomContainer.appendChild(colLogs);
+    // Top Bar Controls
+    const toolbar = document.createElement('div');
+    toolbar.style.marginLeft = 'auto';
+    toolbar.style.display = 'flex';
 
+    ['property', 'main', 'detail', 'repl', 'logs'].forEach(id => {
+        const icon = document.createElement('span');
+        icon.className = 'toolbar-icon';
+        icon.id = `toggle-icon-${id}`;
+        icon.innerText = id.charAt(0).toUpperCase();
+        icon.title = `Toggle ${id}`;
+        icon.onclick = () => {
+            const p = panes[id];
+            togglePane(id, !p.visible);
+        };
+        toolbar.appendChild(icon);
+    });
+
+    statusBar.appendChild(toolbar);
     // --- Logic ---
 
     function setStatus(text, color = theme.statusBarBg) {
-        statusBar.innerText = text;
+        statusText.innerText = text;
         statusBar.style.backgroundColor = color;
     }
 
@@ -618,7 +943,7 @@ window.onload = function () {
         const entry = document.createElement('div');
         entry.innerText = text;
         entry.style.color = color;
-        entry.style.borderBottom = `1px solid ${theme.border}`;
+        entry.style.borderBottom = `1px solid ${theme.border} `;
         entry.style.padding = '2px 0';
         colLogs.appendChild(entry);
         colLogs.scrollTop = colLogs.scrollHeight;
@@ -653,7 +978,7 @@ window.onload = function () {
             const th = document.createElement('th');
             th.innerText = text;
             th.style.textAlign = 'left';
-            th.style.borderBottom = `1px solid ${theme.border}`;
+            th.style.borderBottom = `1px solid ${theme.border} `;
             th.style.padding = '5px';
             headerRow.appendChild(th);
         });
@@ -708,7 +1033,7 @@ window.onload = function () {
     function renderResultItem(res, index, showScore = true, onClose = null) {
         const container = document.createElement('div');
         container.style.marginBottom = '15px';
-        container.style.borderBottom = `1px solid ${theme.border}`;
+        container.style.borderBottom = `1px solid ${theme.border} `;
         container.style.paddingBottom = '10px';
         container.style.display = 'flex';
         container.style.flexDirection = 'column';
@@ -741,7 +1066,7 @@ window.onload = function () {
         // Icon
         if (res.metadata && res.metadata.icon) {
             const icon = document.createElement('img');
-            icon.src = `data:image/png;base64,${res.metadata.icon}`;
+            icon.src = `data: image / png; base64, ${res.metadata.icon} `;
             icon.style.width = '48px';
             icon.style.height = '64px'; // Approx aspect ratio
             icon.style.objectFit = 'contain';
@@ -760,14 +1085,14 @@ window.onload = function () {
         // Line 1: ID, Score, Title
         const line1 = document.createElement('div');
         const titleText = (res.metadata && res.metadata.title) ? res.metadata.title : res.descriptor;
-        const scoreHtml = showScore ? `<span style="color: ${theme.searchScore};">[${res.cosine.toFixed(3)}]</span> ` : '';
-        const indexHtml = index !== null ? `<span style="color: ${theme.searchId}; font-weight: bold;">#${index + 1}</span> ` : '';
+        const scoreHtml = showScore ? `< span style = "color: ${theme.searchScore};" > [${res.cosine.toFixed(3)}]</span > ` : '';
+        const indexHtml = index !== null ? `< span style = "color: ${theme.searchId}; font-weight: bold;" > #${index + 1}</span > ` : '';
 
-        line1.innerHTML = `${indexHtml}${scoreHtml}<span style="font-weight: bold; color: ${theme.searchTitle};">${titleText}</span>`;
+        line1.innerHTML = `${indexHtml}${scoreHtml} <span style="font-weight: bold; color: ${theme.searchTitle};">${titleText}</span>`;
 
         // Add Highlight Button
         if (docData && docData.pointMap) {
-            const key = `${res.hash}:${res.chunk_index}`;
+            const key = `${res.hash}:${res.chunk_index} `;
             if (docData.pointMap.hasOwnProperty(key)) {
                 const pointIndex = docData.pointMap[key];
                 const btn = document.createElement('button');
@@ -828,7 +1153,7 @@ window.onload = function () {
                         currentSpan = document.createElement('span');
                         if (sig > 0) {
                             const yellow = 255 - Math.min(sig * 255, 255);
-                            currentSpan.style.backgroundColor = `rgb(255,255, ${yellow})`;
+                            currentSpan.style.backgroundColor = `rgb(255, 255, ${yellow})`;
                             currentSpan.style.color = '#000';
                         }
                         currentSig = sig;
@@ -858,7 +1183,7 @@ window.onload = function () {
 
         const blockContainer = document.createElement('div');
         blockContainer.style.marginBottom = '20px';
-        blockContainer.style.border = `1px solid ${theme.border}`;
+        blockContainer.style.border = `1px solid ${theme.border} `;
         blockContainer.style.borderRadius = '5px';
         blockContainer.style.backgroundColor = theme.background;
 
@@ -866,7 +1191,7 @@ window.onload = function () {
         const header = document.createElement('div');
         header.style.padding = '10px';
         header.style.backgroundColor = theme.base2;
-        header.style.borderBottom = `1px solid ${theme.border}`;
+        header.style.borderBottom = `1px solid ${theme.border} `;
         header.style.display = 'flex';
         header.style.justifyContent = 'space-between';
         header.style.alignItems = 'center';
@@ -912,7 +1237,7 @@ window.onload = function () {
     function renderChunkDetails(chunk) {
         const blockContainer = document.createElement('div');
         blockContainer.style.marginBottom = '20px';
-        blockContainer.style.border = `1px solid ${theme.border}`;
+        blockContainer.style.border = `1px solid ${theme.border} `;
         blockContainer.style.borderRadius = '5px';
         blockContainer.style.backgroundColor = theme.background;
 
@@ -920,13 +1245,13 @@ window.onload = function () {
         const header = document.createElement('div');
         header.style.padding = '10px';
         header.style.backgroundColor = theme.selectionBg; // Distinct color for selection
-        header.style.borderBottom = `1px solid ${theme.border}`;
+        header.style.borderBottom = `1px solid ${theme.border} `;
         header.style.display = 'flex';
         header.style.justifyContent = 'space-between';
         header.style.alignItems = 'center';
 
         const title = document.createElement('span');
-        title.innerHTML = `Selected Point <span style="font-size: 0.8em; color: ${theme.secondary}">(${currentModelName})</span>`;
+        title.innerHTML = `Selected Point < span style = "font-size: 0.8em; color: ${theme.secondary}" > (${currentModelName})</span > `;
         header.appendChild(title);
 
         const closeBtn = document.createElement('button');
@@ -958,7 +1283,7 @@ window.onload = function () {
     function renderTimeline(events, criteria) {
         const blockContainer = document.createElement('div');
         blockContainer.style.marginBottom = '20px';
-        blockContainer.style.border = `1px solid ${theme.border}`;
+        blockContainer.style.border = `1px solid ${theme.border} `;
         blockContainer.style.borderRadius = '5px';
         blockContainer.style.backgroundColor = theme.background;
 
@@ -966,16 +1291,16 @@ window.onload = function () {
         const header = document.createElement('div');
         header.style.padding = '10px';
         header.style.backgroundColor = theme.base2;
-        header.style.borderBottom = `1px solid ${theme.border}`;
+        header.style.borderBottom = `1px solid ${theme.border} `;
         header.style.display = 'flex';
         header.style.justifyContent = 'space-between';
         header.style.alignItems = 'center';
 
         const title = document.createElement('span');
         let criteriaText = [];
-        if (criteria.time) criteriaText.push(`Time: ${criteria.time}`);
-        if (criteria.domains) criteriaText.push(`Domains: ${criteria.domains}`);
-        if (criteria.keywords) criteriaText.push(`Keywords: ${criteria.keywords}`);
+        if (criteria.time) criteriaText.push(`Time: ${criteria.time} `);
+        if (criteria.domains) criteriaText.push(`Domains: ${criteria.domains} `);
+        if (criteria.keywords) criteriaText.push(`Keywords: ${criteria.keywords} `);
 
         title.innerHTML = `Timeline: <strong>${criteriaText.join(', ') || 'All'}</strong>`;
         header.appendChild(title);
@@ -1011,7 +1336,7 @@ window.onload = function () {
                 const th = document.createElement('th');
                 th.innerText = text;
                 th.style.textAlign = 'left';
-                th.style.borderBottom = `1px solid ${theme.border}`;
+                th.style.borderBottom = `1px solid ${theme.border} `;
                 th.style.padding = '5px';
                 thead.appendChild(th);
             });
@@ -1023,7 +1348,7 @@ window.onload = function () {
                 const tdDate = document.createElement('td');
                 tdDate.innerText = evt.date;
                 tdDate.style.padding = '5px';
-                tdDate.style.borderBottom = `1px solid ${theme.border}40`; // Faint border
+                tdDate.style.borderBottom = `1px solid ${theme.border} 40`; // Faint border
                 tdDate.style.whiteSpace = 'nowrap';
                 tdDate.style.verticalAlign = 'top';
                 tdDate.style.color = theme.blue;
@@ -1032,7 +1357,7 @@ window.onload = function () {
                 const tdEvent = document.createElement('td');
                 tdEvent.innerText = evt.event;
                 tdEvent.style.padding = '5px';
-                tdEvent.style.borderBottom = `1px solid ${theme.border}40`;
+                tdEvent.style.borderBottom = `1px solid ${theme.border} 40`;
                 row.appendChild(tdEvent);
 
                 table.appendChild(row);
