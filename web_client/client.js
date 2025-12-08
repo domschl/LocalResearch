@@ -1085,10 +1085,10 @@ window.onload = function () {
         // Line 1: ID, Score, Title
         const line1 = document.createElement('div');
         const titleText = (res.metadata && res.metadata.title) ? res.metadata.title : res.descriptor;
-        const scoreHtml = showScore ? `< span style = "color: ${theme.searchScore};" > [${res.cosine.toFixed(3)}]</span > ` : '';
-        const indexHtml = index !== null ? `< span style = "color: ${theme.searchId}; font-weight: bold;" > #${index + 1}</span > ` : '';
+        const scoreHtml = showScore ? `<span style="color: ${theme.searchScore};">[${res.cosine.toFixed(3)}]</span>` : '';
+        const indexHtml = index !== null ? `<span style="color: ${theme.searchId}; font-weight: bold;">#${index + 1}</span>` : '';
 
-        line1.innerHTML = `${indexHtml}${scoreHtml} <span style="font-weight: bold; color: ${theme.searchTitle};">${titleText}</span>`;
+        line1.innerHTML = `${indexHtml} ${scoreHtml} <span style="font-weight: bold; color: ${theme.searchTitle};">${titleText}</span>`;
 
         // Add Highlight Button
         if (docData && docData.pointMap) {
