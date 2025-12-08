@@ -1251,7 +1251,7 @@ window.onload = function () {
         header.style.alignItems = 'center';
 
         const title = document.createElement('span');
-        title.innerHTML = `Selected Point < span style = "font-size: 0.8em; color: ${theme.secondary}" > (${currentModelName})</span > `;
+        title.innerHTML = `Selected Point <span style = "font-size: 0.8em; color: ${theme.secondary}"> (${currentModelName})</span> `;
         header.appendChild(title);
 
         const closeBtn = document.createElement('button');
