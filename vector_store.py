@@ -862,33 +862,9 @@ class VectorStore:
             return {"error": f"UMAP reduction failed: {str(e)}"}
 
         points:list[list[float]] = cast(list[list[float]], reduced_embeddings_np.tolist())
-        # texts = [text_library[hash]['descriptor']+f"[{chunk_id}]" for hash, chunk_id in hashes]
-        # doc_ids = [text_library[hash]['descriptor'] for hash, _chunk_id in hashes]
-        
-        # We now return hashes and chunk_indices to save space
         hash_list = [hash for hash, _chunk_id in hashes]
         chunk_indices = [chunk_id for _hash, chunk_id in hashes]
 
-        # unique_doc_ids = list(set(doc_ids))
-
-        # num_unique_docs = len(unique_doc_ids)
-        # color_map: dict[str, list[int]] = {}
-        # for i, doc_id_val in enumerate(unique_doc_ids):
-        #     hue = i / num_unique_docs if num_unique_docs > 0 else 0
-        #     rgb_float = colorsys.hls_to_rgb(hue, 0.5, 0.8) 
-        #     color_map[doc_id_val] = [int(c * 255) for c in rgb_float]
-
-        # colors: list[list[int]] = [color_map.get(text_library[hash]['descriptor'], [128,128,128]) for hash, _chunk_id in hashes]
-        
-        # Colors are now calculated on the client side or we can still pre-calculate them based on hash?
-        # Let's pre-calculate colors based on hash to keep it consistent for now, or just send hashes and let client color.
-        # The plan said: "Update client.js ... Use hashes for coloring".
-        # So we can remove colors from here to save even more space, OR keep them if we want consistent coloring logic on server.
-        # The user request said "redundant information... texts and docs_ids". It didn't explicitly say remove colors, but colors are derived.
-        # However, sending colors is efficient enough (3 ints per point).
-        # But if we send hashes, the client can group by hash and assign colors.
-        # Let's remove colors from here and let client handle it, as per "Use hashes for coloring" in plan.
-        
         sizes = [5.0] * len(points)
         self.log.info("UMAP finished")
 
@@ -896,10 +872,6 @@ class VectorStore:
             "points": points,
             "hashes": hash_list,
             "chunk_indices": chunk_indices,
-            # "texts": texts,
-            # "colors": colors,
-            # "sizes": sizes,
-            # "doc_ids": doc_ids,
             "model_name": self.config['embeddings_model_name'],
             "reduction_method": "UMAP",
             "num_points_visualized": len(points),
