@@ -1092,7 +1092,7 @@ window.onload = function () {
 
         // Add Highlight Button
         if (docData && docData.pointMap) {
-            const key = `${res.hash}:${res.chunk_index} `;
+            const key = `${res.hash}:${res.chunk_index}`;
             if (docData.pointMap.hasOwnProperty(key)) {
                 const pointIndex = docData.pointMap[key];
                 const btn = document.createElement('button');
