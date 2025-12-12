@@ -1450,6 +1450,7 @@ window.onload = function () {
 
         // Request model list on startup
         send("list_models", "");
+        send("get_vars", "");
     };
 
     let currentProgressBar = null;
@@ -1486,6 +1487,84 @@ window.onload = function () {
         replOutput.scrollTop = replOutput.scrollHeight;
 
         return { container, bar, label };
+    }
+
+    function renderParameters(vars) {
+        // Find or create parameters container
+        let paramsContainer = document.getElementById('parameters-container');
+        if (!paramsContainer) {
+            paramsContainer = document.createElement('div');
+            paramsContainer.id = 'parameters-container';
+            paramsContainer.style.marginTop = '20px';
+            paramsContainer.style.borderTop = `1px solid ${theme.border}`;
+            paramsContainer.style.paddingTop = '10px';
+            colProperty.appendChild(paramsContainer);
+        } else {
+            paramsContainer.innerHTML = ''; // Clear
+        }
+
+        const title = document.createElement('h3');
+        title.innerText = 'Parameters';
+        title.style.marginTop = '0';
+        paramsContainer.appendChild(title);
+
+        if (!vars || Object.keys(vars).length === 0) {
+            paramsContainer.innerText += 'No parameters found.';
+            return;
+        }
+
+        const table = document.createElement('table');
+        table.style.width = '100%';
+        table.style.borderCollapse = 'collapse';
+
+        const headerRow = document.createElement('tr');
+        ['Name', 'Value'].forEach(text => {
+            const th = document.createElement('th');
+            th.innerText = text;
+            th.style.textAlign = 'left';
+            th.style.borderBottom = `1px solid ${theme.border}`;
+            th.style.padding = '5px';
+            headerRow.appendChild(th);
+        });
+        table.appendChild(headerRow);
+
+        for (const [name, [val, type]] of Object.entries(vars)) {
+            const row = document.createElement('tr');
+
+            const tdName = document.createElement('td');
+            tdName.innerText = name;
+            tdName.style.padding = '5px';
+            tdName.style.fontSize = '12px';
+            tdName.title = `Type: ${type}`;
+            row.appendChild(tdName);
+
+            const tdValue = document.createElement('td');
+            tdValue.style.padding = '5px';
+
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.value = val;
+            input.style.width = '100%';
+            input.style.backgroundColor = 'transparent';
+            input.style.border = `1px solid ${theme.border}`;
+            input.style.color = theme.foreground;
+            input.style.padding = '2px';
+            input.style.fontFamily = 'monospace';
+
+            input.onchange = (e) => {
+                const newValue = e.target.value;
+                send('set_var', { name: name, value: newValue });
+                send('get_vars', ''); // Sync vars after setting
+                setStatus(`Setting ${name}...`, theme.logLog);
+            };
+
+            tdValue.appendChild(input);
+            row.appendChild(tdValue);
+
+            table.appendChild(row);
+        }
+
+        paramsContainer.appendChild(table);
     }
 
     ws.onmessage = function (event) {
@@ -1563,7 +1642,23 @@ window.onload = function () {
                     } else {
                         createSceneFromData(payload);
                     }
+                } else if (requestCmd === 'get_vars') {
+                    if (payload.error) {
+                        addLog(`Error getting vars: ${payload.error}`, theme.error);
+                    } else {
+                        renderParameters(payload);
+                    }
+                } else if (requestCmd === 'set_var') {
+                    if (payload.status === 'ok') {
+                        setStatus(`Set ${payload.name} = ${payload.value}`, theme.success);
+                        // Refresh parameters to ensure sync (optional)
+                    } else {
+                        setStatus(`Error setting var: ${payload.error}`, theme.error);
+                        addLog(`Error setting var: ${payload.error}`, theme.error);
+                    }
                 }
+
+
             } else {
                 addLog(`[UNKNOWN] ${JSON.stringify(data)} `, theme.logUnknown);
             }

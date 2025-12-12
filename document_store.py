@@ -334,6 +334,9 @@ class DocumentStore:
             self.log.error(f"{name} has type {type} which is not implemented")
             return None
         
+    def get_vars(self) -> dict[str, tuple[str,str]]:
+        return self.config['vars']
+
     def load_sequence_versions(self) -> tuple[int,int]:
         try:
             with open(self.remote_sequence_file, 'r') as f:

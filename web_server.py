@@ -11,6 +11,7 @@ from aiohttp import web
 from document_store import DocumentStore
 from vector_store import VectorStore
 from research_defs import get_files_of_extensions, ProgressState
+from text_format import TextParse
 
 # --- Configuration ---
 CONFIG_DIR = Path.home() / ".config" / "local_research"
@@ -155,8 +156,40 @@ def worker_proc():
                 response_payload = models
             
             elif cmd == 'search':
-                search_string = payload
+                search_string_raw = payload
                 
+                # Parse search string for parameters
+                tp = TextParse()
+                arguments, key_vals = tp.parse_keys(search_string_raw)
+                search_string = ' '.join(arguments)
+                
+                # Get parameters ensuring correct types
+                try:
+                    search_results = int(ds.get_var('search_results', key_vals))
+                    highlight = str(ds.get_var('highlight', key_vals)).lower() == 'true'
+                    cutoff = float(ds.get_var('highlight_cutoff', key_vals))
+                    damp = float(ds.get_var('highlight_dampening', key_vals))
+                    context_length = int(ds.get_var('context_length', key_vals))
+                    context_steps = int(ds.get_var('context_steps', key_vals))
+                    
+                    # Handle max_results override specific to search command
+                    count = search_results
+                    if 'max_results' in key_vals:
+                         try:
+                             count = int(key_vals['max_results'])
+                         except ValueError:
+                             pass
+                except Exception as e:
+                    logger.error(f"Error parsing parameters: {e}")
+                    # Fallback to defaults if parsing fails
+                    search_results = 10
+                    highlight = False
+                    cutoff = 0.0
+                    damp = 1.0
+                    context_length = 16
+                    context_steps = 4
+                    count = search_results
+
                 def progress_callback(ps:ProgressState):
                     progress_msg = {
                         "token": req.get('token'),
@@ -168,7 +201,7 @@ def worker_proc():
 
                 # Perform search
                 try:
-                    results = vs.search(search_string, ds.text_library, progress_callback=progress_callback, highlight=True)
+                    results = vs.search(search_string, ds.text_library, count, highlight, cutoff, damp, context_length, context_steps, progress_callback=progress_callback)
                     
                     # Format results for client
                     formatted_results = []
@@ -236,6 +269,25 @@ def worker_proc():
                     response_payload = metadata
                 else:
                     response_payload = {"error": "Document not found"}
+
+            elif cmd == 'get_vars':
+                response_payload = ds.get_vars()
+
+            elif cmd == 'set_var':
+                try:
+                    name = payload.get('name')
+                    value = payload.get('value')
+                    if name and value is not None:
+                        success = ds.set_var(name, value)
+                        if success:
+                            response_payload = {"status": "ok", "name": name, "value": value}
+                        else:
+                            response_payload = {"error": "Failed to set variable"}
+                    else:
+                        response_payload = {"error": "Missing name or value"}
+                except Exception as e:
+                    logger.error(f"Failed to set var: {e}")
+                    response_payload = {"error": str(e)}
 
             elif cmd == 'get_text':
                 hash_val = payload
