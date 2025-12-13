@@ -25,8 +25,15 @@ LocalResearch is designed to run on a distributed network of workstations (macOS
 
 Run the main console application:
 
+
 ```bash
 python research_console.py
+```
+
+Or start the web server:
+
+```bash
+python web_server.py
 ```
 
 ### Common Commands
@@ -45,6 +52,7 @@ python research_console.py
 *   **Markdown**: Native support for markdown files.
 *   **PDF**: Extracts text from PDF documents (via Calibre/other handlers).
 *   **OrgMode**: Support for Emacs Org-mode files.
+*   **Web Interface**: A 3D interactive web client for visual exploration and search (see [web_client/README.md](web_client/README.md)).
 
 ## Configuration
 
