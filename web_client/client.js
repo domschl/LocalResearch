@@ -800,6 +800,17 @@ window.onload = function () {
     const { content: colPropertyWrapper } = createPane('property', 'Models', upperArea, '0 0 20%', colPropertyContent);
     const colProperty = colPropertyContent;
 
+    const modelListContainer = document.createElement('div');
+    modelListContainer.id = 'model-list-container';
+    colProperty.appendChild(modelListContainer);
+
+    const parametersContainer = document.createElement('div');
+    parametersContainer.id = 'parameters-container';
+    parametersContainer.style.marginTop = '20px';
+    parametersContainer.style.borderTop = `1px solid ${theme.border}`;
+    parametersContainer.style.paddingTop = '10px';
+    colProperty.appendChild(parametersContainer);
+
     createSplitter(upperArea, 'vertical', 'property', 'main');
 
     // Column 2: Main
@@ -958,14 +969,17 @@ window.onload = function () {
     }
 
     function renderModelList(models) {
-        colProperty.innerHTML = ''; // Clear
+        const container = document.getElementById('model-list-container');
+        if (!container) return;
+        container.innerHTML = ''; // Clear
+
         const title = document.createElement('h3');
         title.innerText = 'Models';
         title.style.marginTop = '0';
-        colProperty.appendChild(title);
+        container.appendChild(title);
 
         if (!models || models.length === 0) {
-            colProperty.innerText += 'No models found.';
+            container.innerText += 'No models found.';
             return;
         }
 
@@ -1027,7 +1041,7 @@ window.onload = function () {
             table.appendChild(row);
         });
 
-        colProperty.appendChild(table);
+        container.appendChild(table);
     }
 
     function renderResultItem(res, index, showScore = true, onClose = null) {
@@ -1490,18 +1504,11 @@ window.onload = function () {
     }
 
     function renderParameters(vars) {
-        // Find or create parameters container
-        let paramsContainer = document.getElementById('parameters-container');
-        if (!paramsContainer) {
-            paramsContainer = document.createElement('div');
-            paramsContainer.id = 'parameters-container';
-            paramsContainer.style.marginTop = '20px';
-            paramsContainer.style.borderTop = `1px solid ${theme.border}`;
-            paramsContainer.style.paddingTop = '10px';
-            colProperty.appendChild(paramsContainer);
-        } else {
-            paramsContainer.innerHTML = ''; // Clear
-        }
+        // Find parameters container (created in init)
+        const paramsContainer = document.getElementById('parameters-container');
+        if (!paramsContainer) return;
+
+        paramsContainer.innerHTML = ''; // Clear
 
         const title = document.createElement('h3');
         title.innerText = 'Parameters';
