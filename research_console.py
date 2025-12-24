@@ -528,7 +528,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                         log.error("No text content found")
                         continue
                         
-                    model_name = key_vals.get('model', "google/gemma-7b-it")
+                    model_name = key_vals.get('model', "google/gemma-2b-it")
                     log.info(f"Extracting timeline from '{descriptor}' using {model_name}...")
                     
                     try:

@@ -13,7 +13,7 @@ class TimelineEvent(TypedDict):
     indra_str: str
 
 class TimelineExtractor:
-    def __init__(self, model_name: str = "google/gemma-7b-it", device: str | None = None):
+    def __init__(self, model_name: str = "google/gemma-2b-it", device: str | None = None):
         self.log = logging.getLogger("TimelineExtractor")
         self.model_name = model_name
         self.device = self._resolve_device(device)
@@ -27,11 +27,11 @@ class TimelineExtractor:
                 return 'cuda'
             elif torch.backends.mps.is_available():
                 return 'mps'
-            elif torch.xpu.is_available():
-                return 'xpu'
+            # elif torch.xpu.is_available():
+            #     return 'xpu'
             else:
                 return 'cpu'
-        return device_name
+        return device_names
 
     def _load_model(self):
         if self.model is None:
@@ -182,6 +182,7 @@ Output the results in strict JSON format as a list of objects.
 Each object must have:
 - "date_text": The exact time string found in the text.
 - "event_description": A concise summary of the event (10-20 words).
+If no events are found, return empty list [].
 
 Do not include any other text. Do not use Markdown formatting (no backticks).
 Ensure proper JSON escaping:
@@ -189,7 +190,6 @@ Ensure proper JSON escaping:
 - Escape internal quotes as \\".
 - Escape newlines and tabs within strings as \\n and \\t.
 - Do NOT use typographic/smart quotes (“ ”).
-If no events are found, return empty list [].
 
 Text:
 {chunk}
