@@ -12,10 +12,12 @@ print("\rStarting...\r", end="", flush=True)
 
 from research_defs import get_files_of_extensions, ProgressState, SearchResultEntry
 from vector_store import VectorStore
+from indralib.indra_time import IndraTime
 from document_store import DocumentStore
 from text_format import TextParse
 from search_tools import SearchTools
 from audiobook_handler import AudiobookGenerator
+from timeline_handler import TimelineExtractor
 
 def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
     history_file = os.path.join(os.path.expanduser("~/.config/local_research"), "repl_history")
@@ -507,9 +509,68 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     if success:
                         print(f"Audiobook generated: {output_path}")
                     else:
-                        print("Failed to generate audiobook. Check logs for details.")
+                         print("Failed to generate audiobook. Check logs for details.")
 
-            elif command == "text":
+            elif command == 'timeline_extract':
+                ind = -1
+                try:
+                    ind = int(arguments[0])
+                except:
+                    pass
+                if ind < 1 or ind > len(previous_search_results):
+                    log.error(f"Invalid ID {arguments}, integer required, use 'search' or 'ksearch' first")
+                else:
+                    result = previous_search_results[len(previous_search_results) - ind]
+                    descriptor = result['entry']['descriptor']
+                    text_content = result['entry']['text']
+                    
+                    if not text_content:
+                        log.error("No text content found")
+                        continue
+                        
+                    model_name = key_vals.get('model', "google/gemma-7b-it")
+                    log.info(f"Extracting timeline from '{descriptor}' using {model_name}...")
+                    
+                    try:
+                        # Lazy init to avoid overhead if not used
+                        extractor = TimelineExtractor(model_name=model_name)
+                        events = extractor.extract_from_text(text_content[:12000])
+                        
+                        if not events:
+                            print("No events found.")
+                        else:
+                            # Sort events by date
+                            def event_sorter(ev):
+                                try:
+                                    jd = IndraTime.string_time_to_julian(ev['indra_str'])
+                                    if jd:
+                                        if len(jd) == 1:
+                                            return jd[0]
+                                        return jd[0]
+                                except:
+                                    pass
+                                return -999999999.0 # Sort undefined/errors to start? or end?
+
+                            try:
+                                events.sort(key=event_sorter)
+                            except Exception as e:
+                                log.warning(f"Sorting failed: {e}")
+
+                            header = ["Date", "Description"]
+                            rows = []
+                            for ev in events:
+                                rows.append([ev['indra_str'], ev['event_description']])
+                            
+                            print(f"\nTimeline for {descriptor}:")
+                            _ = tf.print_table(header, rows, multi_line=True)
+                            print()
+                            
+                    except Exception as e:
+                        log.error(f"Timeline extraction failed: {e}")
+                        import traceback
+                        traceback.print_exc() # Print full stack for user debugging if it crashes again
+
+            elif command == 'open':
                 if len(previous_search_results) == 0:
                     print("No previous search results available")
                 else:
@@ -579,6 +640,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                          ['show', '<ID>', 'Show metadata for a search result'],
                          ['open', '<ID>', 'Open the document for a search result'],
                          ['audiobook', '<ID> [start="<token>"] [end="<token>"]', 'Generate an audiobook from the document text'],
+                         ['timeline_extract', '<ID> [model="<model>"]', 'Extract timeline events from text using LLM'],
                          ['timeline', '[time=1999-01-01[-2100-01-01]] [domains="dom1[ dom2]"] [keywords="key1[ key2]"]', 'Compile a table of events'],                         
                          ['publish', '[force]', 'Publish newly created indices'],
                          ['import', '[force]', 'Import indices created remotely'],

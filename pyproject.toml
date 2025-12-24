@@ -16,5 +16,6 @@ dependencies = [
     "sentence-transformers>=5.1.0",
     "umap-learn>=0.5.9.post2",
     "aiohttp>=3.11.0",
+    "accelerate>=1.12.0",
 ]
 
