@@ -53,7 +53,7 @@ class SequenceVersion(TypedDict):
 
 
 class DocumentStore:
-    def __init__(self):
+    def __init__(self, load_libraries:bool = True):
         self.current_version: int = 5
         self.log: logging.Logger = logging.getLogger("DocumentStore")
         self.md_tools:dict[str, MarkdownTools] = {}
@@ -71,7 +71,7 @@ class DocumentStore:
         self.valid_source_types: list[str] = ['calibre', 'md_notes', 'orgmode']
         self.config: DocumentConfig = self.get_config()
         self.text_library: dict[str, TextLibraryEntry] = {}
-        self.metadata_library: dict[str, MetadataEntry]
+        self.metadata_library: dict[str, MetadataEntry] = {}
         self.pdf_index:dict[str, PDFIndex] = {}
         self.perf: dict[str, float] = {}
         self.tables:list[DocumentTable] = []
@@ -93,12 +93,12 @@ class DocumentStore:
             os.makedirs(self.pdf_cache_path, exist_ok=True)
         self.pdf_index_file: str = os.path.join(self.pdf_cache_path, "pdf_index.json")
 
-        if self.local_update_required() is False:
+        if self.local_update_required() is False and load_libraries is True:
             self.load_document_data()
         
         remote, local = self.load_sequence_versions()
         self.log.info(f"DocumentStore initialized: remote data version: {remote}, local version: {local}")
-        if self.local_update_required() is True:
+        if self.local_update_required() is True and load_libraries is True:
             self.log.warning("No document data loaded, since local is outdated. Use 'force_load_docs' to override")
             self.log.info("Please use 'import' to acquire the latest data version")
 
@@ -779,6 +779,8 @@ class DocumentStore:
         if not keywords:
             return results
 
+        if len(self.metadata_library) == 0 or len(self.text_library) == 0:
+            self.load_document_data()
         for descriptor, metadata in self.metadata_library.items():
             if source is not None:
                 doc_source, _ = self.get_source_name_and_path_from_descriptor(descriptor)
@@ -828,6 +830,8 @@ class DocumentStore:
         return results
 
     def sync_texts(self, force:bool, retry:bool=False, progress_callback:Callable[[ProgressState], None ]|None=None, abort_check_callback:Callable[[], bool]|None=None) -> list[str]:
+        if len(self.metadata_library) == 0 or len(self.text_library) == 0:
+            self.load_document_data()
         errors:list[str] = []
         if self.local_update_required() is True:
             if force is False:
@@ -1073,6 +1077,9 @@ class DocumentStore:
     def publish(self, parameters:list[str]|None) -> bool:
         if parameters is None:
             parameters = []
+        if len(self.metadata_library) == 0 or len(self.text_library) == 0:
+            self.log.error("No metadata or text library found, cannot publish!")
+            return False
         if self.local_update_required() is True:
             if 'force' not in parameters:
                 self.log.warning("Remote version is newer than local version, publish aborted. Use 'force' to override!")

@@ -236,7 +236,7 @@ JSON:
             if len(json_objects) > 0:
                 self.log.info(f"Extracted {len(json_objects)} events from chunk {i+1}.")
             else:
-                self.log.warning("No events extracted from chunk {i+1}.")
+                self.log.warning(f"No events extracted from chunk {i+1}.")
             
             for item in json_objects:
                 if 'date_text' in item and 'event_description' in item:

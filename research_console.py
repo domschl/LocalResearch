@@ -3,6 +3,7 @@ import readline
 import os
 import sys
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+import argparse
 import atexit
 from typing import cast
 import subprocess
@@ -528,7 +529,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                         log.error("No text content found")
                         continue
                         
-                    model_name = key_vals.get('model', "google/gemma-2b-it")
+                    model_name = key_vals.get('model', "google/gemma-7b-it")
                     log.info(f"Extracting timeline from '{descriptor}' using {model_name}...")
                     
                     try:
@@ -663,7 +664,12 @@ def main():
     log = logging.getLogger("ResearchCLI")
     log.info("Local Research v1.0")
 
-    ds = DocumentStore()
+    # check of '--no-load' flag
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--no_load_libraries', action='store_false', default=True, help='Do not load document library')
+    args = parser.parse_args()
+
+    ds = DocumentStore(load_libraries=args.no_load_libraries)
     vs = VectorStore(ds.storage_path, ds.config_path)
     repl(ds, vs, log)
     
