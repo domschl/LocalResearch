@@ -1,9 +1,28 @@
 import logging
 import re
 import json
-import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from typing import TypedDict, Any, cast
+try:
+    import torch
+    from transformers import AutoTokenizer, AutoModelForCausalLM
+    TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    TRANSFORMERS_AVAILABLE = False
+
+# Metal: uv pip install mlx-lm
+try:
+    import mlx_lm
+    MLX_AVAILABLE = True
+except ImportError:
+    MLX_AVAILABLE = False
+
+# Metal: CMAKE_ARGS="-DGGML_METAL=on" uv pip install llama-cpp-python
+try:
+    from llama_cpp import Llama
+    LLAMA_CPP_AVAILABLE = True
+except ImportError:
+    LLAMA_CPP_AVAILABLE = False
+
+from typing import TypedDict, Any, cast, Literal
 
 from indralib.indra_time import IndraTime
 
@@ -13,40 +32,113 @@ class TimelineEvent(TypedDict):
     indra_str: str
 
 class TimelineExtractor:
-    def __init__(self, model_name: str = "google/gemma-2b-it", device: str | None = None):
+    def __init__(self, model_name: str = "google/gemma-2b-it", backend: Literal["pytorch", "mlx", "llama.cpp"] = "pytorch", device: str | None = None):
         self.log = logging.getLogger("TimelineExtractor")
         self.model_name = model_name
+        self.backend = backend
         self.device = self._resolve_device(device)
         self.tokenizer = None
         self.model = None
-        self.log.info(f"TimelineExtractor initialized using device: {self.device}")
+        
+        self._validate_backend()
+        self.log.info(f"TimelineExtractor initialized using backend: {self.backend}, device: {self.device}")
+
+    def _validate_backend(self):
+        if self.backend == "pytorch" and not TRANSFORMERS_AVAILABLE:
+            raise ImportError("backend='pytorch' requires 'transformers' and 'torch' libraries.")
+        if self.backend == "mlx" and not MLX_AVAILABLE:
+            raise ImportError("backend='mlx' requires 'mlx-lm' library.")
+        if self.backend == "llama.cpp" and not LLAMA_CPP_AVAILABLE:
+            raise ImportError("backend='llama.cpp' requires 'llama-cpp-python' library.")
+
 
     def _resolve_device(self, device_name: str | None) -> str:
         if device_name is None or device_name == 'auto':
-            if torch.cuda.is_available():
-                return 'cuda'
-            elif torch.backends.mps.is_available():
-                return 'mps'
-            # elif torch.xpu.is_available():
-            #     return 'xpu'
+            if TRANSFORMERS_AVAILABLE:
+                if torch.cuda.is_available():
+                    return 'cuda'
+                elif torch.backends.mps.is_available():
+                    return 'mps'
+                else:
+                    return 'cpu'
             else:
-                return 'cpu'
-        return device_names
+                # Without torch, we can't easily auto-detect for PyTorch purposes.
+                # For MLX, it defaults to GPU if available.
+                # For llama.cpp, we set n_gpu_layers=-1 if we think we are on Mac/GPU.
+                # Let's default to a safe value or just 'auto' string if backend handles it.
+                return 'cpu' # Fallback
+        return device_name
+
 
     def _load_model(self):
-        if self.model is None:
-            self.log.info(f"Loading model {self.model_name}...")
-            try:
+        if self.model is not None:
+            return
+
+        self.log.info(f"Loading model {self.model_name} with backend {self.backend}...")
+        try:
+            if self.backend == "pytorch":
                 self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
                 self.model = AutoModelForCausalLM.from_pretrained(
                     self.model_name, 
                     dtype=torch.float16 if self.device != 'cpu' else torch.float32,
                     device_map=self.device
                 )
-                self.log.info("Model loaded successfully.")
-            except Exception as e:
-                self.log.error(f"Failed to load model {self.model_name}: {e}")
-                self.model = None
+            elif self.backend == "mlx":
+                self.model, self.tokenizer = mlx_lm.load(self.model_name)
+            elif self.backend == "llama.cpp":
+                # For llama.cpp, model_name should ideally be a path to a GGUF file
+                # But if it's a HF repo, we might need to handle it differently or expect user to pass local path.
+                # For now, let's assume model_name can be a path.
+                # If it is a repo, Llama(...) might try to download if properly configured, but usually requires explicit download.
+                # Let's assume the user knows what they are doing or we provide a way to download.
+                # However, Llama class creates the 'model' instance which doubles as the valid object.
+                n_gpu_layers = -1 if self.device in ['mps', 'cuda'] else 0
+                self.model = Llama(
+                    model_path=self.model_name,
+                    n_gpu_layers=n_gpu_layers,
+                    verbose=False,
+                    n_ctx=4096 
+                )
+                self.tokenizer = self.model # Llama object handles tokenization
+
+            self.log.info("Model loaded successfully.")
+        except Exception as e:
+            self.log.error(f"Failed to load model {self.model_name}: {e}")
+            self.model = None
+            raise e
+
+    def _generate(self, prompt: str) -> str:
+        if self.backend == "pytorch":
+            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    **inputs, 
+                    max_new_tokens=500,
+                    do_sample=True,
+                    temperature=0.2
+                )
+            return self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            
+        elif self.backend == "mlx":
+            return mlx_lm.generate(
+                self.model, 
+                self.tokenizer, 
+                prompt=prompt, 
+                max_tokens=500, 
+                verbose=False
+            )
+            
+        elif self.backend == "llama.cpp":
+            # self.model is the Llama instance
+            output = self.model.create_completion(
+                prompt,
+                max_tokens=500,
+                temperature=0.2,
+                stop=["<eos>"] # Ensure we stop ?
+            )
+            return output['choices'][0]['text']
+        
+        return ""
 
     def normalize_time(self, date_text: str) -> str | None:
         """
@@ -161,7 +253,8 @@ class TimelineExtractor:
         2. Use LLM to extract events in structured format.
         """
         self._load_model()
-        if self.model is None or self.tokenizer is None:
+        # For Llama.cpp, tokenizer is the model instance itself (or not None).
+        if self.model is None:
             self.log.error("Model not available for extraction.")
             return []
 
@@ -196,17 +289,7 @@ Text:
 
 JSON:
 """
-            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
-            
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs, 
-                    max_new_tokens=500,
-                    do_sample=True, # Allow some creativity/variability
-                    temperature=0.2 # But keep it focused
-                )
-            
-            output_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            output_text = self._generate(prompt)
             
             # Extract JSON part
             if "JSON:" in output_text:

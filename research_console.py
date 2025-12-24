@@ -529,12 +529,22 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                         log.error("No text content found")
                         continue
                         
-                    model_name = key_vals.get('model', "google/gemma-7b-it")
-                    log.info(f"Extracting timeline from '{descriptor}' using {model_name}...")
+                    backend = key_vals.get('backend', "pytorch")
+                    if backend == "pytorch":
+                        model_name = key_vals.get('model', "google/gemma-3-4b-it")  # 1b or 27b
+                    elif backend == "llama.cpp":  # Models need to be copied into the gguf directory manually!
+                        model_name = key_vals.get('model', "gguf/gemma-3-4b-it-q4_0.gguf")  # 4b or 12b
+                    elif backend == "mlx":
+                        model_name = key_vals.get('model', "mlx-community/gemma-3-4b-it-4bit")  # 4b or 12b
+                    else:
+                        log.error(f"Invalid backend {backend}, use 'pytorch', 'llama.cpp' or 'mlx'")
+                        continue
+                    
+                    log.info(f"Extracting timeline from '{descriptor}' using {model_name} via {backend}...")
                     
                     try:
                         # Lazy init to avoid overhead if not used
-                        extractor = TimelineExtractor(model_name=model_name)
+                        extractor = TimelineExtractor(model_name=model_name, backend=backend)
                         events = extractor.extract_from_text(text_content[:12000])
                         
                         if not events:

@@ -17,6 +17,10 @@ web_client/.env.development.local
 web_client/.env.test.local
 web_client/.env.production.local
 
+
+# Local models
+gguf/
+
 # Test data
 test_texts/
 
