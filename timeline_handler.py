@@ -2,6 +2,7 @@ import logging
 import re
 import os
 import json
+import time
 try:
     import torch
     from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -26,6 +27,7 @@ except ImportError:
 from typing import TypedDict, Any, cast, Literal
 
 from indralib.indra_time import IndraTime
+from perf_stats import PerfStats
 
 class TimelineEvent(TypedDict):
     date_text: str
