@@ -1,5 +1,6 @@
 import logging
 import re
+import os
 import json
 try:
     import torch
@@ -83,6 +84,7 @@ class TimelineExtractor:
                     dtype=torch.float16 if self.device != 'cpu' else torch.float32,
                     device_map=self.device
                 )
+                self.log.info(f"Model loaded successfully. Class: {type(self.model)}")
             elif self.backend == "mlx":
                 self.model, self.tokenizer = mlx_lm.load(self.model_name)
             elif self.backend == "llama.cpp":
@@ -107,36 +109,50 @@ class TimelineExtractor:
             self.model = None
             raise e
 
-    def _generate(self, prompt: str) -> str:
+    def _generate(self, messages: list[dict]) -> str:
         if self.backend == "pytorch":
+            # Apply chat template
+            prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            self.log.info(f"Prompt sent to PyTorch backend:\n{prompt}")
+            
             inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
             with torch.no_grad():
                 outputs = self.model.generate(
                     **inputs, 
-                    max_new_tokens=500,
+                    max_new_tokens=2048, # Increased for JSON
                     do_sample=True,
-                    temperature=0.2
+                    temperature=0.1,
                 )
-            return self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            decoded = self.tokenizer.decode(outputs[0][len(inputs.input_ids[0]):], skip_special_tokens=True)
+            self.log.info(f"Raw output from PyTorch backend:\n{decoded}")
+            return decoded
             
         elif self.backend == "mlx":
+            if hasattr(self.tokenizer, "apply_chat_template"):
+                prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            else:
+                # Fallback if tokenizer doesn't support chat template (unlikely for modern HF tokenizers)
+                # But MLX tokenizer might be a slim wrapper? check docs. 
+                # Usually mlx_lm.load returns a HF tokenizer.
+                prompt = messages[-1]["content"] 
+
             return mlx_lm.generate(
                 self.model, 
                 self.tokenizer, 
                 prompt=prompt, 
-                max_tokens=500, 
+                max_tokens=2048, 
                 verbose=False
             )
             
         elif self.backend == "llama.cpp":
-            # self.model is the Llama instance
-            output = self.model.create_completion(
-                prompt,
-                max_tokens=500,
+            # Use create_chat_completion for proper template handling
+            output = self.model.create_chat_completion(
+                messages=messages,
+                max_tokens=2048,
                 temperature=0.2,
-                stop=["<eos>"] # Ensure we stop ?
+                # stop=["<eos>"] # Handle automatically by chat format usually
             )
-            return output['choices'][0]['text']
+            return output['choices'][0]['message']['content']
         
         return ""
 
@@ -269,7 +285,8 @@ class TimelineExtractor:
         all_events = []
         
         for i, chunk in enumerate(chunks):
-            prompt = f"""
+            # Construct strict JSON prompt
+            user_content = f"""
 Analyze the following text and identify all historical events with their associated dates or time periods.
 Output the results in strict JSON format as a list of objects.
 Each object must have:
@@ -278,18 +295,15 @@ Each object must have:
 If no events are found, return empty list [].
 
 Do not include any other text. Do not use Markdown formatting (no backticks).
-Ensure proper JSON escaping:
-- Use standard straight quotes (") for JSON structure.
-- Escape internal quotes as \\".
-- Escape newlines and tabs within strings as \\n and \\t.
-- Do NOT use typographic/smart quotes (“ ”).
+Ensure proper JSON escaping.
 
 Text:
 {chunk}
 
 JSON:
 """
-            output_text = self._generate(prompt)
+            messages = [{"role": "user", "content": user_content}]
+            output_text = self._generate(messages)
             
             # Extract JSON part
             if "JSON:" in output_text:

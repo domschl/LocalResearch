@@ -2,7 +2,7 @@ import logging
 import readline
 import os
 import sys
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
+# os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import argparse
 import atexit
 from typing import cast
@@ -197,10 +197,9 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     print()
                     header = ["Metric", "Duration (s)"]
                     p_rows: list[list[str]] = []
-                    for key in vs.perf.keys():
-                        p_rows.append([key, f"{vs.perf[key]:2.3f}"])
-                    for key in ds.perf.keys():
-                        p_rows.append([key, f"{ds.perf[key]:2.3f}"])
+                    perf = ds.perf_stats.get_perf()
+                    for key in perf.keys():
+                        p_rows.append([key, f"{perf[key]:2.3f}"])
                     _ = tf.print_table(header, p_rows, [True, False])
                     if len(p_rows)==0:
                         print("No performance data generated (yet)")
@@ -530,8 +529,13 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                         continue
                         
                     backend = key_vals.get('backend', "pytorch")
+                    device = key_vals.get('device', None)
                     if backend == "pytorch":
+                        # Warning: MPS is broken with pytorch and gemma-3!
                         model_name = key_vals.get('model', "google/gemma-3-4b-it")  # 1b or 27b
+                        if device != 'cpu':
+                            device = "cpu"
+                            log.warning("MPS is broken with pytorch and gemma-3, switching to CPU!")
                     elif backend == "llama.cpp":  # Models need to be copied into the gguf directory manually!
                         model_name = key_vals.get('model', "gguf/gemma-3-4b-it-q4_0.gguf")  # 4b or 12b
                     elif backend == "mlx":
@@ -540,11 +544,12 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                         log.error(f"Invalid backend {backend}, use 'pytorch', 'llama.cpp' or 'mlx'")
                         continue
                     
-                    log.info(f"Extracting timeline from '{descriptor}' using {model_name} via {backend}...")
+                    
+                    log.info(f"Extracting timeline from '{descriptor}' using {model_name} via {backend} (device={device})...")
                     
                     try:
                         # Lazy init to avoid overhead if not used
-                        extractor = TimelineExtractor(model_name=model_name, backend=backend)
+                        extractor = TimelineExtractor(model_name=model_name, backend=backend, device=device)
                         events = extractor.extract_from_text(text_content[:12000])
                         
                         if not events:
@@ -680,7 +685,7 @@ def main():
     args = parser.parse_args()
 
     ds = DocumentStore(load_libraries=args.no_load_libraries)
-    vs = VectorStore(ds.storage_path, ds.config_path)
+    vs = VectorStore(ds.storage_path, ds.config_path, ds.perf_stats)
     repl(ds, vs, log)
     
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ import logging
 import json
 import hashlib
 import subprocess
+import socket
 
 # import pymupdf
 pymupdf = None
@@ -21,6 +22,7 @@ from calibre_handler import CalibreTools
 from time_lines import TimeLines
 from sync_tools import SyncTools, SyncTarget
 from search_tools import SearchTools
+from perf_stats import PerfStats
 
 
 class DocumentSource(TypedDict):
@@ -73,7 +75,6 @@ class DocumentStore:
         self.text_library: dict[str, TextLibraryEntry] = {}
         self.metadata_library: dict[str, MetadataEntry] = {}
         self.pdf_index:dict[str, PDFIndex] = {}
-        self.perf: dict[str, float] = {}
         self.tables:list[DocumentTable] = []
         self.tl:TimeLines = TimeLines()
 
@@ -84,6 +85,14 @@ class DocumentStore:
         self.storage_path: str = os.path.join(os.path.expanduser("~/.local/share"), "local_research")
         if os.path.isdir(self.storage_path) is False:
             os.makedirs(self.storage_path)
+
+        state_dir = os.path.join(self.storage_path, "state")
+        if os.path.isdir(state_dir) is False:
+            os.makedirs(state_dir)
+        state_glob_dir = os.path.join(self.publish_path, "state")
+        if os.path.isdir(state_glob_dir) is False:
+            os.makedirs(state_glob_dir)
+        self.perf_stats = PerfStats(state_dir, state_glob_dir)
         self.text_document_library_file:str = os.path.join(self.storage_path, "document_library.json")
         self.metadata_library_file:str = os.path.join(self.storage_path, "metadata_library.json")
         self.sequence_file:str = os.path.join(self.storage_path, "version_seq.json")
@@ -434,7 +443,7 @@ class DocumentStore:
                         self.log.error(f"Failed to load text library entry for {key}: {e}")
             if len(self.text_library.keys()) > 0:
                 delta = (time.time() - start_time) / len(self.text_library.keys()) * 1000.0
-                self.perf['load text library (1000 recs)'] = delta
+                self.perf_stats.add_perf(f'load text library (1000 recs)', delta)
                 
         else:
             self.text_library = {}
@@ -444,7 +453,7 @@ class DocumentStore:
                 self.pdf_index = json.load(f)
             if len(self.pdf_index.keys()) > 0:
                 delta = (time.time() - start_time) / len(self.pdf_index.keys()) * 1000000.0
-                self.perf['load pdf cache (10^6 recs)'] = delta
+                self.perf_stats.add_perf(f'load pdf cache (10^6 recs)', delta)
         else:
             self.pdf_index = {}
         

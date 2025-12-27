@@ -4,6 +4,7 @@ import json
 import time
 import datetime
 import tempfile
+import socket
 from typing import TypedDict, cast, Any, Callable
 import colorsys
 import math
@@ -14,6 +15,7 @@ import transformers
 from sentence_transformers import SentenceTransformer
 
 from research_defs import TextLibraryEntry, ProgressState, get_files_of_extensions, SearchResultEntry
+from perf_stats import PerfStats
 
 support_dim3d = False
 try:
@@ -62,7 +64,7 @@ class EmbeddingModel(TypedDict):
 
 
 class VectorStore:
-    def __init__(self, storage_path:str, config_path:str):
+    def __init__(self, storage_path:str, config_path:str, perf_stats:PerfStats):
         self.current_version: int = 6
         self.log: logging.Logger = logging.getLogger("VectorStore")
         self.storage_path:str = storage_path
@@ -87,7 +89,7 @@ class VectorStore:
                 os.makedirs(model_path, exist_ok=True)
         self.model: EmbeddingModel | None = None
         self.engine: SentenceTransformer | None = None
-        self.perf: dict[str, float] = {}
+        self.perf_stats:PerfStats = perf_stats
         self.device: torch.device = torch.device(self.resolve_device())
         self.log.info(f">{self.config['embeddings_model_name']}< on device >{self.device}< using transformers {transformers.__version__} on torch {torch.__version__}")
         required_transformers_version = "4.57.0"
@@ -796,7 +798,7 @@ class VectorStore:
                 progress_callback(ProgressState(issues=0, state=state, percent_completion=cur_cnt/all_cnt*search_vs_hl, vars={}, finished=False))
         search_time = time.time() - start_time
         key = f"{self.config['embeddings_model_name']}-{str(self.device)}"
-        self.perf[key] = search_time
+        self.perf_stats.add_perf(key, search_time)
         highlight_start = time.time()
         all_cnt = len(search_results)
         cur_cnt = 0
@@ -826,7 +828,7 @@ class VectorStore:
         if len(search_results) > 0:
             highlight_time = (time.time() - highlight_start) / len(search_results)
             key = f"{self.config['embeddings_model_name']}-{str(self.device)} highlight time per record"
-            self.perf[key] = highlight_time
+            self.perf_stats.add_perf(key, highlight_time)
         if progress_callback is not None:
             state = f"Best result: {search_results[-1]['cosine']:3.3f}: {search_results[-1]['entry']['descriptor']}"
             progress_callback(ProgressState(issues=0, state=state, percent_completion=1.0, vars={}, finished=True))
