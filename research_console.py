@@ -549,7 +549,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     
                     try:
                         # Lazy init to avoid overhead if not used
-                        extractor = TimelineExtractor(model_name=model_name, backend=backend, device=device)
+                        extractor = TimelineExtractor(model_name=model_name, backend=backend, device=device, perf_stats=ds.perf_stats)
                         events = extractor.extract_from_text(text_content[:12000])
                         
                         if not events:

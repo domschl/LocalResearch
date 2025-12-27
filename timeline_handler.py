@@ -33,13 +33,17 @@ class TimelineEvent(TypedDict):
     indra_str: str
 
 class TimelineExtractor:
-    def __init__(self, model_name: str = "google/gemma-2b-it", backend: Literal["pytorch", "mlx", "llama.cpp"] = "pytorch", device: str | None = None):
+    def __init__(self, model_name: str = "google/gemma-2b-it", backend: Literal["pytorch", "mlx", "llama.cpp"] = "pytorch", device: str | None = None, perf_stats: PerfStats | None = None):
         self.log = logging.getLogger("TimelineExtractor")
         self.model_name = model_name
         self.backend = backend
         self.device = self._resolve_device(device)
         self.tokenizer = None
         self.model = None
+        self.perf_stats = perf_stats
+        self.pt_gen = 0.0
+        self.mlx_gen = 0.0
+        self.llama_cpp_gen = 0.0
         
         self._validate_backend()
         self.log.info(f"TimelineExtractor initialized using backend: {self.backend}, device: {self.device}")
@@ -115,6 +119,8 @@ class TimelineExtractor:
             prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             self.log.info(f"Prompt sent to PyTorch backend:\n{prompt}")
             
+            if self.perf_stats:
+                start_time = time.time()
             inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
             with torch.no_grad():
                 outputs = self.model.generate(
@@ -124,7 +130,13 @@ class TimelineExtractor:
                     temperature=0.1,
                 )
             decoded = self.tokenizer.decode(outputs[0][len(inputs.input_ids[0]):], skip_special_tokens=True)
-            self.log.info(f"Raw output from PyTorch backend:\n{decoded}")
+            if self.perf_stats:
+                dt = time.time() - start_time
+                if self.pt_gen == 0.0:
+                    self.pt_gen = dt
+                else:
+                    self.pt_gen = (self.pt_gen * 4 + dt) / 5.0
+                self.perf_stats.add_perf(f"{self.model_name}_{self.backend}_{self.device}_tl_extract_generate", self.pt_gen)
             return decoded
             
         elif self.backend == "mlx":
@@ -136,22 +148,41 @@ class TimelineExtractor:
                 # Usually mlx_lm.load returns a HF tokenizer.
                 prompt = messages[-1]["content"] 
 
-            return mlx_lm.generate(
+            if self.perf_stats:
+                start_time = time.time()
+            output = mlx_lm.generate(
                 self.model, 
                 self.tokenizer, 
                 prompt=prompt, 
                 max_tokens=2048, 
                 verbose=False
             )
+            if self.perf_stats:
+                dt = time.time() - start_time
+                if self.mlx_gen == 0.0:
+                    self.mlx_gen = dt
+                else:
+                    self.mlx_gen = (self.mlx_gen * 4 + dt) / 5.0
+                self.perf_stats.add_perf(f"{self.model_name}_{self.backend}_{self.device}_tl_extract_generate", self.mlx_gen)
+            return output
             
         elif self.backend == "llama.cpp":
             # Use create_chat_completion for proper template handling
+            if self.perf_stats:
+                start_time = time.time()
             output = self.model.create_chat_completion(
                 messages=messages,
-                max_tokens=2048,
+                  max_tokens=2048,
                 temperature=0.2,
                 # stop=["<eos>"] # Handle automatically by chat format usually
             )
+            if self.perf_stats:
+                dt = time.time() - start_time
+                if self.llama_cpp_gen == 0.0:
+                    self.llama_cpp_gen = dt
+                else:
+                    self.llama_cpp_gen = (self.llama_cpp_gen * 4 + dt) / 5.0
+                self.perf_stats.add_perf(f"{self.model_name}_{self.backend}_{self.device}_tl_extract_generate", self.llama_cpp_gen)
             return output['choices'][0]['message']['content']
         
         return ""
