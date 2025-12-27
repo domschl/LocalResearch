@@ -18,6 +18,8 @@ except ImportError:
     MLX_AVAILABLE = False
 
 # Metal: CMAKE_ARGS="-DGGML_METAL=on" uv pip install llama-cpp-python
+# Vulkan: CMAKE_ARGS="-DGGML_VULKAN=on" uv pip install --reinstall llama-cpp-python      (requires vulkan-devel)
+
 try:
     from llama_cpp import Llama
     LLAMA_CPP_AVAILABLE = True
@@ -66,6 +68,8 @@ class TimelineExtractor:
                     return 'cuda'
                 elif torch.backends.mps.is_available():
                     return 'mps'
+                elif torch.xpu.is_available():
+                    return 'xpu'
                 else:
                     return 'cpu'
             else:

@@ -531,9 +531,9 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     backend = key_vals.get('backend', "pytorch")
                     device = key_vals.get('device', None)
                     if backend == "pytorch":
-                        # Warning: MPS is broken with pytorch and gemma-3!
+                        # Warning: MPS and XPU is broken with pytorch and gemma-3!
                         model_name = key_vals.get('model', "google/gemma-3-4b-it")  # 1b or 27b
-                        if device != 'cpu':
+                        if device == 'mps' or device == 'xpu':
                             device = "cpu"
                             log.warning("MPS is broken with pytorch and gemma-3, switching to CPU!")
                     elif backend == "llama.cpp":  # Models need to be copied into the gguf directory manually!
