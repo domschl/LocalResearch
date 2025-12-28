@@ -18,7 +18,7 @@ from document_store import DocumentStore
 from text_format import TextParse
 from search_tools import SearchTools
 from audiobook_handler import AudiobookGenerator
-from timeline_handler import TimelineExtractor
+from timeline_handler import TimelineExtractor, TimelineEvent
 
 def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
     history_file = os.path.join(os.path.expanduser("~/.config/local_research"), "repl_history")
@@ -343,9 +343,9 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     else:
                         log.warning("Version override, starting 3D-indexing")
                 if 'all' in arguments:
-                    vs.index3d_all(ds.text_library)
+                    vs.index3d_all()
                 else:
-                    vs.index3d(ds.text_library, None)                
+                    vs.index3d(None)                
             elif command == 'search':
                 search_results: int = cast(int, ds.get_var('search_results', key_vals))
                 highlight: bool = cast(bool, ds.get_var('highlight', key_vals))
@@ -556,7 +556,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                             print("No events found.")
                         else:
                             # Sort events by date
-                            def event_sorter(ev):
+                            def event_sorter(ev:TimelineEvent):
                                 try:
                                     jd = IndraTime.string_time_to_julian(ev['indra_str'])
                                     if jd:
@@ -637,7 +637,7 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     del ds
                     del vs
                     ds = DocumentStore()
-                    vs = VectorStore(ds.storage_path, ds.config_path)
+                    vs = VectorStore(ds.storage_path, ds.config_path, ds.perf_stats)
                 else:
                     log.error("Import failed")
             elif command == 'force_load_docs':
@@ -681,10 +681,10 @@ def main():
 
     # check of '--no-load' flag
     parser = argparse.ArgumentParser()
-    parser.add_argument('--no_load_libraries', action='store_false', default=True, help='Do not load document library')
+    _ = parser.add_argument('--no_load_libraries', action='store_false', default=True, help='Do not load document library')
     args = parser.parse_args()
 
-    ds = DocumentStore(load_libraries=args.no_load_libraries)
+    ds = DocumentStore(load_libraries=cast(bool, args.no_load_libraries))
     vs = VectorStore(ds.storage_path, ds.config_path, ds.perf_stats)
     repl(ds, vs, log)
     

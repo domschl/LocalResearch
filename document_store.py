@@ -5,7 +5,6 @@ import logging
 import json
 import hashlib
 import subprocess
-import socket
 
 # import pymupdf
 pymupdf = None
@@ -92,7 +91,7 @@ class DocumentStore:
         state_glob_dir = os.path.join(self.publish_path, "state")
         if os.path.isdir(state_glob_dir) is False:
             os.makedirs(state_glob_dir)
-        self.perf_stats = PerfStats(state_dir, state_glob_dir)
+        self.perf_stats: PerfStats = PerfStats(state_dir, state_glob_dir)
         self.text_document_library_file:str = os.path.join(self.storage_path, "document_library.json")
         self.metadata_library_file:str = os.path.join(self.storage_path, "metadata_library.json")
         self.sequence_file:str = os.path.join(self.storage_path, "version_seq.json")
@@ -1086,6 +1085,7 @@ class DocumentStore:
     def publish(self, parameters:list[str]|None) -> bool:
         if parameters is None:
             parameters = []
+        self.perf_stats.sync_perf()
         if len(self.metadata_library) == 0 or len(self.text_library) == 0:
             self.log.error("No metadata or text library found, cannot publish!")
             return False

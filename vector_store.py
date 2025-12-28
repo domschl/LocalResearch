@@ -4,9 +4,7 @@ import json
 import time
 import datetime
 import tempfile
-import socket
 from typing import TypedDict, cast, Any, Callable
-import colorsys
 import math
 import numpy as np
 
@@ -834,7 +832,7 @@ class VectorStore:
             progress_callback(ProgressState(issues=0, state=state, percent_completion=1.0, vars={}, finished=True))
         return search_results
     
-    def prepare_visualization_data(self, text_library:dict[str, TextLibraryEntry], max_points: int | None = None) -> dict[str, Any]:  # pyright:ignore[reportExplicitAny]
+    def prepare_visualization_data(self, max_points: int | None = None) -> dict[str, Any]:  # pyright:ignore[reportExplicitAny]
         matrix, hashes = self.get_embeddings_matrix()
         if umap is None:
             return {"error": "UMAP module is not available"}
@@ -867,7 +865,7 @@ class VectorStore:
         hash_list = [hash for hash, _chunk_id in hashes]
         chunk_indices = [chunk_id for _hash, chunk_id in hashes]
 
-        sizes = [5.0] * len(points)
+        # sizes = [5.0] * len(points)
         self.log.info("UMAP finished")
 
         return {
@@ -881,13 +879,13 @@ class VectorStore:
         }
 
 
-    def index3d(self, text_library:dict[str, TextLibraryEntry], max_points:int|None=None):
-        point_cloud = self.prepare_visualization_data(text_library, max_points)
+    def index3d(self, max_points:int|None=None):
+        point_cloud = self.prepare_visualization_data(max_points)
         filename = os.path.join(self.visualization_3d, self.config['embeddings_model_name']+'.json')
         with open(filename, "w") as f:
             json.dump(point_cloud, f, indent=2)
     
-    def index3d_all(self, text_library:dict[str, TextLibraryEntry], max_points:int|None=None):
+    def index3d_all(self, max_points:int|None=None):
         current_old = self.config['embeddings_model_name']
         current_index = self.get_model_index(current_old)
         for ind in range(len(self.model_list)):
@@ -895,7 +893,7 @@ class VectorStore:
                 continue
             name = self.select(ind+1)
             self.log.info(f"{ind+1}., 3D-indexing {name}")
-            self.index3d(text_library, max_points)
+            self.index3d(max_points)
         if current_index is not None:
             name = self.select(current_index)
             self.log.info(f"Reactivated {name} after indexing all.")

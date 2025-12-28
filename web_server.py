@@ -1,6 +1,6 @@
 import logging
 import os
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
+# os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import json
 import asyncio
 import threading
@@ -13,75 +13,95 @@ from document_store import DocumentStore
 from vector_store import VectorStore
 from research_defs import get_files_of_extensions, ProgressState
 from text_format import TextParse
+from typing import Any, cast, TypedDict, override
+from collections.abc import Awaitable
 
 # --- Configuration ---
 CONFIG_DIR = Path.home() / ".config" / "local_research"
 CONFIG_FILE = CONFIG_DIR / "web_server.json"
 
+
+class WebConfig(TypedDict):
+    port: int
+    host: str
+    tls: bool
+    cert_file: str|None
+    key_file: str|None
+
+
+class StdMsg(TypedDict):
+    token:str
+    uuid:str
+    cmd:str
+    payload:Any  # pyright:ignore[reportExplicitAny]
+    request_cmd: str|None   # This field shouldn't exist. Client should use UUID of reply to correlate the answer and do local book-keeping.
+    final:bool
+    
+
 def load_config():
-    defaults = {
-        "port": 8080,
-        "host": "0.0.0.0",
-        "tls": False,
-        "cert_file": None,
-        "key_file": None
-    }
+    defaults:WebConfig = WebConfig(
+        port=8080,
+        host="0.0.0.0",
+        tls=False,
+        cert_file=None,
+        key_file=None
+    )
     if CONFIG_FILE.exists():
         try:
             with open(CONFIG_FILE, 'r') as f:
-                config = json.load(f)
+                config = cast(WebConfig, json.load(f))
                 defaults.update(config)
         except Exception as e:
             print(f"Error loading config: {e}")
     return defaults
 
 # --- Queues ---
-request_queue = queue.Queue()
-response_queue = queue.Queue()
+request_queue:queue.Queue[StdMsg] = queue.Queue()
+response_queue:queue.Queue[StdMsg] = queue.Queue()
 
 # --- Session Management & Logging ---
 class ConnectionManager:
     def __init__(self):
-        self.active_connections = set()
-        self.request_map = {} # uuid -> websocket
+        self.active_connections:set[web.WebSocketResponse] = set()
+        self.request_map:dict[str, web.WebSocketResponse] = {} # uuid -> websocket
 
-    async def connect(self, ws):
+    async def connect(self, ws:web.WebSocketResponse):
         self.active_connections.add(ws)
 
-    def disconnect(self, ws):
+    def disconnect(self, ws:web.WebSocketResponse):
         self.active_connections.remove(ws)
         # Clean up request map? 
         # Ideally we'd remove any pending requests for this WS, 
         # but for now we'll just handle closed WS in dispatcher.
 
-    def register_request(self, uuid, ws):
+    def register_request(self, uuid:str, ws:web.WebSocketResponse):
         self.request_map[uuid] = ws
 
-    def unregister_request(self, uuid):
+    def unregister_request(self, uuid:str):
         if uuid in self.request_map:
             del self.request_map[uuid]
             # logger.info(f"Unregistered request {uuid}") # logger not available in class scope easily without passing it or getting it
 
-    def get_ws(self, uuid):
+    def get_ws(self, uuid:str):
         return self.request_map.get(uuid)
 
-    async def broadcast(self, message: dict):
+    async def broadcast(self, message: StdMsg):
         if not self.active_connections:
             return
         
         json_msg = json.dumps(message)
-        tasks = []
+        tasks:list[Awaitable[Any]] = []  # pyright:ignore[reportExplicitAny]
         for ws in self.active_connections:
             if not ws.closed:
                  tasks.append(ws.send_str(json_msg))
         
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            _ = await asyncio.gather(*tasks, return_exceptions=True)
 
     async def close_all(self):
         for ws in list(self.active_connections):
             if not ws.closed:
-                await ws.close(code=aiohttp.WSCloseCode.GOING_AWAY, message=b'Server shutdown')
+                _ = await ws.close(code=aiohttp.WSCloseCode.GOING_AWAY, message=b'Server shutdown')
 
 manager = ConnectionManager()
 
@@ -89,20 +109,23 @@ manager = ConnectionManager()
 class WebSocketLogHandler(logging.Handler):
     def __init__(self):
         super().__init__()
-        self.loop = None  # Will be set to the event loop
-    
-    def emit(self, record):
+        self.loop:asyncio.AbstractEventLoop|None = None  # Will be set to the event loop
+
+    @override
+    def emit(self, record:logging.LogRecord):
         log_entry = self.format(record)
         # print(f"Handler log entry: {log_entry}")
-        msg = {
+        msg:StdMsg = StdMsg({
             "token": "",
             "uuid": "",
             "cmd": "log",
-            "payload": log_entry
-        }
+            "payload": log_entry,
+            "request_cmd": None,
+            "final":False
+        })
         # Schedule the broadcast on the event loop from any thread
         if self.loop and manager:
-            asyncio.run_coroutine_threadsafe(manager.broadcast(msg), self.loop)
+            _ = asyncio.run_coroutine_threadsafe(manager.broadcast(msg), self.loop)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("ResearchServer")
@@ -117,7 +140,7 @@ def worker_proc():
     # Initialize backend
     try:
         ds = DocumentStore()
-        vs = VectorStore(ds.storage_path, ds.config_path)
+        vs = VectorStore(ds.storage_path, ds.config_path, ds.perf_stats)
         logger.info("ResearchServer backend initialized")
     except Exception as e:
         logger.error(f"Failed to initialize backend: {e}")
@@ -125,13 +148,13 @@ def worker_proc():
 
     while True:
         try:
-            req = request_queue.get()
-            if req is None: # Poison pill
+            req:StdMsg = request_queue.get()
+            if req['cmd'] == 'msgExit':
                 break
             
             uuid = req.get('uuid')
             cmd = req.get('cmd')
-            payload = req.get('payload')
+            payload = req.get('payload')  # pyright:ignore[reportAny]
             
             logger.debug(f"Worker processing: {cmd} ({uuid})")
             
@@ -147,7 +170,7 @@ def worker_proc():
                 for ind, model in enumerate(vs.model_list):
                     path = vs.model_embedding_path(model['model_name'])
                     cnt = len(get_files_of_extensions(path, ['pt']))
-                    models.append({
+                    models.append({  # pyright:ignore[reportUnknownMemberType]
                         "id": ind + 1,
                         "name": model['model_name'],
                         "docs": cnt,
@@ -157,7 +180,7 @@ def worker_proc():
                 response_payload = models
             
             elif cmd == 'search':
-                search_string_raw = payload
+                search_string_raw = cast(str, payload)
                 
                 # Parse search string for parameters
                 tp = TextParse()
@@ -166,12 +189,12 @@ def worker_proc():
                 
                 # Get parameters ensuring correct types
                 try:
-                    search_results = int(ds.get_var('search_results', key_vals))
+                    search_results = cast(int, ds.get_var('search_results', key_vals))
                     highlight = str(ds.get_var('highlight', key_vals)).lower() == 'true'
-                    cutoff = float(ds.get_var('highlight_cutoff', key_vals))
-                    damp = float(ds.get_var('highlight_dampening', key_vals))
-                    context_length = int(ds.get_var('context_length', key_vals))
-                    context_steps = int(ds.get_var('context_steps', key_vals))
+                    cutoff = cast(float, ds.get_var('highlight_cutoff', key_vals))
+                    damp = cast(float, ds.get_var('highlight_dampening', key_vals))
+                    context_length = cast(int, ds.get_var('context_length', key_vals))
+                    context_steps = cast(int, ds.get_var('context_steps', key_vals))
                     
                     # Handle max_results override specific to search command
                     count = search_results
@@ -192,12 +215,14 @@ def worker_proc():
                     count = search_results
 
                 def progress_callback(ps:ProgressState):
-                    progress_msg = {
+                    progress_msg:StdMsg = StdMsg({
                         "token": req.get('token'),
                         "uuid": uuid,
                         "cmd": "progress",
-                        "payload": json.dumps(ps)
-                    }
+                        "payload": json.dumps(ps),
+                        "request_cmd": None,
+                        "final": False
+                    })
                     response_queue.put(progress_msg)
 
                 # Perform search
@@ -210,7 +235,7 @@ def worker_proc():
                         descriptor = res['entry']['descriptor']
                         metadata = ds.get_metadata(descriptor)
                         
-                        formatted_results.append({
+                        formatted_results.append({  # pyright:ignore[reportUnknownMemberType]
                             "cosine": res['cosine'],
                             "descriptor": descriptor,
                             "hash": res['hash'],
@@ -226,8 +251,8 @@ def worker_proc():
             
             elif cmd == 'select':
                 try:
-                    logger.debug(f"Processing select command with payload: {payload} (type: {type(payload)})")
-                    model_id = int(payload)
+                    logger.debug(f"Processing select command with payload: {payload} (type: {type(payload)})")  # pyright:ignore[reportAny]
+                    model_id = int(payload)  # pyright:ignore[reportAny]
                     result = vs.select(model_id)
                     logger.debug(f"vs.select result: {result}")
                     if result is None:
@@ -241,7 +266,7 @@ def worker_proc():
                     response_payload = {"error": str(e)}
 
             elif cmd == 'get_3d_viz_data':
-                model_name = payload
+                model_name = cast(str, payload)
                 # Sanitize model name to prevent directory traversal
                 if not model_name or '..' in model_name or '/' in model_name:
                      response_payload = {"error": "Invalid model name"}
@@ -250,8 +275,8 @@ def worker_proc():
                         viz_file = os.path.join(vs.visualization_3d, model_name + '.json')
                         if os.path.exists(viz_file):
                             with open(viz_file, 'r') as f:
-                                data = json.load(f)
-                            response_payload = data
+                                data:Any = json.load(f)  # pyright:ignore[reportAny, reportExplicitAny]
+                            response_payload:Any = data  # pyright:ignore[reportExplicitAny, reportAny]
                         else:
                             # If file doesn't exist, maybe try to generate it?
                             # For now, just return error or empty
@@ -262,7 +287,7 @@ def worker_proc():
                         response_payload = {"error": str(e)}
 
             elif cmd == 'get_metadata':
-                hash_val = payload
+                hash_val = cast(str, payload)
                 if hash_val in ds.text_library:
                     descriptor = ds.text_library[hash_val]['descriptor']
                     logger.info(f"get_metadata: hash={hash_val}, descriptor={descriptor}")
@@ -276,9 +301,9 @@ def worker_proc():
 
             elif cmd == 'set_var':
                 try:
-                    name = payload.get('name')
-                    value = payload.get('value')
-                    if name and value is not None:
+                    name:str = payload.get('name')  # pyright:ignore[reportAny]
+                    value:str= cast(str, payload.get('value'))  # pyright:ignore[reportAny]
+                    if name: # and value is not None:
                         success = ds.set_var(name, value)
                         if success:
                             response_payload = {"status": "ok", "name": name, "value": value}
@@ -291,7 +316,7 @@ def worker_proc():
                     response_payload = {"error": str(e)}
 
             elif cmd == 'get_text':
-                hash_val = payload
+                hash_val = cast(str, payload)
                 if hash_val in ds.text_library:
                     text = ds.text_library[hash_val]['text']
                     response_payload = text
@@ -300,8 +325,8 @@ def worker_proc():
 
             elif cmd == 'get_text_chunk':
                 try:
-                    hash_val = payload.get('hash')
-                    chunk_index = payload.get('chunk_index')
+                    hash_val = cast(str, payload.get('hash'))  # pyright:ignore[reportAny]
+                    chunk_index = cast(int, payload.get('chunk_index'))  # pyright:ignore[reportAny]
                     logger.info(f"get_text_chunk: hash={hash_val}, chunk_index={chunk_index}")
                     if hash_val in ds.text_library:
                         text = ds.text_library[hash_val]['text']
@@ -320,8 +345,8 @@ def worker_proc():
 
             elif cmd == 'get_chunk_details':
                 try:
-                    hash_val = payload.get('hash')
-                    chunk_index = payload.get('chunk_index')
+                    hash_val = cast(str, payload.get('hash'))  # pyright:ignore[reportAny]
+                    chunk_index = cast(int, payload.get('chunk_index'))  # pyright:ignore[reportAny]
                     if hash_val in ds.text_library:
                         entry = ds.text_library[hash_val]
                         text = entry['text']
@@ -354,20 +379,20 @@ def worker_proc():
             elif cmd == 'timeline':
                 try:
                     # payload contains arguments
-                    domains = payload.get('domains')
-                    keywords = payload.get('keywords')
-                    time_range = payload.get('time')
-                    partial = payload.get('partial_overlap', False)
-                    full = payload.get('full_overlap', False)
+                    domains = payload.get('domains')  # pyright:ignore[reportAny]
+                    keywords = payload.get('keywords')  # pyright:ignore[reportAny]
+                    time_range = payload.get('time')  # pyright:ignore[reportAny]
+                    partial = payload.get('partial_overlap', False)  # pyright:ignore[reportAny]
+                    full = payload.get('full_overlap', False)  # pyright:ignore[reportAny]
 
                     if isinstance(domains, str): domains = domains.split(' ')
                     if isinstance(keywords, str): keywords = keywords.split(' ')
                     
                     # Call backend
-                    tlel = ds.tl.search_events(time_range, domains, keywords, True, full, partial)
+                    tlel = ds.tl.search_events(time_range, domains, keywords, True, full, partial)  # pyright:ignore[reportAny]
                     
                     # Format results
-                    events = []
+                    events:list[dict[str,str]] = []
                     for tle in tlel:
                         date = ds.tl.get_date_string_from_event(tle['jd_event'])
                         event_text = ds.tl.get_event_text(tle['eventdata'])
@@ -382,14 +407,14 @@ def worker_proc():
             else:
                 response_payload = f"Unknown command: {cmd}"
 
-            response = {
+            response:StdMsg = StdMsg({
                 "token": req.get('token'),
                 "uuid": uuid,
                 "cmd": "response",
                 "request_cmd": cmd, # Echo back the command so client knows what this is for
                 "payload": response_payload,
-                "final": True
-            }
+                "final": False
+            })
             response_queue.put(response)
             
         except Exception as e:
@@ -398,14 +423,14 @@ def worker_proc():
     logger.info("Worker thread stopped")
 
 # --- Response Dispatcher ---
-async def response_dispatcher(app):
+async def response_dispatcher(_app:web.Application):
     logger.debug("Response dispatcher started")
     loop = asyncio.get_running_loop()
     try:
         while True:
             # Run blocking get in executor
             res = await loop.run_in_executor(None, response_queue.get)
-            if res is None:
+            if res['cmd'] == 'msgExit':
                 break
                 
             uuid = res.get('uuid')
@@ -434,9 +459,9 @@ async def response_dispatcher(app):
 
 # --- Handlers ---
 
-async def websocket_handler(request):
+async def websocket_handler(request:web.Request):
     ws = web.WebSocketResponse()
-    await ws.prepare(request)
+    _ = await ws.prepare(request)
 
     await manager.connect(ws)
     logger.info("Websocket connection opened")
@@ -444,12 +469,12 @@ async def websocket_handler(request):
     try:
         async for msg in ws:
             if msg.type == web.WSMsgType.TEXT:
-                if msg.data == 'close':
-                    await ws.close()
+                if cast(str, msg.data) == 'close':
+                    _ = await ws.close()
                 else:
                     try:
-                        data = json.loads(msg.data)
-                        token = data.get("token", "")
+                        data = cast(StdMsg, json.loads(msg.data))  # pyright:ignore[reportAny]
+                        _token = data.get("token", "")
                         uuid = data.get("uuid", "")
                         cmd = data.get("cmd", "")
                         
@@ -463,7 +488,7 @@ async def websocket_handler(request):
                         logger.debug(f"Queued request {uuid}")
 
                     except json.JSONDecodeError:
-                        logger.error(f"Invalid JSON received: {msg.data}")
+                        logger.error(f"Invalid JSON received: {msg.data}")  # pyright:ignore[reportAny]
                     except Exception as e:
                         logger.error(f"Error processing message: {e}")
 
@@ -475,52 +500,53 @@ async def websocket_handler(request):
 
     return ws
 
-async def index_handler(request):
+async def index_handler(_request:web.Request):
     return web.FileResponse('./web_client/index.html')
 
-async def client_js_handler(request):
+async def client_js_handler(_request:web.Request):
     return web.FileResponse('./web_client/client.js')
 
 # --- App Lifecycle ---
-async def on_startup(app):
+async def on_startup(app:web.Application):
     # Set the event loop for the WebSocket log handler so it can broadcast from any thread
     ws_handler.loop = asyncio.get_event_loop()
     
     # Start worker thread
     app['worker_thread'] = threading.Thread(target=worker_proc, daemon=True)
-    app['worker_thread'].start()
+    cast(threading.Thread, app['worker_thread']).start()
     
     # Start dispatcher task
     app['dispatcher_task'] = asyncio.create_task(response_dispatcher(app))
 
-async def on_shutdown(app):
+async def on_shutdown(app:web.Application):
     logger.info("Shutting down...")
     # Close all websockets
     await manager.close_all()
     
     # Stop dispatcher
     if 'dispatcher_task' in app:
-        app['dispatcher_task'].cancel()
+        app['dispatcher_task'].cancel()  # pyright:ignore[reportAny]
         try:
             await app['dispatcher_task']
         except asyncio.CancelledError:
             pass
 
-async def on_cleanup(app):
+async def on_cleanup(app:web.Application):
     # Stop worker
     logger.info("Stopping worker thread...")
-    request_queue.put(None)
+    exitMsg = StdMsg(token="", uuid="", cmd="msgExit", payload="", final=False, request_cmd=None)
+    request_queue.put(exitMsg)
     if 'worker_thread' in app:
-        app['worker_thread'].join()
+        _ = cast(threading.Thread, app['worker_thread']).join()
     
     # Unblock response dispatcher executor thread
-    response_queue.put(None)
+    response_queue.put(exitMsg)
     
     logger.info("Cleanup complete")
 
 def create_app():
     app = web.Application()
-    app.add_routes([
+    _ = app.add_routes([
         web.get('/', index_handler),
         web.get('/client.js', client_js_handler),
         web.get('/ws', websocket_handler),

@@ -1640,7 +1640,7 @@ window.onload = function () {
                         addToRepl(`Error loading timeline: ${payload.error} `, theme.error);
                     } else {
                         renderTimeline(payload, lastQuery || {});
-                        addToRepl(`Timeline loaded.${payload.length} events.`, theme.success);
+                        addToRepl(`Timeline loaded. ${payload.length} events.`, theme.success);
                     }
                 } else if (requestCmd === 'get_3d_viz_data') {
                     if (payload.error) {

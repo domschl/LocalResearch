@@ -1,34 +1,29 @@
 import logging
 import re
-import os
 import json
 import time
-try:
-    import torch
-    from transformers import AutoTokenizer, AutoModelForCausalLM
-    TRANSFORMERS_AVAILABLE = True
-except ImportError:
-    TRANSFORMERS_AVAILABLE = False
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 # Metal: uv pip install mlx-lm
 try:
-    import mlx_lm
+    import mlx_lm  # pyright:ignore[reportMissingImports]
     MLX_AVAILABLE = True
 except ImportError:
-    MLX_AVAILABLE = False
+    MLX_AVAILABLE = False  # pyright:ignore[reportConstantRedefinition]
 
 # Metal: CMAKE_ARGS="-DGGML_METAL=on" uv pip install llama-cpp-python
 # Vulkan: CMAKE_ARGS="-DGGML_VULKAN=on" uv pip install --reinstall llama-cpp-python      (requires vulkan-devel)
 
 try:
-    from llama_cpp import Llama
+    from llama_cpp import Llama  # pyright:ignore[reportMissingImports, reportUnknownVariableType]
     LLAMA_CPP_AVAILABLE = True
 except ImportError:
-    LLAMA_CPP_AVAILABLE = False
+    LLAMA_CPP_AVAILABLE = False  # pyright:ignore[reportConstantRedefinition]
 
-from typing import TypedDict, Any, cast, Literal
+from typing import TypedDict, Literal, Any, cast
 
-from indralib.indra_time import IndraTime
+# from indralib.indra_time import IndraTime
 from perf_stats import PerfStats
 
 class TimelineEvent(TypedDict):
@@ -38,23 +33,21 @@ class TimelineEvent(TypedDict):
 
 class TimelineExtractor:
     def __init__(self, model_name: str = "google/gemma-2b-it", backend: Literal["pytorch", "mlx", "llama.cpp"] = "pytorch", device: str | None = None, perf_stats: PerfStats | None = None):
-        self.log = logging.getLogger("TimelineExtractor")
-        self.model_name = model_name
-        self.backend = backend
-        self.device = self._resolve_device(device)
-        self.tokenizer = None
-        self.model = None
-        self.perf_stats = perf_stats
-        self.pt_gen = 0.0
-        self.mlx_gen = 0.0
-        self.llama_cpp_gen = 0.0
+        self.log:logging.Logger = logging.getLogger("TimelineExtractor")
+        self.model_name:str = model_name
+        self.backend:str = backend
+        self.device:str = self._resolve_device(device)
+        self.tokenizer:Any = None  # pyright:ignore[reportExplicitAny]
+        self.model:Any = None  # pyright:ignore[reportExplicitAny]
+        self.perf_stats:PerfStats|None = perf_stats
+        self.pt_gen:float = 0.0
+        self.mlx_gen:float = 0.0
+        self.llama_cpp_gen:float = 0.0
         
         self._validate_backend()
         self.log.info(f"TimelineExtractor initialized using backend: {self.backend}, device: {self.device}")
 
     def _validate_backend(self):
-        if self.backend == "pytorch" and not TRANSFORMERS_AVAILABLE:
-            raise ImportError("backend='pytorch' requires 'transformers' and 'torch' libraries.")
         if self.backend == "mlx" and not MLX_AVAILABLE:
             raise ImportError("backend='mlx' requires 'mlx-lm' library.")
         if self.backend == "llama.cpp" and not LLAMA_CPP_AVAILABLE:
@@ -63,40 +56,33 @@ class TimelineExtractor:
 
     def _resolve_device(self, device_name: str | None) -> str:
         if device_name is None or device_name == 'auto':
-            if TRANSFORMERS_AVAILABLE:
-                if torch.cuda.is_available():
-                    return 'cuda'
-                elif torch.backends.mps.is_available():
-                    return 'mps'
-                elif torch.xpu.is_available():
-                    return 'xpu'
-                else:
-                    return 'cpu'
+            if torch.cuda.is_available():
+                return 'cuda'
+            elif torch.backends.mps.is_available():
+                return 'mps'
+            elif torch.xpu.is_available():
+                return 'xpu'
             else:
-                # Without torch, we can't easily auto-detect for PyTorch purposes.
-                # For MLX, it defaults to GPU if available.
-                # For llama.cpp, we set n_gpu_layers=-1 if we think we are on Mac/GPU.
-                # Let's default to a safe value or just 'auto' string if backend handles it.
-                return 'cpu' # Fallback
+                return 'cpu'
         return device_name
 
 
     def _load_model(self):
-        if self.model is not None:
+        if self.model is not None:  # pyright:ignore[reportAny]
             return
 
         self.log.info(f"Loading model {self.model_name} with backend {self.backend}...")
         try:
             if self.backend == "pytorch":
-                self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-                self.model = AutoModelForCausalLM.from_pretrained(
+                self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)  # pyright:ignore[reportUnknownMemberType]
+                self.model = AutoModelForCausalLM.from_pretrained(  # pyright:ignore[reportUnknownMemberType]
                     self.model_name, 
                     dtype=torch.float16 if self.device != 'cpu' else torch.float32,
                     device_map=self.device
                 )
-                self.log.info(f"Model loaded successfully. Class: {type(self.model)}")
+                self.log.info(f"Model loaded successfully. Class: {type(self.model)}")  # pyright:ignore[reportAny]
             elif self.backend == "mlx":
-                self.model, self.tokenizer = mlx_lm.load(self.model_name)
+                self.model, self.tokenizer = mlx_lm.load(self.model_name)  # pyright:ignore[reportUnknownMemberType, reportPossiblyUnboundVariable]
             elif self.backend == "llama.cpp":
                 # For llama.cpp, model_name should ideally be a path to a GGUF file
                 # But if it's a HF repo, we might need to handle it differently or expect user to pass local path.
@@ -105,13 +91,13 @@ class TimelineExtractor:
                 # Let's assume the user knows what they are doing or we provide a way to download.
                 # However, Llama class creates the 'model' instance which doubles as the valid object.
                 n_gpu_layers = -1 if self.device in ['mps', 'cuda'] else 0
-                self.model = Llama(
+                self.model = Llama(  # pyright:ignore[reportPossiblyUnboundVariable]
                     model_path=self.model_name,
                     n_gpu_layers=n_gpu_layers,
                     verbose=False,
                     n_ctx=4096 
                 )
-                self.tokenizer = self.model # Llama object handles tokenization
+                self.tokenizer = self.model # Llama object handles tokenization  # pyright:ignore[reportUnknownMemberType]
 
             self.log.info("Model loaded successfully.")
         except Exception as e:
@@ -119,23 +105,25 @@ class TimelineExtractor:
             self.model = None
             raise e
 
-    def _generate(self, messages: list[dict]) -> str:
+    def _generate(self, messages: list[dict[str,str]]) -> str:
+        if self.tokenizer is None:  # pyright:ignore[reportAny]
+            self.log.error("No tokenizer available")
+            return ""
         if self.backend == "pytorch":
             # Apply chat template
-            prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)  # pyright:ignore[reportAny]
             self.log.info(f"Prompt sent to PyTorch backend:\n{prompt}")
             
-            if self.perf_stats:
-                start_time = time.time()
-            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+            start_time = time.time()
+            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)  # pyright:ignore[reportAny]
             with torch.no_grad():
-                outputs = self.model.generate(
+                outputs = self.model.generate(  # pyright:ignore[reportAny]
                     **inputs, 
                     max_new_tokens=2048, # Increased for JSON
                     do_sample=True,
                     temperature=0.1,
                 )
-            decoded = self.tokenizer.decode(outputs[0][len(inputs.input_ids[0]):], skip_special_tokens=True)
+            decoded = self.tokenizer.decode(outputs[0][len(inputs.input_ids[0]):], skip_special_tokens=True)  # pyright:ignore[reportAny]
             if self.perf_stats:
                 dt = time.time() - start_time
                 if self.pt_gen == 0.0:
@@ -143,26 +131,25 @@ class TimelineExtractor:
                 else:
                     self.pt_gen = (self.pt_gen * 4 + dt) / 5.0
                 self.perf_stats.add_perf(f"{self.model_name}_{self.backend}_{self.device}_tl_extract_generate", self.pt_gen)
-            return decoded
+            return cast(str, decoded)
             
         elif self.backend == "mlx":
-            if hasattr(self.tokenizer, "apply_chat_template"):
-                prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            if hasattr(self.tokenizer, "apply_chat_template"):  # pyright:ignore[reportAny]
+                prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)  # pyright:ignore[reportAny]
             else:
                 # Fallback if tokenizer doesn't support chat template (unlikely for modern HF tokenizers)
                 # But MLX tokenizer might be a slim wrapper? check docs. 
                 # Usually mlx_lm.load returns a HF tokenizer.
                 prompt = messages[-1]["content"] 
 
-            if self.perf_stats:
-                start_time = time.time()
-            output = mlx_lm.generate(
-                self.model, 
-                self.tokenizer, 
+            start_time = time.time()
+            output = cast(str, mlx_lm.generate(  # pyright:ignore[reportPossiblyUnboundVariable, reportUnknownMemberType]
+                self.model,   # pyright:ignore[reportAny]
+                self.tokenizer,   # pyright:ignore[reportAny]
                 prompt=prompt, 
                 max_tokens=2048, 
                 verbose=False
-            )
+            ))
             if self.perf_stats:
                 dt = time.time() - start_time
                 if self.mlx_gen == 0.0:
@@ -174,9 +161,8 @@ class TimelineExtractor:
             
         elif self.backend == "llama.cpp":
             # Use create_chat_completion for proper template handling
-            if self.perf_stats:
-                start_time = time.time()
-            output = self.model.create_chat_completion(
+            start_time = time.time()
+            output = self.model.create_chat_completion(  # pyright:ignore[reportAny]
                 messages=messages,
                   max_tokens=2048,
                 temperature=0.2,
@@ -189,8 +175,7 @@ class TimelineExtractor:
                 else:
                     self.llama_cpp_gen = (self.llama_cpp_gen * 4 + dt) / 5.0
                 self.perf_stats.add_perf(f"{self.model_name}_{self.backend}_{self.device}_tl_extract_generate", self.llama_cpp_gen)
-            return output['choices'][0]['message']['content']
-        
+            return cast(str, output['choices'][0]['message']['content'])        
         return ""
 
     def normalize_time(self, date_text: str) -> str | None:
@@ -307,7 +292,7 @@ class TimelineExtractor:
         """
         self._load_model()
         # For Llama.cpp, tokenizer is the model instance itself (or not None).
-        if self.model is None:
+        if self.model is None:  # pyright:ignore[reportAny]
             self.log.error("Model not available for extraction.")
             return []
 
@@ -317,9 +302,9 @@ class TimelineExtractor:
         # or handle chunks loop.
         
         max_len = 4000 # Characters, rough approximation
-        chunks = [text[i:i+max_len] for i in range(0, len(text), max_len)]
+        chunks:list[str] = [text[i:i+max_len] for i in range(0, len(text), max_len)]
         
-        all_events = []
+        all_events:list[TimelineEvent] = []
         
         for i, chunk in enumerate(chunks):
             # Construct strict JSON prompt
@@ -359,13 +344,13 @@ JSON:
             if start != -1 and end != -1:
                 json_str = post_json[start:end+1]
                 try:
-                    data = json.loads(json_str, strict=False)
+                    data = json.loads(json_str, strict=False)  # pyright:ignore[reportAny]
                     if isinstance(data, list):
-                        json_objects = data
+                        json_objects = data  # pyright:ignore[reportUnknownVariableType]
                 except json.JSONDecodeError:
                     # self.log.warning(f"Initial JSON parse failed, attempting heuristic repair.")
                     # Fallback: Heuristic extraction
-                    json_objects = self._heuristic_extract(post_json)
+                    json_objects:list[dict[str,str]] = self._heuristic_extract(post_json)
 
             if len(json_objects) > 0:
                 self.log.info(f"Extracted {len(json_objects)} events from chunk {i+1}.")
@@ -377,7 +362,7 @@ JSON:
                     # Normalize time
                     norm_time = self.normalize_time(item['date_text'])
                     if norm_time:
-                        event =   {
+                        event:TimelineEvent =   {
                             "date_text": item['date_text'],
                             "event_description": item['event_description'],
                             "indra_str": norm_time
@@ -390,16 +375,16 @@ JSON:
                     self.log.warning(f"Invalid event (missing date_text or event_description): {item}")
         return all_events
 
-    def _heuristic_extract(self, text: str) -> list[dict]:
+    def _heuristic_extract(self, text: str) -> list[dict[str,str]]:
         """
         Extract JSON objects manually using regex when standard parsing fails.
         Handles unescaped quotes and other common LLM artifacts.
         """
-        extracted = []
+        extracted:list[dict[str,str]] = []
         # Find everything between { and } that looks like an object
         # We assume no nested objects for this specific schema
         object_pattern = re.compile(r"\{.*?\}", re.DOTALL)
-        matches = object_pattern.findall(text)
+        matches:list[str] = object_pattern.findall(text)
         
         for m in matches:
             # Clean up smart quotes in the block first

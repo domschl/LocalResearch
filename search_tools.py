@@ -3,7 +3,7 @@ import logging
 
 class SearchTools:
     def __init__(self):
-        self.log = logging.getLogger("SearchTools")
+        self.log:logging.Logger = logging.getLogger("SearchTools")
 
     @staticmethod
     def match(text: str, keys: list[str]) -> bool:
@@ -20,7 +20,6 @@ class SearchTools:
         All top-level keys in the list must match (AND logic).
         """
         s_text: str = text.lower()
-        found: bool = False
         
         # First pass: Check positive matches (AND logic)
         # If there are no positive matches required (only negatives), we assume True initially
@@ -29,12 +28,10 @@ class SearchTools:
         if not keys:
             return True
 
-        has_positive_constraints = False
         for key in keys:
             if key.startswith("!"):
                 continue
             
-            has_positive_constraints = True
             or_keys = key.split("|")
             or_found = False
             for or_key in or_keys:
@@ -67,7 +64,7 @@ class SearchTools:
         Splits OR terms.
         Strips wildcards for substring matching.
         """
-        highlight_terms = []
+        highlight_terms:list[str] = []
         for key in keys:
             if key.startswith("!"):
                 continue
