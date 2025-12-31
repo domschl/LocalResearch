@@ -442,7 +442,7 @@ class DocumentStore:
                         self.log.error(f"Failed to load text library entry for {key}: {e}")
             if len(self.text_library.keys()) > 0:
                 delta = (time.time() - start_time) / len(self.text_library.keys()) * 1000.0
-                self.perf_stats.add_perf(f'load text library (1000 recs)', delta)
+                self.perf_stats.add_perf(task='load text library', backend="python", device="cpu", timing=delta, unit="s/1000 recs")
                 
         else:
             self.text_library = {}
@@ -452,7 +452,7 @@ class DocumentStore:
                 self.pdf_index = json.load(f)
             if len(self.pdf_index.keys()) > 0:
                 delta = (time.time() - start_time) / len(self.pdf_index.keys()) * 1000000.0
-                self.perf_stats.add_perf(f'load pdf cache (10^6 recs)', delta)
+                self.perf_stats.add_perf(task='load pdf cache', backend="python", device="cpu", timing=delta, unit="s/10^6 recs")
         else:
             self.pdf_index = {}
         

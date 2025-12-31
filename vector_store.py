@@ -459,12 +459,12 @@ class VectorStore:
                 for filename in file_list:
                     hash = os.path.splitext(filename)[0]
                     tensor_path = os.path.join(indices_path, filename)
-                    emb_tensor = cast(torch.Tensor, torch.load(tensor_path, map_location='cpu'))
+                    emb_tensor: torch.Tensor = cast(torch.Tensor, torch.load(tensor_path, map_location='cpu'))
                     dx, _dy = emb_tensor.shape
-                    emb_part = cast(np.typing.NDArray[np.float32], emb_tensor.numpy(force=True))
+                    emb_part = cast(np.typing.NDArray[np.float32], emb_tensor.numpy(force=True)) # pyright:ignore[reportUnknownMemberType]
                     emb_array[cx:cx+dx, :] = emb_part
                     cx += dx
-                    hashes += [(hash, ind) for ind in range(cast(int, emb_part.shape[0]))]
+                    hashes += [(hash, ind) for ind in range(emb_part.shape[0])]
                 self.log.info(f"Tensor size: {x}x{y}, loaded")
         return emb_array, hashes
 
@@ -795,8 +795,9 @@ class VectorStore:
                 state = f"Best result: {search_results[-1]['cosine']:3.3f}: {search_results[-1]['entry']['descriptor']}"
                 progress_callback(ProgressState(issues=0, state=state, percent_completion=cur_cnt/all_cnt*search_vs_hl, vars={}, finished=False))
         search_time = time.time() - start_time
-        key = f"{self.config['embeddings_model_name']}-{str(self.device)}"
-        self.perf_stats.add_perf(key, search_time)
+        # key = f"{self.config['embeddings_model_name']}-{str(self.device)}"
+        tsk = f"Search: {self.config['embeddings_model_name']}"
+        self.perf_stats.add_perf(task=tsk, backend="pytorch", device=str(self.device), timing=search_time, unit="s")
         highlight_start = time.time()
         all_cnt = len(search_results)
         cur_cnt = 0
@@ -825,8 +826,9 @@ class VectorStore:
         
         if len(search_results) > 0:
             highlight_time = (time.time() - highlight_start) / len(search_results)
-            key = f"{self.config['embeddings_model_name']}-{str(self.device)} highlight time per record"
-            self.perf_stats.add_perf(key, highlight_time)
+            # key = f"{self.config['embeddings_model_name']}-{str(self.device)} highlight time per record"
+            tsk = f"Highlight: {self.config['embeddings_model_name']}"
+            self.perf_stats.add_perf(task=tsk, backend="pytorch", device=str(self.device), timing=highlight_time, unit="s")
         if progress_callback is not None:
             state = f"Best result: {search_results[-1]['cosine']:3.3f}: {search_results[-1]['entry']['descriptor']}"
             progress_callback(ProgressState(issues=0, state=state, percent_completion=1.0, vars={}, finished=True))
@@ -838,7 +840,7 @@ class VectorStore:
             return {"error": "UMAP module is not available"}
         
         self.log.info(f"Loaded matrix {matrix.shape}, hash-count: {len(hashes)}")
-        num_available_points = cast(int, matrix.shape[0])
+        num_available_points = matrix.shape[0]
         if max_points is not None:
             matrix = matrix[:max_points, :]
             hashes = hashes[:max_points]

@@ -130,7 +130,7 @@ class TimelineExtractor:
                     self.pt_gen = dt
                 else:
                     self.pt_gen = (self.pt_gen * 4 + dt) / 5.0
-                self.perf_stats.add_perf(f"{self.model_name}_{self.backend}_{self.device}_tl_extract_generate", self.pt_gen)
+                self.perf_stats.add_perf(task="Timeline extract", backend = "pytorch", device=str(self.device), timing=dt, unit="s")
             return cast(str, decoded)
             
         elif self.backend == "mlx":
@@ -156,7 +156,7 @@ class TimelineExtractor:
                     self.mlx_gen = dt
                 else:
                     self.mlx_gen = (self.mlx_gen * 4 + dt) / 5.0
-                self.perf_stats.add_perf(f"{self.model_name}_{self.backend}_{self.device}_tl_extract_generate", self.mlx_gen)
+                self.perf_stats.add_perf(task="Timeline extract", backend = "mlx", device=str(self.device), timing=dt, unit="s")
             return output
             
         elif self.backend == "llama.cpp":
@@ -174,7 +174,7 @@ class TimelineExtractor:
                     self.llama_cpp_gen = dt
                 else:
                     self.llama_cpp_gen = (self.llama_cpp_gen * 4 + dt) / 5.0
-                self.perf_stats.add_perf(f"{self.model_name}_{self.backend}_{self.device}_tl_extract_generate", self.llama_cpp_gen)
+                self.perf_stats.add_perf(task="Timeline extract", backend = "llama.cpp", device=str(self.device), timing=dt, unit="s")
             return cast(str, output['choices'][0]['message']['content'])        
         return ""
 

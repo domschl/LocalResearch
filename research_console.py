@@ -19,6 +19,7 @@ from text_format import TextParse
 from search_tools import SearchTools
 from audiobook_handler import AudiobookGenerator
 from timeline_handler import TimelineExtractor, TimelineEvent
+from perf_stats import PerfRec
 
 def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
     history_file = os.path.join(os.path.expanduser("~/.config/local_research"), "repl_history")
@@ -195,12 +196,13 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
 
                 if 'perf' in arguments or len(arguments) == 0:
                     print()
-                    header = ["Metric", "Duration (s)"]
+                    header = ["Host", "Task", "Backend", "Device", "Duration (s)", "Unit"]
+                    alignment = [True, True, True, True, False, True]
                     p_rows: list[list[str]] = []
-                    perf = ds.perf_stats.get_perf()
-                    for key in perf.keys():
-                        p_rows.append([key, f"{perf[key]:2.3f}"])
-                    _ = tf.print_table(header, p_rows, [True, False])
+                    perfs = ds.perf_stats.get_perf()
+                    for perf in perfs:
+                        p_rows.append([perf["host"], perf["task"], perf["backend"], perf["device"], f"{perf["timing"]:0.4f}", perf["unit"]])
+                    _ = tf.print_table(header, p_rows, alignment)
                     if len(p_rows)==0:
                         print("No performance data generated (yet)")
                     print()
