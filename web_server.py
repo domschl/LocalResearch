@@ -1,6 +1,6 @@
 import logging
 import os
-# os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["TOKENIZERS_PARALLELISM"] = "true"
 import json
 import asyncio
 import threading
