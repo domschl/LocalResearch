@@ -2,7 +2,7 @@ import logging
 import readline
 import os
 import sys
-# os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["TOKENIZERS_PARALLELISM"] = "true"
 import argparse
 import atexit
 from typing import cast
