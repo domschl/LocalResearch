@@ -8,7 +8,10 @@ import subprocess
 
 # import pymupdf
 pymupdf = None
-import pymupdf.layout  # pyright: ignore[reportUnusedImport, reportMissingTypeStubs]
+try:
+    import pymupdf.layout  # pyright: ignore[reportMissingImports, reportUnusedImport, reportMissingTypeStubs]
+except ImportError:
+    pass
 import pymupdf4llm  # pyright: ignore[reportMissingTypeStubs]  # XXX currently locked to 0.19, otherwise export returns empty docs, requires investigation!
 
 from typing import TypedDict, cast, Callable
