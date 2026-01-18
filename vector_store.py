@@ -602,7 +602,19 @@ class VectorStore:
                     os.remove(temp_path)
                     self.log.warning(f"Removed leftover temp tensor file in finally: {temp_path}")
                 except OSError as rm_e: self.log.error(f"Failed to remove leftover temp tensor file {temp_path} in finally: {rm_e}")
-        
+
+    def get_batch_size(self, index_mode:bool = True):
+        if str(self.device) != 'cuda':
+            if index_mode:
+                return self.config['chunk_batch_size'] * self.config['batch_base_multiplier']
+            else:
+                return self.config['chunk_batch_size'] * self.model['batch_multiplier'] * 256 
+        else:
+            if index_mode:
+                return self.config['chunk_batch_size'] * self.config['batch_base_multiplier'] * 4
+            else:
+                return self.config['chunk_batch_size'] * self.model['batch_multiplier'] * 256 
+
     def index(self, text_library:dict[str,TextLibraryEntry], progress_callback:Callable[[ProgressState], None ]|None=None, abort_check_callback:Callable[[], bool]|None=None) -> list[str]:
         errors:list[str] = []
         self.load_model()
@@ -635,9 +647,9 @@ class VectorStore:
             if os.path.exists(filename):
                 continue
             # self.save_embeddings_tensor(text_library[hash].text, filename)
-            batch_size = self.config['batch_base_multiplier'] * self.model['batch_multiplier']
+            batch_size = self.get_batch_size(index_mode=True)
             chunks: list[str] = VectorStore.get_chunks(text_library[hash]['text'], self.config['chunk_size'], self.config['chunk_overlap'])
-            chunk_batch_size = self.config['chunk_batch_size'] * self.model['batch_multiplier']
+            chunk_batch_size = self.get_batch_size(index_mode=True)
             embeddings_tensor: torch.Tensor | None = None
             for ind in range(0, len(chunks), chunk_batch_size):
                 perc:float = current_chunks / new_chunks
@@ -713,7 +725,7 @@ class VectorStore:
             self.log.error("No active model")
 
             return []
-        batch_size = self.config['batch_base_multiplier'] * self.model['batch_multiplier']
+        batch_size = self.get_batch_size(index_mode=False)
         text_len = len(text)
         for i in range(0, text_len, context_steps):
             i0 = max(0, i - context_length // 2)
