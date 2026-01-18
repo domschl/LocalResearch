@@ -205,7 +205,8 @@ class DocumentStore:
                 self.cb_tools[source_name] = CalibreTools(config['document_sources'][source_name]['path'])
             else:
                 self.log.warning(f"Unexpected type for document source {source_name}")
-        for sync_target_name in config['sync_targets']:
+        sync_target_names = list(config['sync_targets'].keys())
+        for sync_target_name in sync_target_names:
             sync_target = config['sync_targets'][sync_target_name]
             valid = True
             for type in sync_target['types']:
@@ -214,7 +215,7 @@ class DocumentStore:
                     valid = False
             if os.path.exists(os.path.expanduser(sync_target['path'])) is False:
                 valid = False
-                self.log.error("Sync target {sync_target_name} destination {sync_target['path']} doesn not exist, ignoring this")
+                self.log.error(f"Sync target {sync_target_name} destination {sync_target['path']} doesn not exist, ignoring this")
             if valid is False:
                 del config['sync_targets'][sync_target_name]
             else:
