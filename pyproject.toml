@@ -5,17 +5,18 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"  # umap bottle-neck
 dependencies = [
-    "einops>=0.8.1",
+    "einops",
     "huggingface-hub[cli]>=0.34.4",
     "indralib>=0.4.3",
     "pillow>=12.0.0",
-#    "pymupdf-layout",
+    "pymupdf-layout",
     "pymupdf4llm>=0.0.27",
     "scikit-learn>=1.7.1",
     "sentence-transformers>=5.1.0",
-    "umap-learn>=0.5.9.post2",
+    "umap-learn>=0.5.11",
     "aiohttp>=3.11.0",
     "accelerate>=1.12.0",
     "opencv-python>=4.12.0.88",
+    "llvmlite>=0.46.0",
 ]
 
