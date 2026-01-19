@@ -501,10 +501,10 @@ async def websocket_handler(request:web.Request):
     return ws
 
 async def index_handler(_request:web.Request):
-    return web.FileResponse('./web_client/index.html')
+    return web.FileResponse('./web_research_server/index.html')
 
 async def client_js_handler(_request:web.Request):
-    return web.FileResponse('./web_client/client.js')
+    return web.FileResponse('./web_research_server/client.js')
 
 # --- App Lifecycle ---
 async def on_startup(app:web.Application):
@@ -550,7 +550,7 @@ def create_app():
         web.get('/', index_handler),
         web.get('/client.js', client_js_handler),
         web.get('/ws', websocket_handler),
-        web.static('/third_party', './web_client/third_party'),
+        web.static('/third_party', './web_research_server/third_party'),
     ])
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)

@@ -474,7 +474,7 @@ class DocumentStore:
         if descriptor in self.metadata_library:
             return self.metadata_library[descriptor]
         
-        # Handle Calibre (directory-based metadata)
+        # Handle (directory-based metadata)
         source_name, _ = self.get_source_name_and_path_from_descriptor(descriptor)
         if source_name:
             source_type = self.get_source_type_from_name(source_name)
