@@ -162,7 +162,7 @@ class DocumentStore:
                     'Calibre': DocumentSource({
                         'type': 'calibre',
                         'path': '~/ReferenceLibrary/Calibre Library',
-                        'file_types': ['txt', 'pdf']
+                        'file_types': ['md', 'txt', 'pdf']
                     }),
                     'Notes': DocumentSource({
                         'type': 'md_notes',
