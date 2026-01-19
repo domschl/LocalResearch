@@ -185,7 +185,7 @@ class DocumentStore:
                     },
                 'publish_path': '~/LocalResearch',
                 'vars': {
-                    'search_results': ("3", "int"),
+                    'search_results': ("8", "int"),
                     'highlight': ("true", "bool"),
                     'highlight_cutoff': ("0.3", "float"),
                     'highlight_dampening': ("1.4", "float"),
