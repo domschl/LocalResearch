@@ -188,9 +188,9 @@ class DocumentStore:
                     'search_results': ("3", "int"),
                     'highlight': ("true", "bool"),
                     'highlight_cutoff': ("0.3", "float"),
-                    'highlight_dampening': ("1.2", "float"),
-                    'context_length': ("16", "int"),
-                    'context_steps': ("4", "int"),
+                    'highlight_dampening': ("1.4", "float"),
+                    'context_length': ("32", "int"),
+                    'context_steps': ("16", "int"),
                     }
                 })
             self.save_config(config)
