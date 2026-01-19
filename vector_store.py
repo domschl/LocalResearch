@@ -725,7 +725,7 @@ class VectorStore:
             self.log.error("No active model")
 
             return []
-        batch_size = self.get_batch_size(index_mode=False)
+        # batch_size = self.get_batch_size(index_mode=False)
         text_len = len(text)
         for i in range(0, text_len, context_steps):
             i0 = max(0, i - context_length // 2)
@@ -739,6 +739,13 @@ class VectorStore:
                 clr.append(snippet)
         if not clr: 
             clr = [text]
+
+        batch_size = self.get_batch_size(index_mode=False)
+        min_batch_size = len(clr)
+        modder = 64
+        while batch_size < min_batch_size:
+            batch_size = batch_size - batch_size % modder + modder
+            # batch_size *= 2
 
         if self.engine is None:
             raise ValueError
@@ -813,6 +820,8 @@ class VectorStore:
         highlight_start = time.time()
         all_cnt = len(search_results)
         cur_cnt = 0
+        hl_delta_time = "calc."
+        hl_t0 = time.time()
         for index, result in enumerate(search_results):
             if abort_check_callback is not None:
                 if abort_check_callback() is True:
@@ -824,7 +833,10 @@ class VectorStore:
 
             if highlight is True:
                 if progress_callback is not None:
-                    state = f"Highlighting: {search_results[index]['cosine']:3.3f}: {search_results[index]['entry']['descriptor']}"
+                    hl_dt = time.time() - hl_t0
+                    hl_t0 = time.time()
+                    hl_delta_time = f"{hl_dt:.3f}s"
+                    state = f"Highlighting: {search_results[index]['cosine']:3.3f} [{hl_delta_time}]: {search_results[index]['entry']['descriptor']}"
                     progress_callback(ProgressState(issues=0, state=state, percent_completion=cur_cnt/all_cnt*(1.0-search_vs_hl)+search_vs_hl, vars={}, finished=False))
                 significance: list[float] = [0.0] * len(result_text)
                 stepped_significance: list[float] = self.get_significance(result_text, search_tensor, context_length, context_steps, highlight_cutoff)
@@ -838,7 +850,6 @@ class VectorStore:
         
         if len(search_results) > 0:
             highlight_time = (time.time() - highlight_start) / len(search_results)
-            # key = f"{self.config['embeddings_model_name']}-{str(self.device)} highlight time per record"
             tsk = f"Highlight: {self.config['embeddings_model_name']}"
             self.perf_stats.add_perf(task=tsk, backend="pytorch", device=str(self.device), timing=highlight_time, unit="s")
         if progress_callback is not None:
