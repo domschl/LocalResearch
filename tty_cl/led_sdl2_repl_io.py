@@ -8,7 +8,7 @@ import sdl2.ext # pyright: ignore[reportMissingTypeStubs]
 import sdl2.sdlttf # pyright: ignore[reportMissingTypeStubs]
 import ctypes
 
-from .led_repl_io import ReplIO, InputEvent
+from led_repl_io import ReplIO, InputEvent
 
 class Sdl2ReplIO(ReplIO):
     def __init__(self, que:queue.Queue[InputEvent]):

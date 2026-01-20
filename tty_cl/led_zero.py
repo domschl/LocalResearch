@@ -2,8 +2,8 @@ import logging
 import queue
 from dataclasses import dataclass
 
-from .led_repl_io import ReplIO, InputEvent
-from .led_text_repl_io import TextReplIO
+from led_repl_io import ReplIO, InputEvent
+from led_text_repl_io import TextReplIO
 try:
     from .led_sdl2_repl_io import Sdl2ReplIO
     sdl_available:bool = True

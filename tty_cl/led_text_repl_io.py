@@ -7,7 +7,7 @@ import re
 import termios
 from typing import override
 
-from .led_repl_io import ReplIO, InputEvent
+from led_repl_io import ReplIO, InputEvent
 
 class TextReplIO(ReplIO):
     def __init__(self, que:queue.Queue[InputEvent]):
