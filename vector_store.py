@@ -37,9 +37,10 @@ class VectorConfig(TypedDict):
     chunk_overlap: int
     chunk_batch_size: int
     oom_recoveries: int
-    umap_n_neighbors: int
+    umap_min_n_neighbors: int
     umap_min_dist: float
     umap_metric: str
+    umap_low_memory: bool
 
 
 class ModelCheck(TypedDict):
@@ -63,7 +64,7 @@ class EmbeddingModel(TypedDict):
 
 class VectorStore:
     def __init__(self, storage_path:str, config_path:str, perf_stats:PerfStats):
-        self.current_version: int = 6
+        self.current_version: int = 7
         self.log: logging.Logger = logging.getLogger("VectorStore")
         self.storage_path:str = storage_path
         self.config_path:str = config_path
@@ -197,9 +198,10 @@ class VectorStore:
                 'chunk_overlap': 1024,
                 'chunk_batch_size': 1,
                 'oom_recoveries': 2,
-                'umap_n_neighbors': 15,
+                'umap_min_n_neighbors': 15,
                 'umap_min_dist': 0.1,
                 'umap_metric': 'cosine',
+                'umap_low_memory': True,
             })
             self.save_config(config)
             self.log.warning(f"Default configuration created at {self.config_file}, please review!")
@@ -874,11 +876,15 @@ class VectorStore:
         #     low_mem = False
         #     self.log.info("High memory usage ok")
         # else:
-        low_mem = True
-        n_neighbors_val = 5
+        low_mem = self.config['umap_low_memory']
+        n_neighbors_val = self.config['umap_min_n_neighbors']
+        if matrix.shape[1] >= 1024:
+            n_neighbors_val = n_neighbors_val * 3
+        elif matrix.shape[1] >= 768:
+            n_neighbors_val = n_neighbors_val * 2
+
         reducer = umap.UMAP(n_components=3, n_neighbors=n_neighbors_val, 
-                                min_dist=0.1, metric='cosine', low_memory=low_mem)
-                                # min_dist=0.1, random_state=42, metric='cosine')
+                                min_dist=self.config['umap_min_dist'], metric=self.config['umap_metric'], low_memory=low_mem)
         try:
             self.log.info("Starting UMAP reducer")
             reduced_embeddings_np = cast(np.typing.NDArray[np.float32], reducer.fit_transform(matrix))  # pyright:ignore[reportUnknownMemberType]
