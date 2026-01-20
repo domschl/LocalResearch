@@ -98,6 +98,7 @@ class Repl():
             return
         pad = self.pads[pad_index]
 
+        self.repl.cursor_hide()
         self.repl.canvas_render_start()
 
         self.repl.color_set(self.schema['fg'], self.schema['bg'])
@@ -124,6 +125,7 @@ class Repl():
                 self.pad_print_at(pad_index, status_msg, i, 0, border=True)
         if set_cursor is True:
             self.pad_print_at(pad_index, "", pad.cur_y, pad.cur_x)
+        self.repl.cursor_show()
         self.repl.canvas_render_show()
 
     def pad_move(self, pad_id:int, dx:int | None = None, dy:int | None = None, x:int | None = None, y: int | None = None) -> bool:
