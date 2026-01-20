@@ -195,7 +195,7 @@ class VectorStore:
                 'batch_base_multiplier': 1,
                 'chunk_size': 3072,
                 'chunk_overlap': 1024,
-                'chunk_batch_size': 2,
+                'chunk_batch_size': 1,
                 'oom_recoveries': 2,
                 'umap_n_neighbors': 15,
                 'umap_min_dist': 0.1,
@@ -604,16 +604,17 @@ class VectorStore:
                 except OSError as rm_e: self.log.error(f"Failed to remove leftover temp tensor file {temp_path} in finally: {rm_e}")
 
     def get_batch_size(self, index_mode:bool = True):
-        if str(self.device) != 'cuda':
+        base_multiplier = self.config['chunk_batch_size'] * self.config['batch_base_multiplier'] * self.model['batch_multiplier']
+        if str(self.device) != 'cuda':  
             if index_mode:
-                return self.config['chunk_batch_size'] * self.config['batch_base_multiplier']
+                return base_multiplier
             else:
-                return self.config['chunk_batch_size'] * self.model['batch_multiplier'] * 256 
+                return base_multiplier * 256 
         else:
             if index_mode:
-                return self.config['chunk_batch_size'] * self.config['batch_base_multiplier'] * 4
+                return base_multiplier * 4
             else:
-                return self.config['chunk_batch_size'] * self.model['batch_multiplier'] * 256 
+                return base_multiplier * 256 
 
     def index(self, text_library:dict[str,TextLibraryEntry], progress_callback:Callable[[ProgressState], None ]|None=None, abort_check_callback:Callable[[], bool]|None=None) -> list[str]:
         errors:list[str] = []
