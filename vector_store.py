@@ -24,7 +24,8 @@ except ImportError:
     pass
 
 # INTEL XPU incantation:
-# uv pip install -U --pre torch --index-url https://download.pytorch.org/whl/nightly/xpu
+# 2.10 and newer release: uv pip install torch --upgrade --index-url https://download.pytorch.org/whl/xpu
+# nightly: uv pip install -U --pre torch --index-url https://download.pytorch.org/whl/nightly/xpu
 
 
 class VectorConfig(TypedDict):
