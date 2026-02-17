@@ -67,6 +67,8 @@ class VectorStore:
     def __init__(self, storage_path:str, config_path:str, perf_stats:PerfStats):
         self.current_version: int = 7
         self.log: logging.Logger = logging.getLogger("VectorStore")
+        # Disable new log spam:
+        logging.getLogger("httpx").setLevel(logging.ERROR)
         self.storage_path:str = storage_path
         self.config_path:str = config_path
         if os.path.isdir(self.config_path) is False:
@@ -462,7 +464,7 @@ class VectorStore:
                 for filename in file_list:
                     hash = os.path.splitext(filename)[0]
                     tensor_path = os.path.join(indices_path, filename)
-                    emb_tensor: torch.Tensor = cast(torch.Tensor, torch.load(tensor_path, map_location='cpu'))
+                    emb_tensor: torch.Tensor = cast(torch.Tensor, torch.load(tensor_path, map_location='cpu').float())
                     dx, _dy = emb_tensor.shape
                     emb_part = cast(np.typing.NDArray[np.float32], emb_tensor.numpy(force=True)) # pyright:ignore[reportUnknownMemberType]
                     emb_array[cx:cx+dx, :] = emb_part
@@ -677,7 +679,7 @@ class VectorStore:
                     last_status = time.time()
                 sub_chunks = chunks[ind:ind+chunk_batch_size]
                 try:
-                    embeddings_sub_tensor = cast(torch.Tensor, self.engine.encode_document(sub_chunks, device=str(self.device), convert_to_tensor=True, show_progress_bar=False, batch_size=batch_size, normalize_embeddings=True))  # pyright:ignore[reportUnknownMemberType]
+                    embeddings_sub_tensor = cast(torch.Tensor, self.engine.encode_document(sub_chunks, device=str(self.device), convert_to_tensor=True, show_progress_bar=False, batch_size=batch_size, normalize_embeddings=True)).float()  # pyright:ignore[reportUnknownMemberType]
                 except torch.OutOfMemoryError as e:
                     self.log.warning(f"Out of Memory at {name}[{ind}]")
                     errors.append(f"Out-of-memory trying to index: {name} with {self.model['model_name']}")
@@ -753,7 +755,7 @@ class VectorStore:
 
         if self.engine is None:
             raise ValueError
-        context_tensor: torch.Tensor = cast(torch.Tensor, self.engine.encode_document(clr, device=str(self.device), convert_to_tensor=True, show_progress_bar=False, batch_size=batch_size, normalize_embeddings=True))  # pyright:ignore[reportUnknownMemberType]
+        context_tensor: torch.Tensor = cast(torch.Tensor, self.engine.encode_document(clr, device=str(self.device), convert_to_tensor=True, show_progress_bar=False, batch_size=batch_size, normalize_embeddings=True)).float()  # pyright:ignore[reportUnknownMemberType]
         cosines: list[float] = cast(list[float], self.engine.similarity(context_tensor, search_tensor).reshape((-1,)).tolist())  # pyright:ignore[reportUnknownMemberType]
 
         min_cos = 1.0
@@ -782,7 +784,7 @@ class VectorStore:
             return []
         search_results: list[SearchResultEntry] = []
         device = torch.device(self.resolve_device())
-        search_tensor = cast(torch.Tensor, self.engine.encode_query(search_text, device=str(self.device), convert_to_tensor=True, show_progress_bar=False, normalize_embeddings=True))  # pyright:ignore[reportUnknownMemberType]
+        search_tensor = cast(torch.Tensor, self.engine.encode_query(search_text, device=str(self.device), convert_to_tensor=True, show_progress_bar=False, normalize_embeddings=True)).float()  # pyright:ignore[reportUnknownMemberType]
         path = self.model_embedding_path(self.model['model_name'])
         tensor_file_list = get_files_of_extensions(path, ['pt'])
         cur_cnt = 0
@@ -796,7 +798,7 @@ class VectorStore:
                     break
             tensor_path = os.path.join(path, tensor_file)
             hash = os.path.splitext(tensor_file)[0]
-            tensor:torch.Tensor = cast(torch.Tensor, torch.load(tensor_path, map_location=device))
+            tensor:torch.Tensor = cast(torch.Tensor, torch.load(tensor_path, map_location=device)).float()
             # Cosines = torch.matmul(search_tensor, tensor.T).T
             cosines = self.engine.similarity(tensor, search_tensor)
             max_ind:int = int(torch.argmax(cosines).item())
