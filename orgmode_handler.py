@@ -1,5 +1,6 @@
 import logging
 import os
+import json
 from typing import Any, cast
 
 from research_defs import MetadataEntry, ResearchMetadata
@@ -13,7 +14,7 @@ class OrgmodeTools:
         self.rt:ResearchTools = ResearchTools()
         self.rm:ResearchMetadata = ResearchMetadata()
 
-    def parse_org_prop_value(self, value:str) -> str|list[str]:
+    def parse_org_prop_value(self, value:str) -> Any:
         vals:list[str] = []
         in_str:bool = False
         in_time:bool = False
@@ -69,15 +70,27 @@ class OrgmodeTools:
             self.log.error(f"Unterminated timestamp in [{value}]")
         if len(cur) > 1:
             vals.append(cur)
-        if len(vals) == 0:
+            
+        parsed_vals: list[Any] = []
+        for v in vals:
+            if isinstance(v, str) and ((v.startswith('{') and v.endswith('}')) or (v.startswith('[') and v.endswith(']'))):
+                try:
+                    parsed_vals.append(json.loads(v))
+                except Exception:
+                    parsed_vals.append(v)
+            else:
+                parsed_vals.append(v)
+                
+        if len(parsed_vals) == 0:
             return ""
-        elif len(vals) == 1:
-            return vals[0]
+        elif len(parsed_vals) == 1:
+            return parsed_vals[0]
         else:
-            return vals            
-                    
+            return parsed_vals
+            
     def parse_org_properties(self, frontmatter_lines:list[str]) -> dict[str, Any]:  # pyright:ignore[reportExplicitAny]
         metadata:dict[str, Any] = {}  # pyright:ignore[reportExplicitAny]
+        timedate_fields = ['pubdate', 'publication_date', 'creation', 'creation_date']
         for line in frontmatter_lines:
             line = line.strip()
             if len(line) < 1:
@@ -89,7 +102,10 @@ class OrgmodeTools:
                 continue
             key_end += 1
             prop_name = line[1:key_end]
-            value_raw = line[key_end:]
+            value_raw = line[key_end+1:]
+            if prop_name in timedate_fields:
+                if value_raw.startswith('>') and value_raw.endswith('<'):
+                    value_raw = value_raw[1:-1]
             metadata[prop_name] = self.parse_org_prop_value(value_raw)
         return metadata
     
@@ -100,18 +116,16 @@ class OrgmodeTools:
         content_lines: list[str] = []
         prefix_lines: list[str] = []
         content: str = ""
-        start = True
         for line in lines:
             if state == 0:
-                if line.strip() == ":PROPERTIES:" and start is True:
+                if line.strip() == ":PROPERTIES:":
                     if len(content_lines) > 0:
                         for line in content_lines:
                             prefix_lines.append(line)
                         content_lines = []
                     state = 1
                 else:
-                    content_lines.append(line)
-                start = False
+                    content_lines.append(line)                
             elif state == 1:
                 if line.strip() == ":END:":
                     state = 2
@@ -122,11 +136,14 @@ class OrgmodeTools:
                     if line == "":
                         continue
                 content_lines.append(line)
-        content = "\n".join(content_lines) + "\n"
+        content = "\n".join(content_lines)
         prefix = "\n".join(prefix_lines)
         if len(prefix) > 0:
             prefix += '\n'
         metadata_raw: dict[str, Any] = self.parse_org_properties(frontmatter_lines)  # pyright:ignore[reportExplicitAny]
+
+        print(f"metadata_raw: {metadata_raw}")
+
         metadata, changed, mandatory_changed = self.rm.normalize_metadata(self.orgmode_folder, filepath, hash, descriptor, metadata_raw)
         return metadata, prefix, content, changed, mandatory_changed
         
@@ -140,12 +157,29 @@ class OrgmodeTools:
             line: str = f":{props}:"
             val: str|list[str] = metadata[props]  # pyright:ignore[reportUnknownVariableType]
             if isinstance(val, list) is True:
+                if len(val) == 0:
+                    continue
                 for vali in val:  # pyright:ignore[reportUnknownVariableType]
-                    if ' ' in vali:
-                        line += ' "' + cast(str, vali) + '"'
+                    if isinstance(vali, str) is True:
+                        if ' ' in vali:
+                            line += ' "' + cast(str, vali) + '"'
+                        else:
+                            try:
+                                line += ' ' + cast(str, vali)
+                            except Exception as e:
+                                self.log.error(f"Error assembling orgmode for {vali}: {e}")
                     else:
-                        line += ' ' + cast(str, vali)
+                        try:
+                            if hasattr(vali, '__len__') and len(vali) == 0:
+                                continue
+                        except Exception:
+                            pass
+                        json_vali = json.dumps(vali)
+                        escaped_json = json_vali.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
+                        line += f' "{escaped_json}"'
             else:
+                if val == "":
+                    continue
                 if props in timedate_fields:
                     line += f">{cast(str, val)}<"
                 else:
@@ -154,10 +188,11 @@ class OrgmodeTools:
                     else:
                         line += ' ' + cast(str, val)            
             meta_header.append(line)
-        meta_header.append(":END")
-        org_doc:str = prefix + '\n'.join(meta_header) + content
+        meta_header.append(":END:")
+        org_doc:str = prefix + '\n'.join(meta_header) + "\n" + content
         return org_doc
 
     def assemble_orgmode_ext(self, metadata:MetadataEntry, prefix:str, content: str) -> str:
         # XXX expand possible optional entries in MetadataEntry (not yet defined)
         return self.assemble_orgmode(metadata, prefix, content)
+

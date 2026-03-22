@@ -642,6 +642,15 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                     vs = VectorStore(ds.storage_path, ds.config_path, ds.perf_stats)
                 else:
                     log.error("Import failed")
+            elif command == 'export':
+                dir = key_vals.get('dir', None)
+                if dir is None:
+                    log.error("Export directory not specified, use 'export dir=<path>'")
+                    continue
+                if ds.export_local(dir) is True:
+                    log.info("Export successful")
+                else:
+                    log.error("Export failed")
             elif command == 'force_load_docs':
                 ds.load_document_data()
             elif command == 'help':

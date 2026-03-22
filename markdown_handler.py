@@ -6,6 +6,7 @@ from typing import Any
 from research_defs import MetadataEntry, ResearchMetadata
 from research_tools import ResearchTools, DocumentTable
 
+from orgmode_handler import OrgmodeTools
 
 class MarkdownTools:
     def __init__(self, notes_folder:str):
@@ -53,7 +54,16 @@ class MarkdownTools:
     def assemble_markdown(self, metadata: dict[str, Any]|MetadataEntry, content: str) -> str:  # pyright: ignore[reportExplicitAny]
         if metadata  == {}:
             return content
-        header = yaml.dump(metadata, default_flow_style=False, indent=2)
+            
+        filtered_metadata: dict[str, Any] = {}
+        for k, v in metadata.items():
+            if isinstance(v, list) and len(v) == 0:
+                continue
+            if isinstance(v, str) and v == "":
+                continue
+            filtered_metadata[k] = v
+            
+        header = yaml.dump(filtered_metadata, default_flow_style=False, indent=2)
         return f"---\n{header}---\n{content}"
 
     def assemble_markdown_ext(self, metadata:MetadataEntry, content: str) -> str:
@@ -236,3 +246,342 @@ class MarkdownTools:
                         metadata[key] = val
                 continue
         return tables
+
+    def convert_markdown_to_org(self, md_text:str) -> str|None:
+        import re
+        lines = md_text.split('\n')
+        out_lines: list[str] = []
+        in_code_block = False
+        in_math_block = False
+        in_quote_block = False
+        
+        # convert the following markdown syntactic elements:
+        # Headers [#]+ (underlining headers not supported!), lists and enumerations, quoting with '>', tables, codeblocks, bold and italic, links, images, code blocks, 
+        # and latex math blocks with '$' and '$$' delimiters. 
+        for line in lines:
+            # code blocks
+            if line.strip().startswith("```"):
+                if in_code_block:
+                    out_lines.append("#+END_SRC")
+                    in_code_block = False
+                else:
+                    lang = line.strip()[3:].strip()
+                    if lang:
+                        out_lines.append(f"#+BEGIN_SRC {lang}")
+                    else:
+                        out_lines.append("#+BEGIN_SRC")
+                    in_code_block = True
+                continue
+                
+            if in_code_block:
+                out_lines.append(line)
+                continue
+                
+            # block math $$
+            if line.strip() == "$$":
+                if in_math_block:
+                    out_lines.append("\\]")
+                    in_math_block = False
+                else:
+                    out_lines.append("\\[")
+                    in_math_block = True
+                continue
+                
+            if in_math_block:
+                out_lines.append(line)
+                continue
+                
+            # blockquotes
+            if line.lstrip().startswith(">"):
+                if not in_quote_block:
+                    out_lines.append("#+BEGIN_QUOTE")
+                    in_quote_block = True
+                line = line.lstrip()[1:].lstrip()
+            else:
+                if in_quote_block:
+                    out_lines.append("#+END_QUOTE")
+                    in_quote_block = False
+                    
+            # headers
+            header_match = re.match(r'^(#+)\s+(.*)', line)
+            if header_match:
+                level = len(header_match.group(1))
+                line = '*' * level + ' ' + header_match.group(2)
+                
+            # lists
+            list_match = re.match(r'^(\s*)\* +(.*)', line)
+            if list_match:
+                line = f"{list_match.group(1)}- {list_match.group(2)}"
+                
+            # table separator
+            if line.lstrip().startswith('|') and re.match(r'^[\s\|:\-]+$', line) and '-' in line:
+                line = line.replace(':', '-')
+                line = line.replace('|', '+')
+                if len(line.strip()) > 1:
+                    line = '|' + line.strip()[1:-1] + '|'
+                    
+            # images: ![text](url) -> [[url]]
+            line = re.sub(r'!\[([^\]]*)\]\(([^)]+)\)', r'[[\2]]', line)
+            
+            # links: [text](url) -> [[url][text]]
+            line = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'[[\2][\1]]', line)
+            
+            # bold and italic
+            line = re.sub(r'\*\*(.+?)\*\*', r'*\1*', line)
+            line = re.sub(r'__(.+?)__', r'*\1*', line)
+            line = re.sub(r'(?<![\w\*])\*(?!\s)(.+?)(?<!\s)\*(?![\w\*])', r'/\1/', line)
+            line = re.sub(r'\b_(.+?)_\b', r'/\1/', line)
+            
+            # inline code
+            line = re.sub(r'`([^`]+)`', r'~\1~', line)
+            
+            # inline math
+            line = re.sub(r'(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)', r'\(\1\)', line)
+            
+            # block math inline form $$math$$
+            line = re.sub(r'\$\$(.+?)\$\$', r'\[\1\]', line)
+
+            out_lines.append(line)
+            
+        if in_quote_block:
+            out_lines.append("#+END_QUOTE")
+            
+        org_text = '\n'.join(out_lines)
+        return org_text
+
+
+    def export_as_orgmode(self, filepath:str, hash:str, descriptor:str, md_text:str, org_directory:str, prefix:str) -> bool:
+        if not os.path.exists(org_directory):
+            self.log.warning(f"Org directory {org_directory} does not exist")
+            return False
+        ot = OrgmodeTools(org_directory)
+        metadata, content, changed, mandatory_changed = self.parse_markdown(filepath, hash, descriptor, md_text)
+        if changed or mandatory_changed:
+            self.log.warning(f"Ignoring export of {filepath} as it has changed or has mandatory fields that are not set")
+            return False
+        
+        # Create the directory structure
+        source_folder = os.path.dirname(filepath)
+        source_filename = os.path.basename(filepath)
+        if source_filename.endswith(".md"):
+            dest_filename = source_filename[:-3] + ".org"
+        else:
+            self.log.warning(f"Filepath {filepath} does not end with .md")
+            return False
+        if self.notes_folder is not None and source_folder.startswith(self.notes_folder):
+            subfolders = source_folder[len(self.notes_folder) + 1 :]
+        else:
+            self.log.warning(f"Filepath {filepath} does not start with notes folder {self.notes_folder}")
+            return False
+        dest_folder = os.path.join(org_directory, subfolders)
+        dest_filepath:str = os.path.join(dest_folder, dest_filename)
+        if os.path.exists(dest_filepath):
+            self.log.warning(f"Filepath {dest_filepath} already exists")
+            return False
+
+        org_text = self.convert_markdown_to_org(content)
+        if org_text is None:
+            self.log.warning(f"Failed to convert markdown to org for {filepath}")
+            return False
+
+        org_doc = ot.assemble_orgmode(metadata, prefix, org_text)
+
+        if not os.path.exists(dest_folder):
+            os.makedirs(dest_folder)
+        with open(dest_filepath, "w") as f:
+            _ = f.write(org_doc)
+        return True
+    
+    def export_as_markdown(self, filepath:str, hash:str, descriptor:str, org_text:str, org_directory:str) -> bool:
+        if self.notes_folder is None:
+            self.log.warning("Notes folder is not defined")
+            return False
+            
+        ot = OrgmodeTools(org_directory)
+        metadata, prefix, content, changed, mandatory_changed = ot.parse_orgmode(filepath, hash, descriptor, org_text)
+        if changed or mandatory_changed:
+            self.log.warning(f"Ignoring export of {filepath} as it has changed or has mandatory fields that are not set")
+            return False
+            
+        source_folder = os.path.dirname(filepath)
+        source_filename = os.path.basename(filepath)
+        if source_filename.endswith(".org"):
+            dest_filename = source_filename[:-4] + ".md"
+        else:
+            self.log.warning(f"Filepath {filepath} does not end with .org")
+            return False
+            
+        if source_folder.startswith(org_directory):
+            subfolders = source_folder[len(org_directory) + 1 :]
+        else:
+            self.log.warning(f"Filepath {filepath} does not start with org directory {org_directory}")
+            return False
+            
+        dest_folder = os.path.join(self.notes_folder, subfolders)
+        dest_filepath:str = os.path.join(dest_folder, dest_filename)
+        if os.path.exists(dest_filepath):
+            self.log.warning(f"Filepath {dest_filepath} already exists")
+            return False
+
+        md_content = self.convert_org_to_markdown(content)
+        if md_content is None:
+            self.log.warning(f"Failed to convert org to markdown for {filepath}")
+            return False
+            
+        full_content = prefix + md_content
+        md_doc = self.assemble_markdown_ext(metadata, full_content)
+
+        if not os.path.exists(dest_folder):
+            os.makedirs(dest_folder)
+        with open(dest_filepath, "w") as f:
+            _ = f.write(md_doc)
+        return True
+
+    def convert_org_to_markdown(self, org_text: str) -> str|None:
+        import re
+        lines = org_text.split('\n')
+        out_lines: list[str] = []
+        in_code_block = False
+        in_quote_block = False
+        
+        for line in lines:
+            # Code blocks
+            if re.match(r'^\s*#\+(BEGIN|begin)_(SRC|src)', line):
+                parts = line.split()
+                lang = parts[1] if len(parts) > 1 else ""
+                out_lines.append(f"```{lang}")
+                in_code_block = True
+                continue
+                
+            if re.match(r'^\s*#\+(END|end)_(SRC|src)', line):
+                out_lines.append("```")
+                in_code_block = False
+                continue
+                
+            if in_code_block:
+                out_lines.append(line)
+                continue
+                
+            # Quotes
+            if re.match(r'^\s*#\+(BEGIN|begin)_(QUOTE|quote)', line):
+                in_quote_block = True
+                continue
+                
+            if re.match(r'^\s*#\+(END|end)_(QUOTE|quote)', line):
+                in_quote_block = False
+                continue
+                
+            if in_quote_block:
+                out_lines.append(f"> {line}")
+                continue
+                
+            # Block math \[ \]
+            if line.strip() == "\\[":
+                out_lines.append("$$")
+                continue
+            if line.strip() == "\\]":
+                out_lines.append("$$")
+                continue
+                
+            # Headers
+            header_match = re.match(r'^(\*+)\s+(.*)', line)
+            if header_match:
+                level = len(header_match.group(1))
+                line = '#' * level + ' ' + header_match.group(2)
+                
+            # Lists
+            list_match = re.match(r'^(\s*)\+ +(.*)', line)
+            if list_match:
+                line = f"{list_match.group(1)}- {list_match.group(2)}"
+                
+            # Table separator
+            if line.lstrip().startswith('|') and re.match(r'^[\s\|:\-\+]+$', line) and ('-' in line or '+' in line):
+                line = line.replace('+', '|')
+                
+            # Links
+            line = re.sub(r'\[\[([^\]]+)\]\[([^\]]+)\]\]', r'[\2](\1)', line)
+            line = re.sub(r'\[\[([^\]]+)\]\]', r'<\1>', line)
+            
+            # Bold
+            line = re.sub(r'(?<![\w\*])\*(?!\s)(.+?)(?<!\s)\*(?![\w\*])', r'**\1**', line)
+            # Italics
+            line = re.sub(r'(?<![\w:\/])\/(?!\s)(.+?)(?<!\s)\/(?![\w\/])', r'*\1*', line)
+            # Inline code
+            line = re.sub(r'(?<!\~)~(?!\s)(.+?)(?<!\s)~(?!\~)', r'`\1`', line)
+            line = re.sub(r'(?<!=)=(?!\s)(.+?)(?<!\s)=(?!=)', r'`\1`', line)
+            # Inline math
+            line = re.sub(r'\\\((.+?)\\\)', r'$\1$', line)
+            
+            out_lines.append(line)
+            
+        md_text = '\n'.join(out_lines)
+        return md_text
+
+    def test_roundtrip(self, filepath: str, descriptor: str) -> bool:
+        import difflib
+        try:
+            with open(filepath, "r") as f:
+                md_text = f.read()
+        except Exception as e:
+            self.log.error(f"Failed to read file {filepath}: {e}")
+            return False
+            
+        metadata, md_content, _, _ = self.parse_markdown(filepath, "test_hash", descriptor, md_text)
+        
+        org_content = self.convert_markdown_to_org(md_content)
+        if org_content is None:
+            self.log.error("Failed to convert markdown to org")
+            return False
+            
+        # Assemble orgmode doc
+        # OrgmodeTools is imported globally in this file, we can instantiate it
+        test_org_dir = os.path.expanduser("~/OrgNotes/Scratch")
+        ot = OrgmodeTools(test_org_dir) # dummy dir
+        org_doc = ot.assemble_orgmode(metadata, "", org_content)
+        
+        print("--- Markdown input --------------------")
+        print(md_text)
+        print("--- Orgmode output --------------------")
+        print(org_doc)
+        
+        # Parse orgmode doc
+        org_metadata, org_prefix, org_parsed_content, _, _ = ot.parse_orgmode(filepath, "test_hash", descriptor, org_doc)
+        
+        unsupported_new_fields = [] # 'normalized_filename', 'representations']
+        for field in unsupported_new_fields:
+            if field in org_metadata:
+                del org_metadata[field]
+        rt_md_content = self.convert_org_to_markdown(org_parsed_content)
+        if rt_md_content is None:
+            self.log.error("Failed to convert org to markdown")
+            return False
+
+        print("--- Metadata ---")
+        print(metadata)
+        print("--- Org Metadata ---")
+        print(org_metadata)
+
+        original_assembled = self.assemble_markdown_ext(metadata, md_content)
+        rt_assembled = self.assemble_markdown_ext(org_metadata, org_prefix + rt_md_content)
+        
+        print("--- Original assembled --------------------")
+        print(original_assembled)
+        print("--- Roundtrip assembled -------------------")
+        print(rt_assembled)
+        print("-------------------------------------------")
+
+        if original_assembled != rt_assembled:
+            self.log.error(f"Roundtrip failed for {filepath}! Differences:")
+            diff = difflib.unified_diff(
+                original_assembled.splitlines(),
+                rt_assembled.splitlines(),
+                fromfile='original.md',
+                tofile='roundtrip.md',
+                lineterm=''
+            )
+            for line in diff:
+                print(line)
+            return False
+            
+        self.log.info(f"Roundtrip successful for {filepath}!")
+        return True

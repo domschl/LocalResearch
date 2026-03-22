@@ -193,9 +193,14 @@ class ResearchMetadata:
 
         doc_uuid = get_meta(meta_dict, 'uuid', str(uuid.uuid4()))
         authors = get_meta_list(meta_dict, 'authors', [])
+
         cd: datetime = self.rt.get_note_creation_date(root_folder, filepath)
         default_creation_date: str = cd.isoformat()
-        creation_date = get_meta(meta_dict, 'creation', default_creation_date)
+        if 'creation' in meta_dict:
+            creation_key = 'creation'
+        else:
+            creation_key = 'creation_date'
+        creation_date = get_meta(meta_dict, creation_key, default_creation_date)
         identifiers = get_meta_list(meta_dict, 'identifiers', [])
         languages = get_meta_list(meta_dict, 'languages', [])
         ind1 = descriptor.find('/')
@@ -206,7 +211,10 @@ class ResearchMetadata:
         else:
             default_context = ""
         context = get_meta(meta_dict, 'context', default_context)
-        publication_date = get_meta(meta_dict, 'pubdate', "")
+        if 'pubdate' in meta_dict:
+            publication_date = get_meta(meta_dict, 'pubdate', "")
+        else:
+            publication_date = get_meta(meta_dict, 'publication_date', "")
         publisher = get_meta(meta_dict, 'publisher', default="")
         series = get_meta(meta_dict, 'series', "")
         tags = get_meta_list(meta_dict, 'tags', [])

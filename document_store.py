@@ -653,6 +653,14 @@ class DocumentStore:
             return True
         return False
 
+    def skip_dir_in_sync(self, root_path:str) -> bool:
+        skip_dirs = ['.caltrash', '.trash', '.git', '.venv', '.env', '.vscode', '.idea', '.DS_Store']
+        path_parts = root_path.split('/')
+        for skip_dir in skip_dirs:
+            if skip_dir in path_parts:
+                return True
+        return False
+
     def get_source_type_from_name(self, source_name:str) -> str|None:
         if source_name not in self.config['document_sources']:
             return None
@@ -676,6 +684,8 @@ class DocumentStore:
             source_file_count[source_name] = 0
             if source['type'] in ['md_notes', 'orgmode']:
                 for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: errors.append(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
+                    if self.skip_dir_in_sync(root) is True:
+                        continue
                     for filename in files:
                         if self.skip_file_in_sync(root, filename, source['file_types']) is True:
                             continue
@@ -737,6 +747,8 @@ class DocumentStore:
                         
             elif source['type'] == 'calibre':
                 for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: errors.append(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
+                    if self.skip_dir_in_sync(root) is True:
+                        continue
                     for filename in files:
                         if self.skip_file_in_sync(root, filename, ['opf']) is True:
                             continue
@@ -874,6 +886,8 @@ class DocumentStore:
             self.log.info(f"Scanning source '{source_name}' at '{source_path}'...")
             file_count = 0
             for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: self.log.warning(f"Cannot access directory {e.filename}: {e.strerror}")): # pyright:ignore[reportAny]
+                if self.skip_dir_in_sync(root) is True:
+                    continue
                 if abort_check_callback is not None and abort_check_callback() is True: 
                     break
                 for filename in files:
@@ -1144,3 +1158,28 @@ class DocumentStore:
         remote, local = self.load_sequence_versions()
         self.log.info(f"Import successful remote version: {remote}, local version: {local}")
         return True
+
+    def export_local(self, dir:str) -> bool:
+        # Search all markdown sources, if they contain 'dir' within their path, to a round-robin test for markdown-org-markdown conversion.
+        errors:list[str] = []
+        for source_name in self.config['document_sources']:
+            source = self.config['document_sources'][source_name]
+            if source['type'] == 'md_notes':
+                source_path = os.path.expanduser(source['path'])
+                mdt = self.md_tools.get(source_name)
+                if mdt is None:
+                    continue
+                for root, _dirs, files in os.walk(source_path, topdown=True, onerror=lambda e: errors.append(f"Cannot access directory {e.filename}: {e.strerror}")):
+                    if self.skip_dir_in_sync(root) is True:
+                        continue
+                    for filename in files:
+                        if self.skip_file_in_sync(root, filename, source['file_types']) is True:
+                            continue
+                        doc_path = os.path.join(root, filename)
+                        if dir in doc_path:
+                            self.log.info(f"Testing roundtrip for {doc_path}")
+                            descriptor = self.get_descriptor_from_path(doc_path)
+                            if not mdt.test_roundtrip(doc_path, descriptor):
+                                self.log.error(f"Roundtrip failed for {doc_path}")
+                                errors.append(doc_path)             
+        return len(errors) == 0
