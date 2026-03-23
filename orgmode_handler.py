@@ -132,9 +132,9 @@ class OrgmodeTools:
                 else:
                     frontmatter_lines.append(line)
             elif state == 2:
-                if len(content_lines) == 0:
-                    if line == "":
-                        continue
+                pass
+#                     if line == "":
+#                         continue
                 content_lines.append(line)
         content = "\n".join(content_lines)
         prefix = "\n".join(prefix_lines)

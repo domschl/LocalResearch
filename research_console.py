@@ -647,10 +647,11 @@ def repl(ds: DocumentStore, vs: VectorStore, log: logging.Logger):
                 if dir is None:
                     log.error("Export directory not specified, use 'export dir=<path>'")
                     continue
-                if ds.export_local(dir) is True:
+                errors = ds.export_local(dir)
+                if errors == 0:
                     log.info("Export successful")
                 else:
-                    log.error("Export failed")
+                    log.error(f"Export failed, {errors} files failed")
             elif command == 'force_load_docs':
                 ds.load_document_data()
             elif command == 'help':

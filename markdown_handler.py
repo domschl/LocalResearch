@@ -320,12 +320,15 @@ class MarkdownTools:
             # links: [text](url) -> [[url][text]]
             line = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'[[\2][\1]]', line)
             
+            # wikilinks: [[target|desc]] -> [[target][desc]]
+            line = re.sub(r'\[\[([^\]|]+)\|([^\]]+)\]\]', r'[[\1][\2]]', line)
+
             # bold and italic
-            line = re.sub(r'\*\*(.+?)\*\*', r'@@BOLD@@\1@@BOLD@@', line)
-            line = re.sub(r'__(.+?)__', r'@@BOLD@@\1@@BOLD@@', line)
-            line = re.sub(r'(?<![\w\*])\*(?!\s)(.+?)(?<!\s)\*(?![\w\*])', r'/\1/', line)
-            line = re.sub(r'\b_(.+?)_\b', r'/\1/', line)
-            line = line.replace('@@BOLD@@', '*')
+            line = re.sub(r'\*\*(.+?)\*\*', r'¶BOLD¶\1¶BOLD¶', line)
+            line = re.sub(r'__(.+?)__', r'¶BOLD¶\1¶BOLD¶', line)
+            line = re.sub(r'(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)', r'¶ITALIC¶\1¶ITALIC¶', line)
+            line = re.sub(r'\b_(.+?)_\b', r'¶ITALIC¶\1¶ITALIC¶', line)
+            line = line.replace('¶BOLD¶', '*').replace('¶ITALIC¶', '/')
             
             # inline code
             line = re.sub(r'`([^`]+)`', r'~\1~', line)
@@ -499,8 +502,18 @@ class MarkdownTools:
             if line.lstrip().startswith('|') and re.match(r'^[\s\|:\-\+]+$', line) and ('-' in line or '+' in line):
                 line = line.replace('+', '|')
                 
-            # Links
-            line = re.sub(r'\[\[([^\]]+)\]\[([^\]]+)\]\]', r'[\2](\1)', line)
+            # Links: [[url][desc]] -> [desc](url)
+            # Applying markup replacements to description if present
+            def repl_org_link(m: re.Match[str]) -> str:
+                url = m.group(1)
+                desc = m.group(2)
+                # Bold
+                desc = re.sub(r'(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)', r'**\1**', desc)
+                # Italics
+                desc = re.sub(r'(?<!\/)\/(?!\s)(.+?)(?<!\s)\/(?!\/)', r'_\1_', desc)
+                return f"[{desc}]({url})"
+                
+            line = re.sub(r'\[\[([^\]]+)\]\[([^\]]+)\]\]', repl_org_link, line)
             
             def repl_single_link(m: re.Match[str]) -> str:
                 target = m.group(1)
@@ -510,9 +523,8 @@ class MarkdownTools:
                 
             line = re.sub(r'\[\[([^\]]+)\]\]', repl_single_link, line)
             
-            # Bold
-            line = re.sub(r'(?<![\w\*])\*(?!\s)(.+?)(?<!\s)\*(?![\w\*])', r'**\1**', line)
-            # Italics
+            # Bold and Italics for remaining text
+            line = re.sub(r'(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)', r'**\1**', line)
             line = re.sub(r'(?<![\w:\/])\/(?!\s)(.+?)(?<!\s)\/(?![\w\/])', r'_\1_', line)
             # Inline code
             line = re.sub(r'(?<![\w\~])~(?!\s)(.+?)(?<!\s)~(?![\w\~])', r'`\1`', line)

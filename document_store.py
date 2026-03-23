@@ -1159,7 +1159,7 @@ class DocumentStore:
         self.log.info(f"Import successful remote version: {remote}, local version: {local}")
         return True
 
-    def export_local(self, dir:str) -> bool:
+    def export_local(self, dir:str) -> int:
         # Search all markdown sources, if they contain 'dir' within their path, to a round-robin test for markdown-org-markdown conversion.
         errors:list[str] = []
         for source_name in self.config['document_sources']:
@@ -1182,4 +1182,5 @@ class DocumentStore:
                             if not mdt.test_roundtrip(doc_path, descriptor):
                                 self.log.error(f"Roundtrip failed for {doc_path}")
                                 errors.append(doc_path)             
-        return len(errors) == 0
+        return len(errors)
+        
