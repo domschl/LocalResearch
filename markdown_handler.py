@@ -1,7 +1,8 @@
 import logging
 import os
+import re
 import yaml
-from typing import Any
+from typing import Any, cast
 
 from research_defs import MetadataEntry, ResearchMetadata
 from research_tools import ResearchTools, DocumentTable
@@ -201,8 +202,6 @@ class MarkdownTools:
                             metadata["context"] = f"{subfolders}"
                             for column in columns:
                                 metadata["context"] += f"_{column}"
-                        # if len(metadata.keys()) > 0:
-                        #     print(f"Table metadata: {metadata}")
                         if note_uuid is None:
                             note_uuid = ""
                         table_entry: DocumentTable = {
@@ -248,16 +247,12 @@ class MarkdownTools:
         return tables
 
     def convert_markdown_to_org(self, md_text:str) -> str|None:
-        import re
         lines = md_text.split('\n')
         out_lines: list[str] = []
         in_code_block = False
         in_math_block = False
         in_quote_block = False
         
-        # convert the following markdown syntactic elements:
-        # Headers [#]+ (underlining headers not supported!), lists and enumerations, quoting with '>', tables, codeblocks, bold and italic, links, images, code blocks, 
-        # and latex math blocks with '$' and '$$' delimiters. 
         for line in lines:
             # code blocks
             if line.strip().startswith("```"):
@@ -313,31 +308,35 @@ class MarkdownTools:
                 line = line.replace('|', '+')
                 if len(line.strip()) > 1:
                     line = '|' + line.strip()[1:-1] + '|'
-                    
-            # images: ![text](url) -> [[url]]
-            line = re.sub(r'!\[([^\]]*)\]\(([^)]+)\)', r'[[\2]]', line)
-            
-            # links: [text](url) -> [[url][text]]
-            line = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'[[\2][\1]]', line)
-            
-            # wikilinks: [[target|desc]] -> [[target][desc]]
-            line = re.sub(r'\[\[([^\]|]+)\|([^\]]+)\]\]', r'[[\1][\2]]', line)
 
-            # bold and italic
-            line = re.sub(r'\*\*(.+?)\*\*', r'¶BOLD¶\1¶BOLD¶', line)
-            line = re.sub(r'__(.+?)__', r'¶BOLD¶\1¶BOLD¶', line)
-            line = re.sub(r'(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)', r'¶ITALIC¶\1¶ITALIC¶', line)
-            line = re.sub(r'\b_(.+?)_\b', r'¶ITALIC¶\1¶ITALIC¶', line)
-            line = line.replace('¶BOLD¶', '*').replace('¶ITALIC¶', '/')
-            
-            # inline code
-            line = re.sub(r'`([^`]+)`', r'~\1~', line)
-            
-            # inline math
-            line = re.sub(r'(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)', r'\(\1\)', line)
-            
-            # block math inline form $$math$$
-            line = re.sub(r'\$\$(.+?)\$\$', r'\[\1\]', line)
+            # link/image/markup transformation
+            new_line = ""
+            pos = 0
+            # Matches images ![desc](url), links [desc](url), wikilinks [[target|desc]] or [[target]], and autolinks <url>
+            # (Note: we also match raw URLs if we want to protect them here too, but normally MD uses <url>)
+            for m in re.finditer(r'!\[([^\]]*)\]\(([^)]+)\)|\[([^\]]+)\]\(([^)]+)\)|\[\[([^\]]+)\]\]|<([^>:\s]+:[^>\s]+)>', line):
+                # segment before link
+                new_line += self._apply_md_markup_to_org(line[pos:m.start()])
+                
+                # the link itself
+                if m.group(1) is not None: # image
+                    new_line += f"[[{m.group(2)}]]"
+                elif m.group(3) is not None: # link
+                    desc = self._apply_md_markup_to_org(m.group(3))
+                    new_line += f"[[{m.group(4)}][{desc}]]"
+                elif m.group(5) is not None: # wikilink
+                    content = m.group(5)
+                    if '|' in content:
+                        target, desc = content.split('|', 1)
+                        desc = self._apply_md_markup_to_org(desc)
+                        new_line += f"[[{target}][{desc}]]"
+                    else:
+                        new_line += f"[[{content}]]"
+                elif m.group(6) is not None: # autolink <url>
+                    new_line += f"[[{m.group(6)}]]"
+                pos = m.end()
+            new_line += self._apply_md_markup_to_org(line[pos:])
+            line = new_line
 
             # headers
             header_match = re.match(r'^(#+)\s+(.*)', line)
@@ -442,7 +441,6 @@ class MarkdownTools:
         return True
 
     def convert_org_to_markdown(self, org_text: str) -> str|None:
-        import re
         lines = org_text.split('\n')
         out_lines: list[str] = []
         in_code_block = False
@@ -501,36 +499,34 @@ class MarkdownTools:
             # Table separator
             if line.lstrip().startswith('|') and re.match(r'^[\s\|:\-\+]+$', line) and ('-' in line or '+' in line):
                 line = line.replace('+', '|')
+
+            # link/markup transformation
+            new_line = ""
+            pos = 0
+            # Matches Org links [[url][desc]], solo links [[target]], and plain URLs (protected)
+            for m in re.finditer(r'\[\[([^\]]+)\]\[([^\]]+)\]\]|\[\[([^\]]+)\]\]|(https?://[^\s\[\]\(\)]+)', line):
+                # segment before link
+                new_line += self._apply_org_markup_to_md(line[pos:m.start()])
                 
-            # Links: [[url][desc]] -> [desc](url)
-            # Applying markup replacements to description if present
-            def repl_org_link(m: re.Match[str]) -> str:
-                url = m.group(1)
-                desc = m.group(2)
-                # Bold
-                desc = re.sub(r'(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)', r'**\1**', desc)
-                # Italics
-                desc = re.sub(r'(?<!\/)\/(?!\s)(.+?)(?<!\s)\/(?!\/)', r'_\1_', desc)
-                return f"[{desc}]({url})"
-                
-            line = re.sub(r'\[\[([^\]]+)\]\[([^\]]+)\]\]', repl_org_link, line)
-            
-            def repl_single_link(m: re.Match[str]) -> str:
-                target = m.group(1)
-                if target.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.tiff')):
-                    return f"![]({target})"
-                return f"[[{target}]]"
-                
-            line = re.sub(r'\[\[([^\]]+)\]\]', repl_single_link, line)
-            
-            # Bold and Italics for remaining text
-            line = re.sub(r'(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)', r'**\1**', line)
-            line = re.sub(r'(?<![\w:\/])\/(?!\s)(.+?)(?<!\s)\/(?![\w\/])', r'_\1_', line)
-            # Inline code
-            line = re.sub(r'(?<![\w\~])~(?!\s)(.+?)(?<!\s)~(?![\w\~])', r'`\1`', line)
-            line = re.sub(r'(?<![\w=])=(?!\s)(.+?)(?<!\s)=(?![\w=])', r'`\1`', line)
-            # Inline math
-            line = re.sub(r'\\\((.+?)\\\)', r'$\1$', line)
+                # the link itself
+                if m.group(1) is not None: # [[url][desc]]
+                    url = m.group(1)
+                    desc = self._apply_org_markup_to_md(m.group(2))
+                    new_line += f"[{desc}]({url})"
+                elif m.group(3) is not None: # [[target]]
+                    target = m.group(3)
+                    if target.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.tiff')):
+                        new_line += f"![]({target})"
+                    elif re.match(r'^[a-z]+://', target.lower()) or target.lower().startswith('mailto:'):
+                        new_line += f"<{target}>"
+                    else:
+                        # Convert wikilink back as-is or alias
+                        new_line += f"[[{target}]]"
+                elif m.group(4) is not None: # plain URL
+                    new_line += m.group(4)
+                pos = m.end()
+            new_line += self._apply_org_markup_to_md(line[pos:])
+            line = new_line
             
             if in_quote_block:
                 if len(line) > 0:
@@ -559,43 +555,20 @@ class MarkdownTools:
             self.log.error("Failed to convert markdown to org")
             return False
             
-        # Assemble orgmode doc
-        # OrgmodeTools is imported globally in this file, we can instantiate it
         test_org_dir = os.path.expanduser("~/OrgNotes/Scratch")
-        ot = OrgmodeTools(test_org_dir) # dummy dir
+        ot = OrgmodeTools(test_org_dir)
         org_doc = ot.assemble_orgmode(metadata, "", org_content)
         
-        # print("--- Markdown input --------------------")
-        # print(md_text)
-        # print("--- Orgmode output --------------------")
-        # print(org_doc)
-        
-        # Parse orgmode doc
         org_metadata, org_prefix, org_parsed_content, _, _ = ot.parse_orgmode(filepath, "test_hash", descriptor, org_doc)
         
-        unsupported_new_fields = [] # 'normalized_filename', 'representations']
-        for field in unsupported_new_fields:
-            if field in org_metadata:
-                del org_metadata[field]
         rt_md_content = self.convert_org_to_markdown(org_parsed_content)
         if rt_md_content is None:
             self.log.error("Failed to convert org to markdown")
             return False
 
-        # print("--- Metadata ---")
-        # print(metadata)
-        # print("--- Org Metadata ---")
-        # print(org_metadata)
-
         original_assembled = self.assemble_markdown_ext(metadata, md_content)
         rt_assembled = self.assemble_markdown_ext(org_metadata, org_prefix + rt_md_content)
         
-        # print("--- Original assembled --------------------")
-        # print(original_assembled)
-        # print("--- Roundtrip assembled -------------------")
-        # print(rt_assembled)
-        # print("-------------------------------------------")
-
         orig_lines = [line.rstrip() for line in original_assembled.splitlines()]
         rt_lines = [line.rstrip() for line in rt_assembled.splitlines()]
 
@@ -614,3 +587,33 @@ class MarkdownTools:
             
         self.log.info(f"Roundtrip successful for {filepath}!")
         return True
+
+    def _apply_md_markup_to_org(self, text: str) -> str:
+        # Bold and Italic
+        text = re.sub(r'\*\*(.+?)\*\*', r'¶BOLD¶\1¶BOLD¶', text)
+        text = re.sub(r'__(.+?)__', r'¶BOLD¶\1¶BOLD¶', text)
+        # Markdown italics with boundaries, but not as strict as Org-to-MD to allow mid-word
+        text = re.sub(r'(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)', r'¶ITALIC¶\1¶ITALIC¶', text)
+        text = re.sub(r'\b_(.+?)_\b', r'¶ITALIC¶\1¶ITALIC¶', text)
+        text = text.replace('¶BOLD¶', '*').replace('¶ITALIC¶', '/')
+        # Code
+        text = re.sub(r'`([^`]+)`', r'~\1~', text)
+        # Math
+        text = re.sub(r'(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)', r'\(\1\)', text)
+        text = re.sub(r'\$\$(.+?)\$\$', r'\[\1\]', text)
+        return text
+
+    def _apply_org_markup_to_md(self, text: str) -> str:
+        # Bold
+        # Org rules: preceded by member of [\s({[] or start of string, followed by non-space
+        # In standard re, use negative lookbehind for non-member
+        text = re.sub(r'(?<![^\s({\[])\*(?!\s)(.+?)(?<!\s)\*(?![^\s)}\].,:;!?])', r'**\1**', text)
+        # Italics
+        # Org rules: same boundaries
+        text = re.sub(r'(?<![^\s({\[])/(?!\s)(.+?)(?<!\s)/(?![^\s)}\].,:;!?])', r'_\1_', text)
+        # Inline code
+        text = re.sub(r'(?<![\w\~])~(?!\s)(.+?)(?<!\s)~(?![\w\~])', r'`\1`', text)
+        text = re.sub(r'(?<![\w=])=(?!\s)(.+?)(?<!\s)=(?![\w=])', r'`\1`', text)
+        # Inline math
+        text = re.sub(r'\\\((.+?)\\\)', r'$\1$', text)
+        return text
