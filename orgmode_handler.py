@@ -142,7 +142,7 @@ class OrgmodeTools:
             prefix += '\n'
         metadata_raw: dict[str, Any] = self.parse_org_properties(frontmatter_lines)  # pyright:ignore[reportExplicitAny]
 
-        print(f"metadata_raw: {metadata_raw}")
+        # print(f"metadata_raw: {metadata_raw}")
 
         metadata, changed, mandatory_changed = self.rm.normalize_metadata(self.orgmode_folder, filepath, hash, descriptor, metadata_raw)
         return metadata, prefix, content, changed, mandatory_changed

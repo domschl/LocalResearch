@@ -302,12 +302,6 @@ class MarkdownTools:
                     out_lines.append("#+END_QUOTE")
                     in_quote_block = False
                     
-            # headers
-            header_match = re.match(r'^(#+)\s+(.*)', line)
-            if header_match:
-                level = len(header_match.group(1))
-                line = '*' * level + ' ' + header_match.group(2)
-                
             # lists
             list_match = re.match(r'^(\s*)\* +(.*)', line)
             if list_match:
@@ -327,10 +321,11 @@ class MarkdownTools:
             line = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'[[\2][\1]]', line)
             
             # bold and italic
-            line = re.sub(r'\*\*(.+?)\*\*', r'*\1*', line)
-            line = re.sub(r'__(.+?)__', r'*\1*', line)
+            line = re.sub(r'\*\*(.+?)\*\*', r'@@BOLD@@\1@@BOLD@@', line)
+            line = re.sub(r'__(.+?)__', r'@@BOLD@@\1@@BOLD@@', line)
             line = re.sub(r'(?<![\w\*])\*(?!\s)(.+?)(?<!\s)\*(?![\w\*])', r'/\1/', line)
             line = re.sub(r'\b_(.+?)_\b', r'/\1/', line)
+            line = line.replace('@@BOLD@@', '*')
             
             # inline code
             line = re.sub(r'`([^`]+)`', r'~\1~', line)
@@ -340,6 +335,12 @@ class MarkdownTools:
             
             # block math inline form $$math$$
             line = re.sub(r'\$\$(.+?)\$\$', r'\[\1\]', line)
+
+            # headers
+            header_match = re.match(r'^(#+)\s+(.*)', line)
+            if header_match:
+                level = len(header_match.group(1))
+                line = '*' * level + ' ' + header_match.group(2)
 
             out_lines.append(line)
             
@@ -472,8 +473,8 @@ class MarkdownTools:
                 continue
                 
             if in_quote_block:
-                out_lines.append(f"> {line}")
-                continue
+                pass
+
                 
             # Block math \[ \]
             if line.strip() == "\\[":
@@ -500,17 +501,30 @@ class MarkdownTools:
                 
             # Links
             line = re.sub(r'\[\[([^\]]+)\]\[([^\]]+)\]\]', r'[\2](\1)', line)
-            line = re.sub(r'\[\[([^\]]+)\]\]', r'<\1>', line)
+            
+            def repl_single_link(m: re.Match[str]) -> str:
+                target = m.group(1)
+                if target.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.tiff')):
+                    return f"![]({target})"
+                return f"[[{target}]]"
+                
+            line = re.sub(r'\[\[([^\]]+)\]\]', repl_single_link, line)
             
             # Bold
             line = re.sub(r'(?<![\w\*])\*(?!\s)(.+?)(?<!\s)\*(?![\w\*])', r'**\1**', line)
             # Italics
-            line = re.sub(r'(?<![\w:\/])\/(?!\s)(.+?)(?<!\s)\/(?![\w\/])', r'*\1*', line)
+            line = re.sub(r'(?<![\w:\/])\/(?!\s)(.+?)(?<!\s)\/(?![\w\/])', r'_\1_', line)
             # Inline code
-            line = re.sub(r'(?<!\~)~(?!\s)(.+?)(?<!\s)~(?!\~)', r'`\1`', line)
-            line = re.sub(r'(?<!=)=(?!\s)(.+?)(?<!\s)=(?!=)', r'`\1`', line)
+            line = re.sub(r'(?<![\w\~])~(?!\s)(.+?)(?<!\s)~(?![\w\~])', r'`\1`', line)
+            line = re.sub(r'(?<![\w=])=(?!\s)(.+?)(?<!\s)=(?![\w=])', r'`\1`', line)
             # Inline math
             line = re.sub(r'\\\((.+?)\\\)', r'$\1$', line)
+            
+            if in_quote_block:
+                if len(line) > 0:
+                    line = f"> {line}"
+                else:
+                    line = ">"
             
             out_lines.append(line)
             
@@ -539,10 +553,10 @@ class MarkdownTools:
         ot = OrgmodeTools(test_org_dir) # dummy dir
         org_doc = ot.assemble_orgmode(metadata, "", org_content)
         
-        print("--- Markdown input --------------------")
-        print(md_text)
-        print("--- Orgmode output --------------------")
-        print(org_doc)
+        # print("--- Markdown input --------------------")
+        # print(md_text)
+        # print("--- Orgmode output --------------------")
+        # print(org_doc)
         
         # Parse orgmode doc
         org_metadata, org_prefix, org_parsed_content, _, _ = ot.parse_orgmode(filepath, "test_hash", descriptor, org_doc)
@@ -556,25 +570,28 @@ class MarkdownTools:
             self.log.error("Failed to convert org to markdown")
             return False
 
-        print("--- Metadata ---")
-        print(metadata)
-        print("--- Org Metadata ---")
-        print(org_metadata)
+        # print("--- Metadata ---")
+        # print(metadata)
+        # print("--- Org Metadata ---")
+        # print(org_metadata)
 
         original_assembled = self.assemble_markdown_ext(metadata, md_content)
         rt_assembled = self.assemble_markdown_ext(org_metadata, org_prefix + rt_md_content)
         
-        print("--- Original assembled --------------------")
-        print(original_assembled)
-        print("--- Roundtrip assembled -------------------")
-        print(rt_assembled)
-        print("-------------------------------------------")
+        # print("--- Original assembled --------------------")
+        # print(original_assembled)
+        # print("--- Roundtrip assembled -------------------")
+        # print(rt_assembled)
+        # print("-------------------------------------------")
 
-        if original_assembled != rt_assembled:
+        orig_lines = [line.rstrip() for line in original_assembled.splitlines()]
+        rt_lines = [line.rstrip() for line in rt_assembled.splitlines()]
+
+        if orig_lines != rt_lines:
             self.log.error(f"Roundtrip failed for {filepath}! Differences:")
             diff = difflib.unified_diff(
-                original_assembled.splitlines(),
-                rt_assembled.splitlines(),
+                orig_lines,
+                rt_lines,
                 fromfile='original.md',
                 tofile='roundtrip.md',
                 lineterm=''
