@@ -181,7 +181,10 @@ class OrgmodeTools:
                 if val == "":
                     continue
                 if props in timedate_fields:
-                    line += f">{cast(str, val)}<"
+                    str_val = cast(str, val)
+                    if ' ' in str_val:
+                        str_val = f'"{str_val}"'
+                    line += f">{str_val}<"
                 else:
                     if ' ' in val:
                         line += ' "' + cast(str, val) + '"'
